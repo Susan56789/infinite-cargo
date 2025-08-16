@@ -127,23 +127,16 @@ const Header = () => {
     driver: [
       { to: '/driver-dashboard', text: 'Dashboard' },
       { to: '/search-loads', text: 'Find Loads' },
-      { to: '/my-bookings', text: 'My Bookings' },
-      { to: '/driver/profile', text: 'Profile' },
       { to: '/support', text: 'Support' }
     ],
     cargo_owner: [
       { to: '/cargo-dashboard', text: 'Dashboard' },
-      { to: '/post-load', text: 'Post Load' },
-      { to: '/my-loads', text: 'My Loads' },
       { to: '/find-drivers', text: 'Find Drivers' },
       { to: '/cargoowner/profile', text: 'Profile' },
       { to: '/support', text: 'Support' }
     ],
     admin: [
       { to: '/admin/dashboard', text: 'Admin Dashboard' },
-      { to: '/admin/users', text: 'Manage Users' },
-      { to: '/admin/loads', text: 'Manage Loads' },
-      { to: '/admin/reports', text: 'Reports' },
       { to: '/support', text: 'Support' }
     ]
   };

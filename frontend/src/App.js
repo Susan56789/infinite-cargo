@@ -28,9 +28,6 @@ import AdminSubscriptionDashboard from './components/admin/AdminSubscriptionDash
 // Dashboard Pages (User-type specific dashboards)
 import DriverDashboard from './components/driver/DriverDashboard';
 import CargoOwnerDashboard from './components/cargoowner/CargoOwnerDashboard';
-import MyBookings from './components/driver/MyBookings';
-import MyProfile from './components/cargoowner/MyProfile';
-import DriverProfile from './components/driver/DriverProfile';
 
 // Core Functionality Pages
 import LoadSearch from './components/driver/LoadSearch';
@@ -325,49 +322,7 @@ element={
                   </>
                 } 
               />
-              <Route
-          path='/driver/profile'
-          element={
-            <>
-              <SEOHelmet 
-                title="Driver Profile"
-                description="View and manage your driver profile, update vehicle details, and track your transport history."
-                keywords="driver profile, vehicle details, transport history, driver management"
-                canonicalUrl="https://infinitecargo.co.ke/driver/profile"   
-              />
-              <DriverProfile />
-            </>
-          }
-        />
-              <Route
-                path='/cargoowner/profile'
-                element={
-                  <>        
-                    <SEOHelmet 
-                      title="Cargo Owner Profile"
-                      description="View and manage your cargo owner profile, update shipping preferences, and track your cargo history."
-                      keywords="cargo owner profile, shipping preferences, cargo history, transport management"
-                      canonicalUrl="https://infinitecargo.co.ke/cargoowner/profile"  
-                    />
-                    <MyProfile />
-                  </>
-                }
-              />
-
-              < Route
-path='/my-bookings'
-element={
-<>
-<SEOHelmet 
-title="My Bookings"
-description="View and manage your bookings, track cargo shipments, and communicate with drivers from your personal bookings page."
-keywords="my bookings, cargo shipments, driver communication, transport management"
-canonicalUrl="https://infinitecargo.co.ke/my-bookings"  
-              />
-                    <MyBookings />
-                  </>
-                }
-              />
+              
               
               <Route 
                 path="/cargo-dashboard" 
