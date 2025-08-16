@@ -6,40 +6,7 @@ const { body, validationResult, query } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 
-// Rate limiting
-const notificationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Allow more requests for notifications
-  message: {
-    status: 'error',
-    message: 'Too many notification requests, please try again later.'
-  }
-});
-
-// Enhanced CORS handler
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
-  ];
-  
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-};
+const corsHandler = require('../middleware/corsHandler');
 
 // Notification helper functions
 const createNotification = async (notificationData) => {

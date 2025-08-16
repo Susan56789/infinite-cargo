@@ -7,54 +7,9 @@ const rateLimit = require('express-rate-limit');
 const Load = require('../models/load');
 const Bid = require('../models/bid');
 const auth = require('../middleware/auth');
+const corsHandler = require('../middleware/corsHandler');
 
-// Rate limiting for load operations
-const loadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: {
-    status: 'error',
-    message: 'Too many requests, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
-// CORS handler
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke',
-    
-  ];
-  
-  const origin = req.headers.origin;
-  
-  try {
-    if (allowedOrigins.includes(origin)) {
-      res.header('Access-Control-Allow-Origin', origin);
-    } else {
-      res.header('Access-Control-Allow-Origin', '*'); 
-    }
-    
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
-    res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-    
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-    next();
-  } catch (error) {
-    console.error('CORS error:', error);
-    next();
-  }
-};
-
-// FIXED: Optional authentication middleware with better error handling
 const optionalAuth = (req, res, next) => {
   try {
     const authHeader = req.header('Authorization');

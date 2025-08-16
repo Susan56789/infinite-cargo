@@ -9,29 +9,11 @@ const Load = require('../models/load');
 const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
 const mongoose = require('mongoose');
+const corsHandler = require('../middleware/corsHandler');
 
-// CORS configuration 
-const corsOptions = {
-  origin: (origin, callback) => {
-    callback(null, origin || true);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: [
-    'Origin',
-    'X-Requested-With',
-    'Content-Type',
-    'Accept',
-    'Authorization',
-    'x-auth-token',
-    'Cache-Control',
-    'Pragma'
-  ],
-  optionsSuccessStatus: 200,
-  maxAge: 86400
-};
 
-router.use(cors(corsOptions));
+// Apply CORS middleware
+router.use(cors(corsHandler));
 
 
 // @route   POST /api/admin/login
@@ -1800,7 +1782,7 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         }
       }
 
-      // 6. SUBSCRIPTIONS THIS MONTH - FIXED REVENUE CALCULATION
+      // 6. SUBSCRIPTIONS THIS MONTH -  REVENUE CALCULATION
       let newSubscriptionsThisMonth = 0;
       let monthlyRevenue = 0;
       let totalRevenue = 0; // All-time revenue
@@ -1963,11 +1945,11 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         
         // System health indicators
         userGrowthRate: totalDrivers + totalCargoOwners > 0 ? 
-          (newUsersThisMonth / (totalDrivers + totalCargoOwners) * 100).toFixed(2) : '0.00',
+          (newUsersThisMonth / (totalDrivers + totalCargoOwners) * 100).to(2) : '0.00',
         subscriptionRate: totalDrivers + totalCargoOwners > 0 ? 
-          (totalActiveSubscriptions / (totalDrivers + totalCargoOwners) * 100).toFixed(2) : '0.00',
+          (totalActiveSubscriptions / (totalDrivers + totalCargoOwners) * 100).to(2) : '0.00',
         loadCompletionRate: totalLoads > 0 ? 
-          ((totalLoads - activeLoads) / totalLoads * 100).toFixed(2) : '0.00',
+          ((totalLoads - activeLoads) / totalLoads * 100).to(2) : '0.00',
 
         // Metadata
         lastUpdated: new Date(),

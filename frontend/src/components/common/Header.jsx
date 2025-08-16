@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { authManager, getUser, isAuthenticated } from '../../utils/auth';
 
@@ -12,79 +12,163 @@ const Header = () => {
   });
   const navigate = useNavigate();
   const location = useLocation();
+  const mountedRef = useRef(true);
+  const unsubscribeRef = useRef(null);
 
-  useEffect(() => {
-    // Check authentication and get user data
-    if (isAuthenticated()) {
-      const userData = getUser();
-      setUser(userData);
-      console.log('User authenticated in header:', userData);
-    } else {
-      setUser(null);
-      console.log('User not authenticated in header');
+  // Memoized auth check function to prevent unnecessary re-renders
+  const updateAuthState = useCallback(() => {
+    if (!mountedRef.current) return;
+    
+    try {
+      const isAuth = isAuthenticated();
+      const userData = isAuth ? getUser() : null;
+      
+      setUser(prevUser => {
+        // Only update if the user data has actually changed
+        if (!isAuth && !prevUser) return null;
+        if (!isAuth && prevUser) {
+          
+          return null;
+        }
+        if (isAuth && userData && (!prevUser || prevUser._id !== userData._id || prevUser.email !== userData.email)) {
+        
+          return userData;
+        }
+        return prevUser;
+      });
+    } catch (error) {
+      console.error('Error updating auth state in header:', error);
+      if (mountedRef.current) {
+        setUser(null);
+      }
     }
-  }, [location.pathname]); // Re-check on route changes
+  }, []);
 
-  // Listen for storage changes to update user state when login occurs in another tab
+  // Initialize auth state on mount
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    // Subscribe to auth state changes
+    unsubscribeRef.current = authManager.addAuthListener((authState) => {
+      if (!mountedRef.current) return;
+      
+      
+      
+      if (authState.isAuthenticated && authState.user) {
+        setUser(prevUser => {
+          if (!prevUser || prevUser._id !== authState.user._id) {
+            return authState.user;
+          }
+          return prevUser;
+        });
+      } else {
+        setUser(null);
+      }
+    });
+
+    // Initial auth check
+    updateAuthState();
+
+    return () => {
+      mountedRef.current = false;
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [updateAuthState]);
+
+  // Listen for route changes to dashboard pages only
+  useEffect(() => {
+    const protectedRoutes = ['/driver-dashboard', '/cargo-dashboard', '/admin'];
+    const shouldRecheck = protectedRoutes.some(route => location.pathname.startsWith(route));
+
+    if (shouldRecheck) {
+      // Minimal delay to ensure navigation is complete
+      const timeoutId = setTimeout(() => {
+        updateAuthState();
+      }, 50);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [location.pathname, updateAuthState]);
+
+  // Handle storage events (for cross-tab synchronization)
   useEffect(() => {
     const handleStorageChange = (e) => {
+      // Only react to token and user changes
       const authKeys = ['infiniteCargoUser', 'infiniteCargoToken'];
       
       if (authKeys.includes(e.key)) {
-        // Small delay to ensure storage is updated
+        
         setTimeout(() => {
-          if (isAuthenticated()) {
-            const userData = getUser();
-            setUser(userData);
-            console.log('User state updated from storage change:', userData);
-          } else {
-            setUser(null);
-            console.log('User cleared from storage change');
-          }
+          updateAuthState();
         }, 100);
       }
     };
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+  }, [updateAuthState]);
 
-  // Custom auth event listener
+  // Handle custom auth events (for compatibility with existing code)
   useEffect(() => {
-    const handleAuthChange = () => {
-      if (isAuthenticated()) {
-        const userData = getUser();
-        setUser(userData);
-        console.log('User state updated from auth change event:', userData);
-      } else {
-        setUser(null);
-        console.log('User cleared from auth change event');
+    const handleAuthEvents = (e) => {
+      
+      setTimeout(() => {
+        updateAuthState();
+      }, 50);
+    };
+
+    const handleLogin = (e) => {
+      
+      if (e.detail?.user && mountedRef.current) {
+        setUser(e.detail.user);
       }
     };
 
-    window.addEventListener('authStateChanged', handleAuthChange);
-    return () => window.removeEventListener('authStateChanged', handleAuthChange);
-  }, []);
+    const handleLogout = () => {
+      
+      if (mountedRef.current) {
+        setUser(null);
+      }
+    };
 
+    window.addEventListener('authStateChanged', handleAuthEvents);
+    window.addEventListener('userLoggedIn', handleLogin);
+    window.addEventListener('userLoggedOut', handleLogout);
+    
+    return () => {
+      window.removeEventListener('authStateChanged', handleAuthEvents);
+      window.removeEventListener('userLoggedIn', handleLogin);
+      window.removeEventListener('userLoggedOut', handleLogout);
+    };
+  }, [updateAuthState]);
+
+  // Close menus on route change
   useEffect(() => {
     closeAllMenus();
   }, [location.pathname]);
 
   const handleLogout = async () => {
     try {
-      console.log('Logging out user...');
-      await authManager.logout();
+      
+      
+      // Clear user state immediately for responsive UI
       setUser(null);
       
-      // Dispatch custom event to notify other components
-      window.dispatchEvent(new CustomEvent('authStateChanged'));
+      // Dispatch logout event
+      window.dispatchEvent(new CustomEvent('userLoggedOut'));
+      
+      // Perform logout
+      await authManager.logout();
+      
       
     } catch (error) {
       console.error('Logout failed:', error);
       // Fallback: clear auth and navigate manually
       authManager.clearAuth();
       setUser(null);
-      window.dispatchEvent(new CustomEvent('authStateChanged'));
+      window.dispatchEvent(new CustomEvent('userLoggedOut'));
       navigate('/');
     }
     closeAllMenus();
@@ -94,10 +178,10 @@ const Header = () => {
     setIsMenuOpen(!isMenuOpen);
   };
 
-  const closeAllMenus = () => {
+  const closeAllMenus = useCallback(() => {
     setIsMenuOpen(false);
     setDropdowns({ services: false, drivers: false, cargo: false });
-  };
+  }, []);
 
   const toggleDropdown = (dropdownName) => (e) => {
     e.preventDefault();
@@ -188,7 +272,8 @@ const Header = () => {
   );
 
   const getUserType = () => {
-    return user?.userType || user?.user_type;
+    if (!user) return null;
+    return user.userType || user.user_type || user.type;
   };
 
   const getUserNavigation = () => {
@@ -198,7 +283,7 @@ const Header = () => {
 
   const getUserDisplayName = () => {
     if (!user) return '';
-    return user.name || user.username || 'User';
+    return user.name || user.username || user.fullName || user.email?.split('@')[0] || 'User';
   };
 
   const getUserTypeDisplay = () => {
@@ -214,6 +299,8 @@ const Header = () => {
         return 'User';
     }
   };
+
+  
 
   return (
     <header className="bg-white shadow-md border-b border-gray-100 sticky top-0 z-40">

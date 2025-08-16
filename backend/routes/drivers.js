@@ -5,6 +5,8 @@ const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
+const corsHandler = require('../middleware/corsHandler');
+
 
 // Rate limiting
 const driverLimiter = rateLimit({
@@ -25,31 +27,6 @@ const contactLimiter = rateLimit({
     message: 'Too many contact requests, please try again later.'
   }
 });
-
-// Enhanced CORS handler
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
-  ];
-  
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-};
 
 // Profile validation middleware
 const profileValidation = [
@@ -999,8 +976,8 @@ router.get('/stats', corsHandler, auth, async (req, res) => {
           completedBookings,
           pendingBookings,
           cancelledBookings,
-          successRate: totalBookings > 0 ? ((completedBookings / totalBookings) * 100).toFixed(1) : 0,
-          averageRating: averageRating.length > 0 ? averageRating[0].avgRating.toFixed(1) : 0,
+          successRate: totalBookings > 0 ? ((completedBookings / totalBookings) * 100).to(1) : 0,
+          averageRating: averageRating.length > 0 ? averageRating[0].avgRating.to(1) : 0,
           monthlyEarnings: monthlyEarnings.length > 0 ? monthlyEarnings[0].totalEarnings : 0
         }
       }

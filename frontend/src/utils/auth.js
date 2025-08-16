@@ -6,13 +6,215 @@ class AuthManager {
     this.TOKEN_KEY = 'infiniteCargoToken';
     this.USER_KEY = 'infiniteCargoUser';
     this.REMEMBER_KEY = 'infiniteCargoRememberMe';
+    this.TOKEN_TIMESTAMP_KEY = 'infiniteCargoTokenTimestamp';
     this.ADMIN_TOKEN_KEY = 'adminToken';
     this.ADMIN_USER_KEY = 'adminData';
-    this.TOKEN_TIMESTAMP_KEY = 'infiniteCargoTokenTimestamp';
     this.ADMIN_TOKEN_TIMESTAMP_KEY = 'adminTokenTimestamp';
     
+    // 6 hours in milliseconds
     this.TOKEN_EXPIRY_DURATION = 6 * 60 * 60 * 1000; // 6 hours
-    this.startTokenExpiryCheck();
+    this.WARNING_THRESHOLD = 30 * 60 * 1000; // 30 minutes before expiry
+    
+    // Add internal state tracking to prevent race conditions
+    this.isInitialized = false;
+    this.authState = null;
+    this.listeners = new Set();
+    this.expiryCheckInterval = null;
+    this.warningShown = false;
+  }
+
+  // Initialize auth state on first load
+  initialize() {
+    if (this.isInitialized) return;
+    
+    try {
+      // Check for existing auth data
+      const token = this.getToken(false);
+      const user = this.getUser(false);
+      
+      if (token && user) {
+        // Validate token and check custom expiry
+        if (this._validateTokenAndExpiry(token, false)) {
+          this.authState = { token, user, isAuthenticated: true };
+          this._startExpiryMonitoring(false);
+        } else {
+          // Clear invalid/expired auth data
+          this.clearAuth(false);
+          this.authState = { token: null, user: null, isAuthenticated: false };
+        }
+      } else {
+        this.authState = { token: null, user: null, isAuthenticated: false };
+      }
+      
+      this.isInitialized = true;
+      this._notifyListeners();
+    } catch (error) {
+      console.error('Failed to initialize auth state:', error);
+      this.authState = { token: null, user: null, isAuthenticated: false };
+      this.isInitialized = true;
+    }
+  }
+
+  // Private method to validate token and custom expiry
+  _validateTokenAndExpiry(token, isAdmin = false) {
+    try {
+      if (!token) return false;
+      
+      // First check JWT expiry
+      const decoded = jwtDecode(token);
+      const currentTime = Date.now() / 1000;
+      
+      if (decoded.exp && decoded.exp <= currentTime) {
+        return false;
+      }
+      
+      // Then check custom 6-hour expiry
+      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
+      const tokenTimestamp = this._getTokenTimestamp(timestampKey);
+      
+      if (!tokenTimestamp) {
+        
+        return false;
+      }
+      
+      const currentTimeMs = Date.now();
+      const tokenAge = currentTimeMs - tokenTimestamp;
+      
+      if (tokenAge >= this.TOKEN_EXPIRY_DURATION) {
+        
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Token validation error:', error);
+      return false;
+    }
+  }
+
+  // Get token timestamp from storage
+  _getTokenTimestamp(timestampKey) {
+    try {
+      const timestamp = localStorage.getItem(timestampKey) || sessionStorage.getItem(timestampKey);
+      return timestamp ? parseInt(timestamp, 10) : null;
+    } catch (error) {
+      console.error('Error getting token timestamp:', error);
+      return null;
+    }
+  }
+
+  // Start monitoring token expiry
+  _startExpiryMonitoring(isAdmin = false) {
+    // Clear existing interval
+    if (this.expiryCheckInterval) {
+      clearInterval(this.expiryCheckInterval);
+    }
+
+    this.warningShown = false;
+
+    // Check every minute
+    this.expiryCheckInterval = setInterval(() => {
+      this._checkTokenExpiry(isAdmin);
+    }, 60000); // 1 minute
+
+    // Also check immediately
+    setTimeout(() => {
+      this._checkTokenExpiry(isAdmin);
+    }, 1000);
+  }
+
+  // Check if token is expired or expiring soon
+  _checkTokenExpiry(isAdmin = false) {
+    try {
+      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
+      const tokenTimestamp = this._getTokenTimestamp(timestampKey);
+      
+      if (!tokenTimestamp) {
+        this._handleTokenExpiry(isAdmin);
+        return;
+      }
+
+      const currentTime = Date.now();
+      const tokenAge = currentTime - tokenTimestamp;
+      const remainingTime = this.TOKEN_EXPIRY_DURATION - tokenAge;
+
+      // Token expired
+      if (remainingTime <= 0) {
+       
+        this._handleTokenExpiry(isAdmin);
+        return;
+      }
+
+      // Show warning if within 30 minutes of expiry and warning not shown yet
+      if (remainingTime <= this.WARNING_THRESHOLD && !this.warningShown && !isAdmin) {
+        this.warningShown = true;
+        const remainingMinutes = Math.ceil(remainingTime / (60 * 1000));
+        this._showExpiryWarning(remainingMinutes);
+      }
+
+      
+      
+    } catch (error) {
+      console.error('Error checking token expiry:', error);
+    }
+  }
+
+  // Handle token expiry
+  _handleTokenExpiry(isAdmin = false) {
+   
+    
+    // Clear the monitoring interval
+    if (this.expiryCheckInterval) {
+      clearInterval(this.expiryCheckInterval);
+      this.expiryCheckInterval = null;
+    }
+
+    // Clear auth data
+    this.clearAuth(isAdmin);
+
+    // Show expiry message and redirect
+    this.forceLogoutDueToExpiry(isAdmin);
+  }
+
+  // Show expiry warning
+  _showExpiryWarning(remainingMinutes) {
+    const message = `Your session will expire in ${remainingMinutes} minute${remainingMinutes > 1 ? 's' : ''}. Please save your work and refresh the page to extend your session.`;
+    
+    // Dispatch custom event for UI components to handle
+    window.dispatchEvent(new CustomEvent('tokenExpiryWarning', {
+      detail: { remainingMinutes, message }
+    }));
+
+    // Also show browser notification if supported
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Session Expiring Soon', {
+        body: message,
+        icon: '/logo.png'
+      });
+    }
+
+    console.warn('Token expiry warning:', message);
+  }
+
+  // Add listener for auth state changes
+  addAuthListener(listener) {
+    this.listeners.add(listener);
+    
+    // Return unsubscribe function
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  // Notify all listeners of auth state changes
+  _notifyListeners() {
+    this.listeners.forEach(listener => {
+      try {
+        listener(this.authState);
+      } catch (error) {
+        console.error('Error in auth listener:', error);
+      }
+    });
   }
 
   setAuth(token, user, rememberMe = false, isAdmin = false) {
@@ -21,29 +223,65 @@ class AuthManager {
       const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
       const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
       
-      const currentTime = Date.now();
       
-      if (rememberMe && !isAdmin) {
-        localStorage.setItem(tokenKey, token);
-        localStorage.setItem(userKey, JSON.stringify(user));
-        localStorage.setItem(timestampKey, currentTime.toString());
-        localStorage.setItem(this.REMEMBER_KEY, 'true');
-      } else {
-        // For admin or non-remember sessions, use sessionStorage
-        sessionStorage.setItem(tokenKey, token);
-        sessionStorage.setItem(userKey, JSON.stringify(user));
-        sessionStorage.setItem(timestampKey, currentTime.toString());
-        
-        // Clear localStorage if exists
-        localStorage.removeItem(tokenKey);
-        localStorage.removeItem(userKey);
-        localStorage.removeItem(timestampKey);
-        if (!isAdmin) localStorage.removeItem(this.REMEMBER_KEY);
+
+      // Validate token before storing
+      if (!this._validateToken(token)) {
+        console.error('Attempting to store invalid token');
+        return false;
       }
 
-      ;
+      const storage = rememberMe && !isAdmin ? localStorage : sessionStorage;
+      const currentTimestamp = Date.now();
+      
+      // Store token, user, and timestamp
+      storage.setItem(tokenKey, token);
+      storage.setItem(userKey, JSON.stringify(user));
+      storage.setItem(timestampKey, currentTimestamp.toString());
+      
+      if (rememberMe && !isAdmin) {
+        localStorage.setItem(this.REMEMBER_KEY, 'true');
+      }
+      
+      // Clear from other storage type
+      const otherStorage = storage === localStorage ? sessionStorage : localStorage;
+      otherStorage.removeItem(tokenKey);
+      otherStorage.removeItem(userKey);
+      otherStorage.removeItem(timestampKey);
+      
+      if (!isAdmin) {
+        if (!rememberMe) {
+          localStorage.removeItem(this.REMEMBER_KEY);
+        }
+      }
+
+      // Update internal state
+      if (!isAdmin) {
+        this.authState = { token, user, isAuthenticated: true };
+        this._notifyListeners();
+      }
+
+      // Start expiry monitoring
+      this._startExpiryMonitoring(isAdmin);
+
+      return true;
     } catch (error) {
       console.error('Failed to store auth data:', error);
+      return false;
+    }
+  }
+
+  // Private method to validate token without side effects
+  _validateToken(token) {
+    try {
+      if (!token) return false;
+      
+      const decoded = jwtDecode(token);
+      const currentTime = Date.now() / 1000;
+      
+      return decoded.exp && decoded.exp > currentTime;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -51,20 +289,17 @@ class AuthManager {
     try {
       const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
       const token = localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
+      
+      // Validate token and expiry before returning
+      if (token && !this._validateTokenAndExpiry(token, isAdmin)) {
+        
+        this.clearAuth(isAdmin);
+        return null;
+      }
+      
       return token;
     } catch (error) {
       console.error('Failed to get token:', error);
-      return null;
-    }
-  }
-
-  getTokenTimestamp(isAdmin = false) {
-    try {
-      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
-      const timestamp = localStorage.getItem(timestampKey) || sessionStorage.getItem(timestampKey);
-      return timestamp ? parseInt(timestamp, 10) : null;
-    } catch (error) {
-      console.error('Failed to get token timestamp:', error);
       return null;
     }
   }
@@ -73,42 +308,81 @@ class AuthManager {
     try {
       const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
       const userStr = localStorage.getItem(userKey) || sessionStorage.getItem(userKey);
-      return userStr ? JSON.parse(userStr) : null;
+      
+      if (!userStr) return null;
+      
+      const user = JSON.parse(userStr);
+      
+      // If we have user data but no valid token, clear the data
+      const token = this.getToken(isAdmin);
+      if (!token) {
+        this.clearAuth(isAdmin);
+        return null;
+      }
+      
+      return user;
     } catch (error) {
       console.error('Failed to get user data:', error);
       return null;
     }
   }
 
-  isTokenExpiredByTime(isAdmin = false) {
-    const timestamp = this.getTokenTimestamp(isAdmin);
-    if (!timestamp) return true;
-    
-    const currentTime = Date.now();
-    const tokenAge = currentTime - timestamp;
-    
-    return tokenAge >= this.TOKEN_EXPIRY_DURATION;
-  }
-
   isAuthenticated(isAdmin = false) {
+    // Initialize if not done already
+    if (!this.isInitialized) {
+      this.initialize();
+    }
+
+    // For non-admin, use internal state if available, but still validate expiry
+    if (!isAdmin && this.authState) {
+      const token = this.getToken(isAdmin); // This will check expiry
+      const isValid = !!token;
+      
+      if (this.authState.isAuthenticated !== isValid) {
+        this.authState.isAuthenticated = isValid;
+        this._notifyListeners();
+        
+        if (!isValid) {
+          // Stop monitoring if user is no longer authenticated
+          if (this.expiryCheckInterval) {
+            clearInterval(this.expiryCheckInterval);
+            this.expiryCheckInterval = null;
+          }
+        }
+      }
+      
+      return isValid;
+    }
+
     const token = this.getToken(isAdmin);
     if (!token) {
+      if (!isAdmin && this.authState) {
+        this.authState.isAuthenticated = false;
+        this._notifyListeners();
+      }
       return false;
     }
 
-    if (this.isTokenExpiredByTime(isAdmin)) {
-      this.clearAuth(isAdmin);
-      return false;
-    }
-
+    // Additional JWT validation
     try {
       const decoded = jwtDecode(token);
       const currentTime = Date.now() / 1000;
       
       if (decoded.exp && decoded.exp < currentTime) {
+        
         this.clearAuth(isAdmin);
         return false;
       }
+      
+      // Update internal state for non-admin
+      if (!isAdmin && this.authState) {
+        this.authState.isAuthenticated = true;
+        // Start monitoring if not already started
+        if (!this.expiryCheckInterval) {
+          this._startExpiryMonitoring(isAdmin);
+        }
+      }
+      
       return true;
     } catch (error) {
       console.error('Invalid token:', error);
@@ -117,50 +391,31 @@ class AuthManager {
     }
   }
 
-  getTokenPayload(isAdmin = false) {
-    const token = this.getToken(isAdmin);
-    if (!token) return null;
-
-    if (this.isTokenExpiredByTime(isAdmin)) {
-      this.clearAuth(isAdmin);
-      return null;
-    }
-
+  getTokenRemainingTime(isAdmin = false) {
     try {
-      return jwtDecode(token);
+      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
+      const tokenTimestamp = this._getTokenTimestamp(timestampKey);
+      
+      if (!tokenTimestamp) return 0;
+
+      const currentTime = Date.now();
+      const tokenAge = currentTime - tokenTimestamp;
+      const remainingTime = this.TOKEN_EXPIRY_DURATION - tokenAge;
+      
+      return Math.max(0, Math.floor(remainingTime / (60 * 1000))); // Return minutes
     } catch (error) {
-      console.error('Failed to decode token:', error);
-      return null;
+      console.error('Error getting token remaining time:', error);
+      return 0;
     }
   }
 
   isTokenExpiringSoon(isAdmin = false) {
     try {
-      const timestamp = this.getTokenTimestamp(isAdmin);
-      if (!timestamp) return true;
-      
-      const currentTime = Date.now();
-      const tokenAge = currentTime - timestamp;
-      const timeUntilExpiry = this.TOKEN_EXPIRY_DURATION - tokenAge;
-      
-      return timeUntilExpiry < (30 * 60 * 1000);
+      const remainingTimeMs = this.getTokenRemainingTime(isAdmin) * 60 * 1000;
+      return remainingTimeMs <= this.WARNING_THRESHOLD && remainingTimeMs > 0;
     } catch (error) {
+      console.error('Error checking token expiry:', error);
       return true;
-    }
-  }
-
-  getTokenRemainingTime(isAdmin = false) {
-    try {
-      const timestamp = this.getTokenTimestamp(isAdmin);
-      if (!timestamp) return 0;
-      
-      const currentTime = Date.now();
-      const tokenAge = currentTime - timestamp;
-      const timeUntilExpiry = this.TOKEN_EXPIRY_DURATION - tokenAge;
-      
-      return Math.max(0, Math.floor(timeUntilExpiry / (60 * 1000)));
-    } catch (error) {
-      return 0;
     }
   }
 
@@ -181,7 +436,20 @@ class AuthManager {
         sessionStorage.removeItem(this.TOKEN_KEY);
         sessionStorage.removeItem(this.USER_KEY);
         sessionStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
+        
+        // Update internal state
+        this.authState = { token: null, user: null, isAuthenticated: false };
+        this._notifyListeners();
+        
+        // Clear expiry monitoring
+        if (this.expiryCheckInterval) {
+          clearInterval(this.expiryCheckInterval);
+          this.expiryCheckInterval = null;
+        }
+        this.warningShown = false;
       }
+      
+      
     } catch (error) {
       console.error('Failed to clear auth data:', error);
     }
@@ -193,52 +461,30 @@ class AuthManager {
     }
     
     const token = this.getToken(isAdmin);
-    const header = token ? { Authorization: `Bearer ${token}` } : {};
-    return header;
-  }
-
-  async refreshToken(isAdmin = false) {
-    try {
-      if (this.isTokenExpiredByTime(isAdmin)) {
-        throw new Error('Token expired after 6 hours, login required');
-      }
-
-      const endpoint = isAdmin ? '/api/admin/refresh-token' : '/api/users/refresh-token';
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAuthHeader(isAdmin)
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Token refresh failed');
-      }
-
-      const data = await response.json();
-      
-      if (data.token) {
-        const user = this.getUser(isAdmin);
-        const rememberMe = localStorage.getItem(this.REMEMBER_KEY) === 'true';
-        this.setAuth(data.token, user, rememberMe, isAdmin);
-        return data.token;
-      }
-
-      throw new Error('No token in refresh response');
-    } catch (error) {
-      console.error('Token refresh failed:', error);
-      this.clearAuth(isAdmin);
-      throw error;
-    }
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   forceLogoutDueToExpiry(isAdmin = false) {
-    this.clearAuth(isAdmin);
-    const redirectPath = isAdmin ? '/admin/login' : '/login';
     
-    alert('Your session has expired after 6 hours. Please login again.');
-    window.location.href = redirectPath;
+    
+    // Clear all auth data
+    this.clearAuth(isAdmin);
+    
+    // Dispatch logout event
+    window.dispatchEvent(new CustomEvent('userLoggedOut', {
+      detail: { reason: 'sessionExpired', isAdmin }
+    }));
+    
+    const redirectPath = isAdmin ? '/admin/login' : '/login';
+    const message = isAdmin 
+      ? 'Your admin session has expired after 6 hours. Please login again.'
+      : 'Your session has expired after 6 hours. Please login again.';
+    
+    // Show alert and redirect
+    setTimeout(() => {
+      alert(message);
+      window.location.href = redirectPath;
+    }, 100);
   }
 
   async logout(isAdmin = false) {
@@ -255,6 +501,28 @@ class AuthManager {
       const redirectPath = isAdmin ? '/admin/login' : '/login';
       window.location.href = redirectPath;
     }
+  }
+
+  // Extended session (refresh page)
+  extendSession(isAdmin = false) {
+    const user = this.getUser(isAdmin);
+    const token = this.getToken(isAdmin);
+    const rememberMe = !isAdmin && localStorage.getItem(this.REMEMBER_KEY) === 'true';
+    
+    if (user && token) {
+      // Reset the timestamp to extend the session
+      this.setAuth(token, user, rememberMe, isAdmin);
+      this.warningShown = false;
+      
+      // Dispatch session extended event
+      window.dispatchEvent(new CustomEvent('sessionExtended', {
+        detail: { isAdmin, remainingTime: this.getTokenRemainingTime(isAdmin) }
+      }));
+      
+      return true;
+    }
+    
+    return false;
   }
 
   getUserType(isAdmin = false) {
@@ -295,31 +563,20 @@ class AuthManager {
         return '/dashboard';
     }
   }
-
-  startTokenExpiryCheck() {
-    setInterval(() => {
-      if (this.getToken(false) && this.isTokenExpiredByTime(false)) {
-        this.forceLogoutDueToExpiry(false);
-      }
-      
-      if (this.getToken(true) && this.isTokenExpiredByTime(true)) {
-        this.forceLogoutDueToExpiry(true);
-      }
-    }, 5 * 60 * 1000);
-  }
-
-  showExpiryWarning(isAdmin = false) {
-    const remainingMinutes = this.getTokenRemainingTime(isAdmin);
-    if (remainingMinutes <= 30 && remainingMinutes > 0) {
-      console.warn(`Token expires in ${remainingMinutes} minutes`);
-      return true;
-    }
-    return false;
-  }
 }
 
+// Create singleton instance
 export const authManager = new AuthManager();
 
+// Initialize on first import
+authManager.initialize();
+
+// Request notification permission on first load
+if ('Notification' in window && Notification.permission === 'default') {
+  Notification.requestPermission();
+}
+
+// Simplified exports that use the singleton
 export const isAuthenticated = (isAdmin = false) => authManager.isAuthenticated(isAdmin);
 export const getToken = (isAdmin = false) => authManager.getToken(isAdmin);
 export const getUser = (isAdmin = false) => authManager.getUser(isAdmin);
@@ -330,5 +587,6 @@ export const clearAuth = (isAdmin = false) => authManager.clearAuth(isAdmin);
 export const hasPermission = (permission) => authManager.hasPermission(permission);
 export const getTokenRemainingTime = (isAdmin = false) => authManager.getTokenRemainingTime(isAdmin);
 export const isTokenExpiringSoon = (isAdmin = false) => authManager.isTokenExpiringSoon(isAdmin);
+export const extendSession = (isAdmin = false) => authManager.extendSession(isAdmin);
 
 export default authManager;

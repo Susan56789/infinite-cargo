@@ -6,6 +6,8 @@ const { body, validationResult, query } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const {adminAuth} = require('../middleware/adminAuth');
+const corsHandler = require('../middleware/corsHandler');
+
 
 // Rate limiting
 const subscriptionLimiter = rateLimit({
@@ -17,30 +19,7 @@ const subscriptionLimiter = rateLimit({
   }
 });
 
-// Enhanced CORS handler
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
-  ];
-  
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-};
+
 
 // Subscription plans configuration
 const SUBSCRIPTION_PLANS = {
@@ -1427,7 +1406,7 @@ router.get('/admin/analytics', corsHandler, adminAuth, async (req, res) => {
       paymentMethods: paymentMethodStats.map(method => ({
         method: method._id,
         count: method.count,
-        successRate: (method.successRate * 100).toFixed(1),
+        successRate: (method.successRate * 100).to(1),
         totalAmount: method.totalAmount
       })),
       monthlyTrends: monthlyTrends.map(trend => ({
@@ -1449,9 +1428,9 @@ router.get('/admin/analytics', corsHandler, adminAuth, async (req, res) => {
     const totalRequests = analytics.conversionFunnel.total;
     if (totalRequests > 0) {
       analytics.conversionFunnel.conversionRate = 
-        ((analytics.conversionFunnel.active / totalRequests) * 100).toFixed(1);
+        ((analytics.conversionFunnel.active / totalRequests) * 100).to(1);
       analytics.conversionFunnel.rejectionRate = 
-        ((analytics.conversionFunnel.rejected / totalRequests) * 100).toFixed(1);
+        ((analytics.conversionFunnel.rejected / totalRequests) * 100).to(1);
     }
 
     res.json({

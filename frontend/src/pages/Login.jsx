@@ -149,6 +149,12 @@ const Login = () => {
         userExists: !!authManager.getUser()
       });
 
+      // FIXED: Dispatch events to notify header and other components
+      window.dispatchEvent(new CustomEvent('userLoggedIn', { 
+        detail: { user: result.user, token: result.token } 
+      }));
+      window.dispatchEvent(new CustomEvent('authStateChanged'));
+
       // Clear form
       setFormData({
         email: '',

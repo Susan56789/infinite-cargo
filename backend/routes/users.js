@@ -5,8 +5,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
-const User = require('../models/user');
 const auth = require('../middleware/auth');
+const mongoose = require('mongoose');
+const corsHandler = require('../middleware/corsHandler');
 
 // Rate limiting for registration and login
 const authLimiter = rateLimit({
@@ -21,30 +22,7 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Enhanced CORS handler with better security
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
-  ];
-  
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-};
+
 
 // Basic subscription plan configuration
 const BASIC_PLAN = {
@@ -52,7 +30,7 @@ const BASIC_PLAN = {
   name: 'Basic Plan',
   price: 0,
   currency: 'KES',
-  duration: 30, // days (renewable)
+  duration: 30,
   features: {
     maxLoads: 3,
     prioritySupport: false,
