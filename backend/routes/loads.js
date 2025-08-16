@@ -90,31 +90,42 @@ function deg2rad(deg) {
 }
 
 // @route   GET /api/loads
-// @desc    Get all available loads with filtering and search (PUBLIC ACCESS)
-// @access  Public
-router.get('/', corsHandler, loadLimiter, optionalAuth, [
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
-  query('pickupLocation').optional().trim(),
-  query('deliveryLocation').optional().trim(),
-  query('cargoType').optional().isIn([
-    'electronics', 'furniture', 'construction_materials', 'food_beverages',
-    'textiles', 'machinery', 'medical_supplies', 'automotive_parts',
-    'agricultural_products', 'chemicals', 'fragile_items', 'hazardous_materials',
-    'livestock', 'containers', 'other'
-  ]),
-  query('vehicleType').optional().isIn([
-    'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck',
-    'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
-  ]),
+// @desc    Get loads with search, filter, and pagination (for drivers/public)
+// @access  Public/Private (accessible to drivers and cargo owners)
+router.get('/', corsHandler, [
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 50 }),
+  query('search').optional().isLength({ max: 100 }),
+  query('cargoType').optional().isString(),
+  query('vehicleType').optional().isString(),
+  query('pickupLocation').optional().isString(),
+  query('deliveryLocation').optional().isString(),
   query('minBudget').optional().isFloat({ min: 0 }),
   query('maxBudget').optional().isFloat({ min: 0 }),
   query('minWeight').optional().isFloat({ min: 0 }),
   query('maxWeight').optional().isFloat({ min: 0 }),
-  query('isUrgent').optional().isBoolean(),
-  query('search').optional().trim()
+  query('urgentOnly').optional().isBoolean(),
+  query('sortBy').optional().isIn(['createdAt', 'budget', 'weight', 'pickupDate', 'boostLevel']),
+  query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   try {
+    const {
+      page = 1,
+      limit = 12,
+      search,
+      cargoType,
+      vehicleType,
+      pickupLocation,
+      deliveryLocation,
+      minBudget,
+      maxBudget,
+      minWeight,
+      maxWeight,
+      urgentOnly,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -124,221 +135,309 @@ router.get('/', corsHandler, loadLimiter, optionalAuth, [
       });
     }
 
-    const {
-      page = 1,
-      limit = 20,
-      pickupLocation,
-      deliveryLocation,
-      cargoType,
-      vehicleType,
-      minBudget,
-      maxBudget,
-      minWeight,
-      maxWeight,
-      isUrgent,
-      search
-    } = req.query;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
 
-    // Build query for active loads only
+    // Build the base query - only show loads that can receive bids
     let query = {
       status: { $in: ['posted', 'receiving_bids'] },
-      isActive: true
+      // Ensure pickup date is in the future or within reasonable range
+      $or: [
+        { pickupDate: { $gte: new Date() } },
+        { pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } // Allow 1 day past
+      ]
     };
 
-    // Filter out expired loads
-    const now = new Date();
-    query.$or = [
-      { biddingEndDate: { $exists: false } },
-      { biddingEndDate: null },
-      { biddingEndDate: { $gt: now } }
-    ];
-
     // Apply filters
-    if (pickupLocation && pickupLocation.trim()) {
-      query.pickupLocation = new RegExp(pickupLocation.trim(), 'i');
+    if (search) {
+      query.$text = { $search: search };
     }
-    
-    if (deliveryLocation && deliveryLocation.trim()) {
-      query.deliveryLocation = new RegExp(deliveryLocation.trim(), 'i');
-    }
-    
+
     if (cargoType) {
-      query.cargoType = cargoType;
+      query.cargoType = new RegExp(cargoType, 'i');
     }
-    
+
     if (vehicleType) {
-      query.vehicleType = vehicleType;
+      query.vehicleType = new RegExp(vehicleType, 'i');
     }
-    
+
+    if (pickupLocation) {
+      query.pickupLocation = new RegExp(pickupLocation, 'i');
+    }
+
+    if (deliveryLocation) {
+      query.deliveryLocation = new RegExp(deliveryLocation, 'i');
+    }
+
     if (minBudget || maxBudget) {
       query.budget = {};
       if (minBudget) query.budget.$gte = parseFloat(minBudget);
       if (maxBudget) query.budget.$lte = parseFloat(maxBudget);
     }
-    
+
     if (minWeight || maxWeight) {
       query.weight = {};
       if (minWeight) query.weight.$gte = parseFloat(minWeight);
       if (maxWeight) query.weight.$lte = parseFloat(maxWeight);
     }
-    
-    if (isUrgent !== undefined) {
-      query.isUrgent = isUrgent === 'true';
+
+    if (urgentOnly === 'true') {
+      query.isUrgent = true;
     }
 
-    // Text search
-    if (search && search.trim()) {
-      query.$text = { $search: search.trim() };
-    }
-
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Sorting with priority
-    let sortCriteria = {};
+    // Create sort object - prioritize boosted loads
+    let sortOptions = {};
     
-    if (search && search.trim()) {
-      sortCriteria.score = { $meta: 'textScore' };
-    }
+    // First sort by boost level (higher boost = higher priority)
+    sortOptions.boostLevel = -1;
+    sortOptions.isBoosted = -1;
     
-    // Priority sorting: boosted, priority, urgent, then newest
-    sortCriteria = {
-      ...sortCriteria,
-      boostLevel: -1,
-      isPriorityListing: -1,
-      isUrgent: -1,
-      createdAt: -1
-    };
-
-    console.log('Query:', JSON.stringify(query, null, 2));
-    console.log('Sort:', JSON.stringify(sortCriteria, null, 2));
-
-    // Execute query with proper error handling
-    let loads, totalLoads;
+    // Then by the requested sort field
+    sortOptions[sortBy] = sortDirection;
     
-    try {
-      // Get loads with populated fields, but only show basic user info for privacy
-      loads = await Load.find(query)
-        .populate('postedBy', 'name location isVerified subscriptionPlan')
-        .sort(sortCriteria)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(); // Use lean for better performance
-
-      totalLoads = await Load.countDocuments(query);
-    } catch (queryError) {
-      console.error('Database query error:', queryError);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Database error while fetching loads',
-        error: process.env.NODE_ENV === 'development' ? queryError.message : undefined
-      });
+    // Finally by creation date as tiebreaker
+    if (sortBy !== 'createdAt') {
+      sortOptions.createdAt = -1;
     }
 
+    // Get loads with cargo owner information and bid statistics
+    const loads = await loadsCollection.aggregate([
+      { $match: query },
+      
+      // Add text search score if searching
+      ...(search ? [{ $addFields: { score: { $meta: "textScore" } } }] : []),
+      
+      // Get cargo owner information
+      {
+        $lookup: {
+          from: 'cargo-owners',
+          localField: 'postedBy',
+          foreignField: '_id',
+          as: 'cargoOwner'
+        }
+      },
+      
+      // Get bid count and statistics
+      {
+        $lookup: {
+          from: 'bids',
+          let: { loadId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$load', '$$loadId'] },
+                    { $nin: ['$status', ['withdrawn', 'expired']] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBids: { $sum: 1 },
+                avgBidAmount: { $avg: '$bidAmount' },
+                lowestBid: { $min: '$bidAmount' },
+                highestBid: { $max: '$bidAmount' }
+              }
+            }
+          ],
+          as: 'bidStats'
+        }
+      },
+      
+      // Project fields for response
+      {
+        $project: {
+          title: 1,
+          description: 1,
+          cargoType: 1,
+          weight: 1,
+          dimensions: 1,
+          pickupLocation: 1,
+          deliveryLocation: 1,
+          pickupDate: 1,
+          deliveryDate: 1,
+          budget: 1,
+          vehicleType: 1,
+          specialRequirements: 1,
+          isUrgent: 1,
+          boostLevel: { $ifNull: ['$boostLevel', 0] },
+          isBoosted: { $ifNull: ['$isBoosted', false] },
+          createdAt: 1,
+          status: 1,
+          
+          // Cargo owner info (limited for privacy)
+          cargoOwner: {
+            $cond: [
+              { $gt: [{ $size: '$cargoOwner' }, 0] },
+              {
+                name: { $arrayElemAt: ['$cargoOwner.name', 0] },
+                companyName: { $arrayElemAt: ['$cargoOwner.cargoOwnerProfile.companyName', 0] },
+                location: { $arrayElemAt: ['$cargoOwner.location', 0] },
+                rating: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.rating', 0] }, 4.5] },
+                isVerified: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.isVerified', 0] }, false] }
+              },
+              null
+            ]
+          },
+          
+          // Bid statistics
+          bidStats: {
+            $cond: [
+              { $gt: [{ $size: '$bidStats' }, 0] },
+              { $arrayElemAt: ['$bidStats', 0] },
+              {
+                totalBids: 0,
+                avgBidAmount: null,
+                lowestBid: null,
+                highestBid: null
+              }
+            ]
+          },
+          
+          // Add search score if applicable
+          ...(search ? { score: { $meta: "textScore" } } : {})
+        }
+      },
+      
+      // Sort results
+      { $sort: search ? { score: { $meta: "textScore" }, ...sortOptions } : sortOptions },
+      
+      // Pagination
+      { $skip: skip },
+      { $limit: parseInt(limit) }
+    ]).toArray();
+
+    // Get total count for pagination
+    const totalLoads = await loadsCollection.countDocuments(query);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Get bid counts for each load
-    let bidCountMap = {};
-    if (loads.length > 0) {
-      try {
-        const loadIds = loads.map(load => load._id);
-        const bidCounts = await Bid.aggregate([
-          { $match: { load: { $in: loadIds }, status: { $nin: ['withdrawn', 'expired'] } } },
-          { $group: { _id: '$load', count: { $sum: 1 } } }
-        ]);
-
-        bidCounts.forEach(item => {
-          bidCountMap[item._id.toString()] = item.count;
-        });
-      } catch (bidError) {
-        console.warn('Error fetching bid counts:', bidError);
-        // Continue without bid counts
-      }
-    }
-
-    // Add bid counts and clean up data for public access
-    const loadsWithBidCounts = loads.map(load => {
-      const cleanLoad = {
+    // Transform data for frontend
+    const transformedLoads = loads.map(load => {
+      const daysUntilPickup = Math.ceil((new Date(load.pickupDate) - new Date()) / (1000 * 60 * 60 * 24));
+      const daysSincePosted = Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24));
+      
+      return {
         _id: load._id,
         title: load.title,
         description: load.description,
+        cargoType: load.cargoType,
+        weight: load.weight,
+        dimensions: load.dimensions,
         pickupLocation: load.pickupLocation,
         deliveryLocation: load.deliveryLocation,
-        weight: load.weight,
-        cargoType: load.cargoType,
-        vehicleType: load.vehicleType,
-        vehicleCapacityRequired: load.vehicleCapacityRequired,
-        budget: load.budget,
         pickupDate: load.pickupDate,
         deliveryDate: load.deliveryDate,
+        budget: load.budget,
+        vehicleType: load.vehicleType,
+        specialRequirements: load.specialRequirements,
         isUrgent: load.isUrgent,
-        isPriorityListing: load.isPriorityListing || false,
+        boostLevel: load.boostLevel,
+        isBoosted: load.isBoosted,
         status: load.status,
         createdAt: load.createdAt,
-        distance: load.distance,
-        bidCount: bidCountMap[load._id.toString()] || 0,
-        postedBy: {
-          name: load.postedBy?.name || 'User',
-          location: load.postedBy?.location,
-          isVerified: load.postedBy?.isVerified || false
-        },
-        subscriptionBadges: {
-          isPremium: ['pro', 'business'].includes(load.subscriptionPlan),
-          isBusiness: load.subscriptionPlan === 'business',
-          isPriority: load.isPriorityListing || false
-        }
-      };
-
-      // Only include sensitive info if user is authenticated and authorized
-      if (req.user) {
-        if (req.user.userType === 'driver') {
-          // Drivers can see more details
-          cleanLoad.specialInstructions = load.specialInstructions;
-          cleanLoad.pickupAddress = load.pickupAddress;
-          cleanLoad.deliveryAddress = load.deliveryAddress;
-        }
         
-        if (req.user.id === load.postedBy._id.toString()) {
-          // Load owner can see all details
-          cleanLoad.postedBy.email = load.postedBy.email;
-          cleanLoad.postedBy.phone = load.postedBy.phone;
-          cleanLoad.viewCount = load.viewCount;
-        }
-      }
-
-      return cleanLoad;
+        // Calculated fields
+        daysUntilPickup,
+        daysSincePosted,
+        isExpiringSoon: daysUntilPickup <= 2 && daysUntilPickup >= 0,
+        
+        // Cargo owner info
+        cargoOwner: load.cargoOwner,
+        
+        // Bid information
+        bidCount: load.bidStats?.totalBids || 0,
+        averageBidAmount: load.bidStats?.avgBidAmount,
+        lowestBid: load.bidStats?.lowestBid,
+        highestBid: load.bidStats?.highestBid,
+        
+        // Competition level indicator
+        competitionLevel: (() => {
+          const bidCount = load.bidStats?.totalBids || 0;
+          if (bidCount === 0) return 'low';
+          if (bidCount <= 3) return 'medium';
+          return 'high';
+        })(),
+        
+        // Boost indicator
+        boostLabel: (() => {
+          if (load.boostLevel >= 3) return 'urgent';
+          if (load.boostLevel >= 2) return 'premium';
+          if (load.boostLevel >= 1) return 'standard';
+          return null;
+        })()
+      };
     });
 
-    const response = {
+    // Get filter options for frontend
+    const filterOptions = await loadsCollection.aggregate([
+      { $match: { status: { $in: ['posted', 'receiving_bids'] } } },
+      {
+        $group: {
+          _id: null,
+          cargoTypes: { $addToSet: '$cargoType' },
+          vehicleTypes: { $addToSet: '$vehicleType' },
+          pickupLocations: { $addToSet: '$pickupLocation' },
+          deliveryLocations: { $addToSet: '$deliveryLocation' },
+          budgetRange: {
+            min: { $min: '$budget' },
+            max: { $max: '$budget' }
+          },
+          weightRange: {
+            min: { $min: '$weight' },
+            max: { $max: '$weight' }
+          }
+        }
+      }
+    ]).toArray();
+
+    res.json({
       status: 'success',
       data: {
-        loads: loadsWithBidCounts,
+        loads: transformedLoads,
         pagination: {
           currentPage: parseInt(page),
           totalPages,
           totalLoads,
           hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
         },
         filters: {
-          pickupLocation,
-          deliveryLocation,
-          cargoType,
-          vehicleType,
-          budgetRange: { min: minBudget, max: maxBudget },
-          weightRange: { min: minWeight, max: maxWeight },
-          isUrgent,
-          search
+          applied: {
+            search,
+            cargoType,
+            vehicleType,
+            pickupLocation,
+            deliveryLocation,
+            minBudget,
+            maxBudget,
+            minWeight,
+            maxWeight,
+            urgentOnly,
+            sortBy,
+            sortOrder
+          },
+          available: filterOptions[0] || {
+            cargoTypes: [],
+            vehicleTypes: [],
+            pickupLocations: [],
+            deliveryLocations: [],
+            budgetRange: { min: 0, max: 0 },
+            weightRange: { min: 0, max: 0 }
+          }
         }
       }
-    };
-
-    console.log(`Returning ${loadsWithBidCounts.length} loads out of ${totalLoads} total`);
-    
-    res.json(response);
+    });
 
   } catch (error) {
-    console.error('Get loads error:', error);
+    console.error('Load search error:', error);
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching loads',
@@ -593,21 +692,31 @@ router.delete('/:id', corsHandler, async (req, res) => {
 
 
 // @route   GET /api/loads/user/my-loads
-// @desc    Get current user's loads (convenience route)
-// @access  Private (Cargo Owners only)
+// @desc    Get cargo owner's loads with detailed information
+// @access  Private (Cargo owners only)
 router.get('/user/my-loads', corsHandler, auth, [
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('status').optional().isIn([
-    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired'
-  ]).withMessage('Invalid status'),
-  query('search').optional().trim()
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 100 }),
+  query('status').optional().isIn(['posted', 'receiving_bids', 'driver_assigned', 'in_transit', 'delivered', 'cancelled']),
+  query('sortBy').optional().isIn(['createdAt', 'budget', 'title', 'status']),
+  query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   try {
-    // Redirect to existing user-specific route
-    req.params.userId = req.user.id;
-    
-    // Call the existing handler logic
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Cargo owners only.'
+      });
+    }
+
+    const { 
+      page = 1, 
+      limit = 50, 
+      status,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -617,109 +726,281 @@ router.get('/user/my-loads', corsHandler, auth, [
       });
     }
 
-    const {
-      page = 1,
-      limit = 20,
-      status,
-      search
-    } = req.query;
-
-    // Build query for current user's loads
-    let query = { postedBy: req.user.id };
-
-    // Apply status filter
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    
+    // Build query
+    let query = { 
+      postedBy: new mongoose.Types.ObjectId(req.user.id) 
+    };
+    
     if (status) {
       query.status = status;
     }
 
-    // Text search
-    if (search && search.trim()) {
-      query.$or = [
-        { title: new RegExp(search.trim(), 'i') },
-        { description: new RegExp(search.trim(), 'i') },
-        { pickupLocation: new RegExp(search.trim(), 'i') },
-        { deliveryLocation: new RegExp(search.trim(), 'i') }
-      ];
-    }
-
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Execute query
-    const loads = await Load.find(query)
-      .populate('postedBy', 'name email phone location isVerified subscriptionPlan')
-      .populate('assignedDriver', 'name phone email location vehicleType rating profilePicture')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    // Get loads collection
+    const loadsCollection = db.collection('loads');
 
-    const totalLoads = await Load.countDocuments(query);
+    // Get loads with bid counts and driver information
+    const loads = await loadsCollection.aggregate([
+      { $match: query },
+      
+      // Get bid count for each load
+      {
+        $lookup: {
+          from: 'bids',
+          let: { loadId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$load', '$$loadId'] },
+                    { $nin: ['$status', ['withdrawn', 'expired']] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                pending: {
+                  $sum: {
+                    $cond: [
+                      { $in: ['$status', ['submitted', 'viewed', 'under_review']] },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                accepted: {
+                  $sum: {
+                    $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0]
+                  }
+                },
+                avgBidAmount: { $avg: '$bidAmount' },
+                lowestBid: { $min: '$bidAmount' },
+                highestBid: { $max: '$bidAmount' }
+              }
+            }
+          ],
+          as: 'bidStats'
+        }
+      },
+      
+      // Get assigned driver information if available
+      {
+        $lookup: {
+          from: 'drivers',
+          localField: 'assignedDriver',
+          foreignField: '_id',
+          as: 'driverInfo'
+        }
+      },
+      
+      // Get accepted bid information if available
+      {
+        $lookup: {
+          from: 'bids',
+          localField: 'acceptedBid',
+          foreignField: '_id',
+          as: 'acceptedBidInfo'
+        }
+      },
+      
+      // Project the fields we need
+      {
+        $project: {
+          title: 1,
+          description: 1,
+          cargoType: 1,
+          weight: 1,
+          dimensions: 1,
+          pickupLocation: 1,
+          deliveryLocation: 1,
+          pickupDate: 1,
+          deliveryDate: 1,
+          budget: 1,
+          vehicleType: 1,
+          specialRequirements: 1,
+          status: 1,
+          isUrgent: 1,
+          boostLevel: 1,
+          isBoosted: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          assignedAt: 1,
+          
+          // Bid statistics
+          bidStats: {
+            $cond: [
+              { $gt: [{ $size: '$bidStats' }, 0] },
+              { $arrayElemAt: ['$bidStats', 0] },
+              {
+                total: 0,
+                pending: 0,
+                accepted: 0,
+                avgBidAmount: null,
+                lowestBid: null,
+                highestBid: null
+              }
+            ]
+          },
+          
+          // Driver information (if assigned)
+          assignedDriver: {
+            $cond: [
+              { $gt: [{ $size: '$driverInfo' }, 0] },
+              {
+                _id: { $arrayElemAt: ['$driverInfo._id', 0] },
+                name: { $arrayElemAt: ['$driverInfo.name', 0] },
+                phone: { $arrayElemAt: ['$driverInfo.phone', 0] },
+                vehicleType: { $arrayElemAt: ['$driverInfo.vehicleType', 0] },
+                rating: { $arrayElemAt: ['$driverInfo.driverProfile.rating', 0] }
+              },
+              null
+            ]
+          },
+          
+          // Accepted bid amount
+          acceptedBidAmount: {
+            $cond: [
+              { $gt: [{ $size: '$acceptedBidInfo' }, 0] },
+              { $arrayElemAt: ['$acceptedBidInfo.bidAmount', 0] },
+              null
+            ]
+          }
+        }
+      },
+      
+      // Sort results
+      { $sort: { [sortBy]: sortDirection } },
+      
+      // Pagination
+      { $skip: skip },
+      { $limit: parseInt(limit) }
+    ]).toArray();
+
+    // Get total count for pagination
+    const totalLoads = await loadsCollection.countDocuments(query);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Get bid counts
-    let bidCountMap = {};
-    if (loads.length > 0) {
-      try {
-        const loadIds = loads.map(load => load._id);
-        const bidCounts = await Bid.aggregate([
-          { $match: { load: { $in: loadIds }, status: { $nin: ['withdrawn', 'expired'] } } },
-          { $group: { _id: '$load', count: { $sum: 1 } } }
-        ]);
-
-        bidCounts.forEach(item => {
-          bidCountMap[item._id.toString()] = item.count;
-        });
-      } catch (bidError) {
-        console.warn('Error fetching bid counts:', bidError);
-      }
-    }
-
-    // Add bid counts and additional analytics
-    const loadsWithAnalytics = loads.map(load => ({
-      ...load,
-      bidCount: bidCountMap[load._id.toString()] || 0,
-      daysActive: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
-      isExpired: load.biddingEndDate && new Date() > new Date(load.biddingEndDate)
+    // Transform the data for frontend
+    const transformedLoads = loads.map(load => ({
+      _id: load._id,
+      title: load.title,
+      description: load.description,
+      cargoType: load.cargoType,
+      weight: load.weight,
+      dimensions: load.dimensions,
+      pickupLocation: load.pickupLocation,
+      deliveryLocation: load.deliveryLocation,
+      pickupDate: load.pickupDate,
+      deliveryDate: load.deliveryDate,
+      budget: load.budget,
+      vehicleType: load.vehicleType,
+      specialRequirements: load.specialRequirements,
+      status: load.status,
+      isUrgent: load.isUrgent,
+      boostLevel: load.boostLevel || 0,
+      isBoosted: load.isBoosted || false,
+      createdAt: load.createdAt,
+      updatedAt: load.updatedAt,
+      assignedAt: load.assignedAt,
+      
+      // Bid information
+      bidCount: load.bidStats?.total || 0,
+      pendingBids: load.bidStats?.pending || 0,
+      acceptedBids: load.bidStats?.accepted || 0,
+      averageBidAmount: load.bidStats?.avgBidAmount || null,
+      lowestBid: load.bidStats?.lowestBid || null,
+      highestBid: load.bidStats?.highestBid || null,
+      
+      // Driver and accepted bid info
+      assignedDriver: load.assignedDriver,
+      acceptedBidAmount: load.acceptedBidAmount,
+      
+      // Calculate savings if bid was accepted
+      savings: load.acceptedBidAmount && load.budget 
+        ? load.budget - load.acceptedBidAmount 
+        : null,
+      
+      // Calculate days since posted
+      daysSincePosted: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
+      
+      // Status helpers for frontend
+      canReceiveBids: ['posted', 'receiving_bids'].includes(load.status),
+      isActive: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'].includes(load.status),
+      isCompleted: load.status === 'delivered',
+      isCancelled: load.status === 'cancelled'
     }));
 
-    // Calculate summary statistics
-    const summary = {
-      totalLoads,
-      activeLoads: loads.filter(l => l.isActive && ['posted', 'receiving_bids'].includes(l.status)).length,
-      completedLoads: loads.filter(l => l.status === 'delivered').length,
-      inTransitLoads: loads.filter(l => l.status === 'in_transit').length,
-      totalBids: Object.values(bidCountMap).reduce((sum, count) => sum + count, 0)
-    };
+    // Get summary statistics
+    const summaryStats = await loadsCollection.aggregate([
+      { $match: { postedBy: new mongoose.Types.ObjectId(req.user.id) } },
+      {
+        $group: {
+          _id: null,
+          totalLoads: { $sum: 1 },
+          activeLoads: {
+            $sum: {
+              $cond: [
+                { $in: ['$status', ['posted', 'receiving_bids', 'driver_assigned', 'in_transit']] },
+                1,
+                0
+              ]
+            }
+          },
+          completedLoads: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0]
+            }
+          },
+          totalBudget: { $sum: '$budget' }
+        }
+      }
+    ]).toArray();
 
     res.json({
       status: 'success',
       data: {
-        loads: loadsWithAnalytics,
+        loads: transformedLoads,
         pagination: {
           currentPage: parseInt(page),
           totalPages,
           totalLoads,
           hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
         },
-        summary,
+        summary: summaryStats[0] || {
+          totalLoads: 0,
+          activeLoads: 0,
+          completedLoads: 0,
+          totalBudget: 0
+        },
         filters: {
-          status,
-          search
+          status: status || 'all',
+          sortBy,
+          sortOrder
         }
       }
     });
 
   } catch (error) {
-    console.error('Get user loads error:', error);
+    console.error('Get my loads error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching user loads',
+      message: 'Server error fetching loads',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
+
 // @route   GET /api/loads/subscription-status
 // @desc    Get current user's subscription status
 // @access  Private
