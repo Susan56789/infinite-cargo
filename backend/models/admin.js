@@ -200,6 +200,7 @@ adminSchema.pre('save', async function(next) {
     this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
+    console.error('Error hashing admin password:', error);
     next(error);
   }
 });
@@ -248,8 +249,12 @@ adminSchema.pre('save', function(next) {
 // Method to check password
 adminSchema.methods.comparePassword = async function(candidatePassword) {
   try {
+    if (!this.password) {
+      throw new Error('No password set for admin account');
+    }
     return await bcrypt.compare(candidatePassword, this.password);
   } catch (error) {
+    console.error('Password comparison failed:', error);
     throw new Error('Password comparison failed');
   }
 };
@@ -296,35 +301,52 @@ adminSchema.methods.resetLoginAttempts = function() {
 
 // Method to add audit log entry
 adminSchema.methods.addAuditLog = function(action, target = null, details = null, req = null) {
-  const logEntry = {
-    action,
-    target,
-    details,
-    timestamp: new Date(),
-    ...(req && {
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
-    })
-  };
+  try {
+    const logEntry = {
+      action,
+      target,
+      details,
+      timestamp: new Date(),
+      ...(req && {
+        ip: req.ip || 'unknown',
+        userAgent: req.get('User-Agent') || 'unknown'
+      })
+    };
 
-  this.auditLog.push(logEntry);
-  
-  // Keep only last 100 audit entries
-  if (this.auditLog.length > 100) {
-    this.auditLog = this.auditLog.slice(-100);
+    this.auditLog.push(logEntry);
+    
+    // Keep only last 100 audit entries
+    if (this.auditLog.length > 100) {
+      this.auditLog = this.auditLog.slice(-100);
+    }
+
+    return this.save();
+  } catch (error) {
+    console.error('Failed to add audit log entry:', error);
+    throw error;
   }
-
-  return this.save();
 };
 
 // Static method to find admin by email (including password)
 adminSchema.statics.findByEmail = function(email) {
-  return this.findOne({ email: email.toLowerCase() }).select('+password');
+  try {
+    if (!email) {
+      throw new Error('Email is required for findByEmail');
+    }
+    return this.findOne({ email: email.toLowerCase() }).select('+password');
+  } catch (error) {
+    console.error('Error in findByEmail:', error);
+    throw error;
+  }
 };
 
 // Static method to create initial super admin
 adminSchema.statics.createSuperAdmin = async function(adminData) {
   try {
+    if (!adminData || !adminData.email || !adminData.password) {
+      throw new Error('Admin data, email, and password are required');
+    }
+
     // Check if super admin already exists
     const existingSuperAdmin = await this.findOne({ role: 'super_admin' });
     if (existingSuperAdmin) {
@@ -347,48 +369,174 @@ adminSchema.statics.createSuperAdmin = async function(adminData) {
     });
 
     await superAdmin.save();
+    console.log('Super admin created successfully:', superAdmin.email);
     return superAdmin;
   } catch (error) {
+    console.error('Failed to create super admin:', error);
     throw new Error(`Failed to create super admin: ${error.message}`);
   }
 };
 
-// Static method to get dashboard statistics
+// FIXED: Static method to get dashboard statistics with proper error handling
 adminSchema.statics.getDashboardStats = async function() {
   try {
-    const mongoose = require('mongoose');
+    // Ensure mongoose connection exists
+    if (!mongoose.connection || !mongoose.connection.db) {
+      throw new Error('Database connection not available');
+    }
+
     const db = mongoose.connection.db;
 
-    // Get counts from various collections
-    const [
-      totalAdmins,
-      activeAdmins,
-      totalDrivers,
-      totalCargoOwners,
-      newUsersThisMonth
-    ] = await Promise.all([
-      this.countDocuments(),
-      this.countDocuments({ isActive: true }),
+    // Get counts with proper error handling
+    const stats = {};
+
+    try {
+      // Admin statistics
+      const [totalAdmins, activeAdmins] = await Promise.all([
+        this.countDocuments().catch(err => {
+          console.warn('Failed to count total admins:', err);
+          return 0;
+        }),
+        this.countDocuments({ isActive: true }).catch(err => {
+          console.warn('Failed to count active admins:', err);
+          return 0;
+        })
+      ]);
+
+      stats.totalAdmins = totalAdmins;
+      stats.activeAdmins = activeAdmins;
+    } catch (adminError) {
+      console.warn('Failed to get admin stats:', adminError);
+      stats.totalAdmins = 0;
+      stats.activeAdmins = 0;
+    }
+
+    try {
+      // User statistics from custom collections
+      const [totalDrivers, totalCargoOwners] = await Promise.all([
+        db.collection('drivers').countDocuments().catch(err => {
+          console.warn('Failed to count drivers:', err);
+          return 0;
+        }),
+        db.collection('cargo-owners').countDocuments().catch(err => {
+          console.warn('Failed to count cargo owners:', err);
+          return 0;
+        })
+      ]);
+
+      stats.totalDrivers = totalDrivers;
+      stats.totalCargoOwners = totalCargoOwners;
+      stats.totalUsers = totalDrivers + totalCargoOwners;
+    } catch (userError) {
+      console.warn('Failed to get user stats:', userError);
+      stats.totalDrivers = 0;
+      stats.totalCargoOwners = 0;
+      stats.totalUsers = 0;
+    }
+
+    try {
+      // New users this month
+      const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      
+      const [newDriversThisMonth, newCargoOwnersThisMonth] = await Promise.all([
+        db.collection('drivers').countDocuments({
+          createdAt: { $gte: startOfMonth }
+        }).catch(err => {
+          console.warn('Failed to count new drivers this month:', err);
+          return 0;
+        }),
+        db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startOfMonth }
+        }).catch(err => {
+          console.warn('Failed to count new cargo owners this month:', err);
+          return 0;
+        })
+      ]);
+
+      stats.newUsersThisMonth = newDriversThisMonth + newCargoOwnersThisMonth;
+    } catch (monthlyError) {
+      console.warn('Failed to get monthly user stats:', monthlyError);
+      stats.newUsersThisMonth = 0;
+    }
+
+    // Set active users (simplified for now)
+    stats.activeUsers = stats.totalUsers;
+
+    console.log('Dashboard stats retrieved successfully:', stats);
+    return stats;
+
+  } catch (error) {
+    console.error('Failed to get dashboard stats:', error);
+    
+    // Return default stats instead of throwing
+    return {
+      totalAdmins: 0,
+      activeAdmins: 0,
+      totalDrivers: 0,
+      totalCargoOwners: 0,
+      totalUsers: 0,
+      newUsersThisMonth: 0,
+      activeUsers: 0,
+      error: 'Failed to retrieve dashboard statistics'
+    };
+  }
+};
+
+// Static method to safely get user counts for admin operations
+adminSchema.statics.getUserCounts = async function() {
+  try {
+    if (!mongoose.connection || !mongoose.connection.db) {
+      throw new Error('Database connection not available');
+    }
+
+    const db = mongoose.connection.db;
+    
+    const counts = await Promise.allSettled([
       db.collection('drivers').countDocuments(),
-      db.collection('cargo-owners').countDocuments(),
-      db.collection('drivers').countDocuments({
-        createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }
-      }) + db.collection('cargo-owners').countDocuments({
-        createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }
-      })
+      db.collection('cargo-owners').countDocuments()
     ]);
 
+    const driverCount = counts[0].status === 'fulfilled' ? counts[0].value : 0;
+    const cargoOwnerCount = counts[1].status === 'fulfilled' ? counts[1].value : 0;
+
     return {
-      totalAdmins,
-      activeAdmins,
-      totalDrivers,
-      totalCargoOwners,
-      totalUsers: totalDrivers + totalCargoOwners,
-      newUsersThisMonth,
-      activeUsers: totalDrivers + totalCargoOwners // Simplified for now
+      drivers: driverCount,
+      cargoOwners: cargoOwnerCount,
+      total: driverCount + cargoOwnerCount
     };
   } catch (error) {
-    throw new Error(`Failed to get dashboard stats: ${error.message}`);
+    console.error('Failed to get user counts:', error);
+    return {
+      drivers: 0,
+      cargoOwners: 0,
+      total: 0,
+      error: error.message
+    };
+  }
+};
+
+// Method to safely update admin login history
+adminSchema.methods.updateLoginHistory = function(ip, userAgent, success = true) {
+  try {
+    const loginEntry = {
+      date: new Date(),
+      ip: ip || 'unknown',
+      userAgent: userAgent || 'unknown',
+      success
+    };
+
+    this.loginHistory.push(loginEntry);
+
+    // Keep only last 50 login entries
+    if (this.loginHistory.length > 50) {
+      this.loginHistory = this.loginHistory.slice(-50);
+    }
+
+    return this.save();
+  } catch (error) {
+    console.error('Failed to update login history:', error);
+    // Don't throw error, just log it
+    return Promise.resolve(this);
   }
 };
 

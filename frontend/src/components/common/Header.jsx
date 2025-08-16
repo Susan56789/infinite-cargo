@@ -14,28 +14,34 @@ const Header = () => {
   const location = useLocation();
 
   useEffect(() => {
-    // Use AuthManager to get user data
+    // Check authentication and get user data
     if (isAuthenticated()) {
       const userData = getUser();
       setUser(userData);
+      console.log('User authenticated in header:', userData);
+    } else {
+      setUser(null);
+      console.log('User not authenticated in header');
     }
-  }, []);
+  }, [location.pathname]); // Re-check on route changes
 
   // Listen for storage changes to update user state when login occurs in another tab
   useEffect(() => {
     const handleStorageChange = (e) => {
-      // Check for both localStorage and sessionStorage keys
-      if ((e.key === 'infiniteCargoUser' || e.key === 'infiniteCargoToken') && e.newValue) {
-        // Re-check authentication using AuthManager
-        if (isAuthenticated()) {
-          const userData = getUser();
-          setUser(userData);
-        }
-      } else if ((e.key === 'infiniteCargoUser' || e.key === 'infiniteCargoToken') && !e.newValue) {
-        // If token or user is removed, check if still authenticated
-        if (!isAuthenticated()) {
-          setUser(null);
-        }
+      const authKeys = ['infiniteCargoUser', 'infiniteCargoToken'];
+      
+      if (authKeys.includes(e.key)) {
+        // Small delay to ensure storage is updated
+        setTimeout(() => {
+          if (isAuthenticated()) {
+            const userData = getUser();
+            setUser(userData);
+            console.log('User state updated from storage change:', userData);
+          } else {
+            setUser(null);
+            console.log('User cleared from storage change');
+          }
+        }, 100);
       }
     };
 
@@ -43,14 +49,16 @@ const Header = () => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // Also listen for custom auth events (you can dispatch these from your login/logout functions)
+  // Custom auth event listener
   useEffect(() => {
     const handleAuthChange = () => {
       if (isAuthenticated()) {
         const userData = getUser();
         setUser(userData);
+        console.log('User state updated from auth change event:', userData);
       } else {
         setUser(null);
+        console.log('User cleared from auth change event');
       }
     };
 
@@ -64,15 +72,19 @@ const Header = () => {
 
   const handleLogout = async () => {
     try {
-      // Use AuthManager's logout method
+      console.log('Logging out user...');
       await authManager.logout();
       setUser(null);
-      // The AuthManager's logout method already handles navigation to login
+      
+      // Dispatch custom event to notify other components
+      window.dispatchEvent(new CustomEvent('authStateChanged'));
+      
     } catch (error) {
       console.error('Logout failed:', error);
       // Fallback: clear auth and navigate manually
       authManager.clearAuth();
       setUser(null);
+      window.dispatchEvent(new CustomEvent('authStateChanged'));
       navigate('/');
     }
     closeAllMenus();
@@ -223,7 +235,10 @@ const Header = () => {
                 e.target.nextSibling.style.display = 'inline';
               }}
             />
-            <span className="text-xl font-bold text-secondary-800 hidden sm:inline-block group-hover:text-primary-600 transition-colors duration-300" style={{display: 'none'}}>
+            <span 
+              className="text-xl font-bold text-secondary-800 hidden sm:inline-block group-hover:text-primary-600 transition-colors duration-300"
+              style={{display: 'none'}}
+            >
               Infinite Cargo
             </span>
           </Link>

@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, Shield, AlertCircle, CheckCircle, Lock, Mail, ArrowLeft } from 'lucide-react';
-import {authManager} from '../../utils/auth'; 
+import { authManager } from '../../utils/auth'; 
 import { useNavigate } from 'react-router-dom';
 
-
-
 const AdminLogin = () => {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     email: '',
     password: ''
@@ -19,16 +18,10 @@ const AdminLogin = () => {
   // Check if admin is already logged in
   useEffect(() => {
     if (authManager.isAuthenticated(true)) {
-      const admin = authManager.getUser(true);
-      console.log('Admin already logged in:', admin);
+      console.log('Admin already logged in, redirecting to dashboard');
       navigate('/admin/dashboard');
     }
-  }, []);
-
-  // Navigation 
-  const navigate = useNavigate();
-
-navigate('/admin/dashboard');
+  }, [navigate]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -37,7 +30,6 @@ navigate('/admin/dashboard');
       [name]: value
     }));
     
-    // Clear specific field error when user starts typing
     if (errors[name]) {
       setErrors(prev => ({
         ...prev,
@@ -45,7 +37,6 @@ navigate('/admin/dashboard');
       }));
     }
     
-    // Clear general message
     if (message.text) {
       setMessage({ type: '', text: '' });
     }
@@ -71,14 +62,9 @@ navigate('/admin/dashboard');
   };
 
   const handleSubmit = async (e) => {
-    if (e && e.preventDefault) {
-      e.preventDefault();
-    }
-    
-    console.log('Form submitted!');
+    e.preventDefault();
     
     if (!validateForm()) {
-      console.log('Form validation failed:', errors);
       return;
     }
 
@@ -89,17 +75,13 @@ navigate('/admin/dashboard');
     try {
       const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
       
-      console.log('Attempting login with:', {
-        email: formData.email.trim().toLowerCase(),
-        password: formData.password
-      });
+      console.log('Attempting admin login...');
 
       const response = await fetch(`${API_BASE_URL}/admin/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        credentials: 'include',
         body: JSON.stringify({
           email: formData.email.trim().toLowerCase(), 
           password: formData.password
@@ -107,36 +89,39 @@ navigate('/admin/dashboard');
       });
 
       const data = await response.json();
-      console.log('API Response:', {
-        status: response.status,
-        ok: response.ok,
-        data: data
-      });
+      console.log('Login response:', data);
 
-      if (response.ok && data.status === 'success') {
-        // Use authManager to store admin token and data
-        authManager.setAuth(data.token, data.admin, false, true); // isAdmin = true
+      if (response.ok && data.status === 'success' && data.token && data.admin) {
+        console.log('Admin login successful');
         
-        setLoginSuccess(true);
-        setMessage({ 
-          type: 'success', 
-          text: 'Login successful! Redirecting to dashboard...' 
-        });
+        // Store admin auth data - using sessionStorage for admin (rememberMe = false, isAdmin = true)
+        authManager.setAuth(data.token, data.admin, false, true);
+        
+        // Verify the storage worked
+        const isAuth = authManager.isAuthenticated(true);
+        const storedUser = authManager.getUser(true);
+        const storedToken = authManager.getToken(true);
+        
+        console.log('Auth verification:', { isAuth, hasUser: !!storedUser, hasToken: !!storedToken });
+        
+        if (isAuth && storedUser && storedToken) {
+          setLoginSuccess(true);
+          setMessage({ 
+            type: 'success', 
+            text: 'Login successful! Redirecting to dashboard...' 
+          });
 
-        console.log('Login successful, admin data:', data.admin);
-
-        // Navigate to dashboard 
-        setTimeout(() => {
-          console.log('Navigating to admin dashboard...');
-          navigate('/admin/dashboard');
-        }, 1500);
+          setTimeout(() => {
+            navigate('/admin/dashboard');
+          }, 1500);
+        } else {
+          throw new Error('Failed to store authentication data');
+        }
         
       } else {
         console.error('Login failed:', data);
         
-        // Handle API errors
         if (data.errors && Array.isArray(data.errors)) {
-          // Handle field-specific validation errors
           const fieldErrors = {};
           data.errors.forEach(error => {
             if (error.field) {
@@ -153,7 +138,6 @@ navigate('/admin/dashboard');
             });
           }
         } else {
-          // Handle general errors
           setMessage({ 
             type: 'error', 
             text: data.message || 'Login failed. Please check your credentials.' 
@@ -176,7 +160,7 @@ navigate('/admin/dashboard');
       } else {
         setMessage({ 
           type: 'error', 
-          text: 'An unexpected error occurred. Please try again later.' 
+          text: error.message || 'An unexpected error occurred. Please try again later.' 
         });
       }
     } finally {
@@ -192,7 +176,6 @@ navigate('/admin/dashboard');
     navigate('/');
   };
 
-  // Show success screen with auto-redirect info
   if (loginSuccess) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -223,7 +206,6 @@ navigate('/admin/dashboard');
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
-      {/* Background Pattern */}
       <div 
         className="absolute inset-0 opacity-5"
         style={{
@@ -233,7 +215,6 @@ navigate('/admin/dashboard');
       ></div>
       
       <div className="relative z-10 w-full max-w-md">
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-600 rounded-full mb-4 shadow-lg">
             <Shield className="w-8 h-8 text-white" />
@@ -244,9 +225,7 @@ navigate('/admin/dashboard');
           </p>
         </div>
 
-        {/* Login Card */}
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl border border-white/20 shadow-2xl p-8">
-          {/* Alert Messages */}
           {message.text && (
             <div className={`flex items-center gap-3 p-4 rounded-lg mb-6 ${
               message.type === 'success'
@@ -262,9 +241,7 @@ navigate('/admin/dashboard');
             </div>
           )}
 
-          {/* Login Form */}
-          <div className="space-y-6">
-            {/* Email Field */}
+          <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-200 mb-2">
                 Email Address
@@ -295,7 +272,6 @@ navigate('/admin/dashboard');
               )}
             </div>
 
-            {/* Password Field */}
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-slate-200 mb-2">
                 Password
@@ -335,10 +311,8 @@ navigate('/admin/dashboard');
               )}
             </div>
 
-            {/* Submit Button */}
             <button
-              type="button"
-              onClick={handleSubmit}
+              type="submit"
               className="w-full bg-gradient-to-r from-purple-500 to-blue-600 text-white font-semibold py-3 px-4 rounded-lg hover:from-purple-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
               disabled={loading}
             >
@@ -351,9 +325,8 @@ navigate('/admin/dashboard');
                 'Sign In'
               )}
             </button>
-          </div>
+          </form>
 
-          {/* Security Notice */}
           <div className="flex items-center gap-3 mt-6 p-4 bg-amber-500/20 border border-amber-500/30 rounded-lg">
             <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
             <span className="text-sm text-amber-200">
@@ -361,7 +334,6 @@ navigate('/admin/dashboard');
             </span>
           </div>
 
-          {/* Footer Links */}
           <div className="mt-6 text-center">
             <button
               type="button"
