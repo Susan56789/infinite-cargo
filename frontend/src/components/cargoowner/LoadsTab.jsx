@@ -6,7 +6,7 @@ import {
   AlertCircle, CheckCircle, XCircle
 } from 'lucide-react';
 
-import { getAuthHeader } from '../../utils/auth'; 
+import { getAuthHeader, authManager } from '../../utils/auth'; 
 
 const LoadsTab = () => {
   // State management
@@ -126,36 +126,52 @@ const LoadsTab = () => {
     }
   }, [filters, sortConfig, pagination.limit, API_BASE_URL]);
 
-  const updateLoadStatus = async (loadId, newStatus) => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
-        method: 'PATCH',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ status: newStatus })
-      });
+const updateLoadStatus = async (loadId, newStatus) => {
+  try {
+    setLoading(true);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+    const headers = {
+      ...getAuthHeaders(),               // includes Authorization Bearer
+      'Content-Type': 'application/json'
+    };
+
+    const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: newStatus })
+    });
+
+    if (!response.ok) {
+      // If 401, prompt re-login
+      if (response.status === 401 || response.status === 403) {
+        setError('Session expired or not authorized. Please log in again.');
+        authManager.logout();
+        return;
       }
 
-      const data = await response.json();
-      
-      if (data.status === 'success') {
-        setLoads(loads.map(load => 
-          load._id === loadId ? { ...load, status: newStatus } : load
-        ));
-      } else {
-        throw new Error(data.message || 'Failed to update load status');
-      }
-    } catch (err) {
-      console.error('Error updating load status:', err);
-      setError(err.message || 'Failed to update load status');
-    } finally {
-      setLoading(false);
+      const errorText = await response.text();
+      throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
     }
-  };
+
+    const data = await response.json();
+    console.log("PATCH result: ", data);
+
+    if (data.status === 'success') {
+      setLoads(loads.map(load =>
+        load._id === loadId ? { ...load, status: newStatus } : load
+      ));
+    } else {
+      throw new Error(data.message || 'Failed to update load status');
+    }
+
+  } catch (err) {
+    console.error('Error updating load status:', err);
+    setError(err.message || 'Failed to update load status');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const deleteLoad = async (loadId) => {
     try {
