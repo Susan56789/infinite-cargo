@@ -162,7 +162,7 @@ const AdminDashboard = () => {
       if (response.status === 'success' && response.stats) {
         setDashboardStats(response.stats);
 
-        console.log('Dashboard Stats:', response.stats);
+    
       } else {
         setDashboardStats({});
       }

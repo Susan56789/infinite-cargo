@@ -124,7 +124,7 @@ const SubscriptionTab = ({
               <ul className="space-y-2 mb-6">
                 <li className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  {plan.features.maxLoads === -1 ? 'Unlimited loads' : `${plan.features.maxLoads} loads per month`}
+                  {plan.features.maxLoads === -1 ? 'Unlimited loads' : `${plan.maxLoads} loads per month`}
                 </li>
                 <li className="flex items-center gap-2 text-sm">
                   {plan.features.prioritySupport ? (
@@ -152,28 +152,24 @@ const SubscriptionTab = ({
                 </li>
               </ul>
 
-              {subscription?.planId !== planId && (
-                <button
-                  onClick={() => onSubscribe(planId, 'mpesa')}
-                  disabled={loading}
-                  className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
-                    planId === 'basic' 
-                      ? 'bg-gray-100 text-gray-600 cursor-not-allowed'
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  }`}
-                >
-                  {planId === 'basic' ? 'Current Plan' : 'Upgrade'}
-                </button>
-              )}
+             <button
+  onClick={() => onSubscribe(planId, 'mpesa')}
+  disabled={loading || subscription?.planId === planId}
+  className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
+    subscription?.planId === planId
+      ? 'bg-green-100 text-green-800 cursor-not-allowed'
+      : planId === 'basic'
+        ? 'bg-gray-100 text-gray-600 cursor-not-allowed'
+        : 'bg-blue-600 hover:bg-blue-700 text-white'
+  }`}
+>
+  {subscription?.planId === planId
+    ? 'Current Plan'
+    : planId === 'basic'
+    ? 'Free Plan'
+    : 'Upgrade'}
+</button>
 
-              {subscription?.planId === planId && (
-                <button
-                  disabled
-                  className="w-full py-2 px-4 bg-green-100 text-green-800 rounded-lg font-medium"
-                >
-                  Current Plan
-                </button>
-              )}
             </div>
           ))}
         </div>

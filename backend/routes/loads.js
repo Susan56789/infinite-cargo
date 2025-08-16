@@ -306,7 +306,7 @@ router.get('/subscription-status', corsHandler, auth, async (req, res) => {
       createdAt: { $gte: startOfMonth }
     });
 
-    // Define subscription plans (you might want to move this to a config file)
+    // Define subscription plans 
     const subscriptionPlans = {
       basic: {
         name: 'Basic Plan',
@@ -322,7 +322,7 @@ router.get('/subscription-status', corsHandler, auth, async (req, res) => {
       },
       business: {
         name: 'Business Plan',
-        maxLoads: -1, // Unlimited
+        maxLoads: 100, 
         features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
         price: 9999
       }

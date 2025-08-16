@@ -24,50 +24,23 @@ const subscriptionLimiter = rateLimit({
 // Subscription plans configuration
 const SUBSCRIPTION_PLANS = {
   basic: {
-    name: 'Basic Plan',
-    price: 0,
-    currency: 'KES',
-    duration: 30, // days
-    features: {
-      maxLoads: 3,
-      prioritySupport: false,
-      advancedAnalytics: false,
-      bulkOperations: false,
-      apiAccess: false,
-      dedicatedManager: false
-    },
-    autoRenew: true
-  },
-  pro: {
-    name: 'Pro Plan',
-    price: 999,
-    currency: 'KES',
-    duration: 30, // days
-    features: {
-      maxLoads: -1, // unlimited
-      prioritySupport: true,
-      advancedAnalytics: true,
-      bulkOperations: false,
-      apiAccess: false,
-      dedicatedManager: false
-    },
-    autoRenew: false
-  },
-  business: {
-    name: 'Business Plan',
-    price: 2499,
-    currency: 'KES',
-    duration: 30, // days
-    features: {
-      maxLoads: -1, // unlimited
-      prioritySupport: true,
-      advancedAnalytics: true,
-      bulkOperations: true,
-      apiAccess: true,
-      dedicatedManager: true
-    },
-    autoRenew: false
-  }
+        name: 'Basic Plan',
+        maxLoads: 3,
+        features: ['Basic support', 'Load posting', 'Basic analytics'],
+        price: 0
+      },
+      pro: {
+        name: 'Pro Plan', 
+        maxLoads: 25,
+        features: ['Priority support', 'Advanced analytics', 'Priority listings'],
+        price: 2999
+      },
+      business: {
+        name: 'Business Plan',
+        maxLoads: 100, 
+        features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
+        price: 9999
+      }
 };
 
 // @route   GET /api/subscriptions/status
@@ -230,7 +203,7 @@ router.get('/plans', corsHandler, auth, async (req, res) => {
         price: 9999,
         currency: 'KES',
         interval: 'monthly', 
-        maxLoads: -1, // Unlimited
+        maxLoads: 100,
         features: [
           'Unlimited load postings',
           'Premium analytics dashboard',
