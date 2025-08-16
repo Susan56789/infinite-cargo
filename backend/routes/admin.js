@@ -563,7 +563,7 @@ router.get('/me', adminAuth, async (req, res) => {
 });
 
 // @route   GET /api/admin/dashboard-stats
-// @desc    Get dashboard statistics
+// @desc    Get dashboard statistics with revenue
 // @access  Private
 router.get('/dashboard-stats', adminAuth, async (req, res) => {
   try {
@@ -576,7 +576,7 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
 
     const db = mongoose.connection.db;
 
-    // Get basic counts from both collections
+    // Counts
     const [
       totalDrivers,
       totalCargoOwners,
@@ -591,21 +591,17 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
       db.collection('cargo-owners').countDocuments({ isActive: true })
     ]);
 
-    // Get new registrations this month
+    // New this month
     const thisMonth = new Date();
     thisMonth.setDate(1);
     thisMonth.setHours(0, 0, 0, 0);
 
     const [newDriversThisMonth, newCargoOwnersThisMonth] = await Promise.all([
-      db.collection('drivers').countDocuments({
-        createdAt: { $gte: thisMonth }
-      }),
-      db.collection('cargo-owners').countDocuments({
-        createdAt: { $gte: thisMonth }
-      })
+      db.collection('drivers').countDocuments({ createdAt: { $gte: thisMonth } }),
+      db.collection('cargo-owners').countDocuments({ createdAt: { $gte: thisMonth } })
     ]);
 
-    // Get subscription statistics
+    // Subscription stats
     const [
       totalSubscriptions,
       activeSubscriptions,
@@ -614,91 +610,82 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
       newSubscriptionsThisMonth
     ] = await Promise.all([
       Subscription.countDocuments(),
-      Subscription.countDocuments({ 
-        status: 'active',
-        $or: [
-          { expiresAt: { $gt: new Date() } },
-          { expiresAt: null }
-        ]
-      }),
+      Subscription.countDocuments({ status: 'active', $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }] }),
       Subscription.countDocuments({ status: 'pending' }),
-      Subscription.countDocuments({ 
-        status: 'active',
-        expiresAt: { $lte: new Date() }
-      }),
-      Subscription.countDocuments({
-        createdAt: { $gte: thisMonth }
-      })
+      Subscription.countDocuments({ status: 'active', expiresAt: { $lte: new Date() } }),
+      Subscription.countDocuments({ createdAt: { $gte: thisMonth } })
     ]);
 
-    // Get loads statistics (with fallback)
-    let totalLoads = 0;
-    let activeLoads = 0;
-    let completedLoads = 0;
-    let newLoadsThisMonth = 0;
+    // Revenue Logic
+    let monthlyRevenue = 0;
+    let totalRevenue = 0;
 
     try {
-      [totalLoads, activeLoads, completedLoads, newLoadsThisMonth] = await Promise.all([
-        db.collection('loads').countDocuments(),
-        db.collection('loads').countDocuments({ status: 'active' }),
-        db.collection('loads').countDocuments({ status: 'completed' }),
-        db.collection('loads').countDocuments({
-          createdAt: { $gte: thisMonth }
-        })
-      ]);
-    } catch (loadError) {
-      console.log('Loads collection not available, using default values');
+      const thisMonthSubs = await Subscription.find({
+        createdAt: { $gte: thisMonth },
+        paymentStatus: { $in: ['completed', 'paid', 'success'] }
+      }).select('price amount');
+
+      monthlyRevenue = thisMonthSubs.reduce((sum, sub) => {
+        const val = sub.price || sub.amount || 0;
+        return sum + val;
+      }, 0);
+
+      const allSubs = await Subscription.find({
+        paymentStatus: { $in: ['completed', 'paid', 'success'] }
+      }).select('price amount');
+
+      totalRevenue = allSubs.reduce((sum, s) => {
+        const v = s.price || s.amount || 0;
+        return sum + v;
+      }, 0);
+    } catch (revError) {
+      console.warn('Revenue calc error', revError);
     }
 
+    // Loads
+    const [totalLoads, activeLoads, completedLoads, newLoadsThisMonth] = await Promise.all([
+      db.collection('loads').countDocuments(),
+      db.collection('loads').countDocuments({ status: 'active' }),
+      db.collection('loads').countDocuments({ status: 'completed' }),
+      db.collection('loads').countDocuments({ createdAt: { $gte: thisMonth } })
+    ]);
+
     const stats = {
-      // User statistics
-      totalUsers: totalDrivers + totalCargoOwners,
       totalDrivers,
       totalCargoOwners,
-      activeUsers: activeDrivers + activeCargoOwners,
+      totalUsers: totalDrivers + totalCargoOwners,
       activeDrivers,
       activeCargoOwners,
+      activeUsers: activeDrivers + activeCargoOwners,
       newUsersThisMonth: newDriversThisMonth + newCargoOwnersThisMonth,
-      
-      // Admin statistics
       totalAdmins,
-      
-      // Subscription statistics
+
       totalSubscriptions,
       activeSubscriptions,
       pendingSubscriptions,
       expiredSubscriptions,
       newSubscriptionsThisMonth,
-      
-      // Load statistics
+
+      monthlyRevenue,
+      totalRevenue,
+
       totalLoads,
       activeLoads,
       completedLoads,
       newLoadsThisMonth,
-      
-      // System health
-      systemHealth: {
-        usersGrowth: ((newDriversThisMonth + newCargoOwnersThisMonth) / Math.max(1, totalDrivers + totalCargoOwners)) * 100,
-        subscriptionRate: (activeSubscriptions / Math.max(1, totalDrivers + totalCargoOwners)) * 100,
-        loadCompletionRate: totalLoads > 0 ? (completedLoads / totalLoads) * 100 : 0
-      },
-      
+
       lastUpdated: new Date()
     };
 
-    res.json({
-      status: 'success',
-      stats
-    });
+    return res.json({ status: 'success', stats });
 
-  } catch (error) {
-    console.error('Dashboard stats error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching dashboard statistics'
-    });
+  } catch (err) {
+    console.error('Dashboard stats error:', err);
+    res.status(500).json({ status: 'error', message: 'Server error fetching dashboard statistics' });
   }
 });
+
 
 // @route   GET /api/admin/users
 // @desc    Get users with pagination and search
