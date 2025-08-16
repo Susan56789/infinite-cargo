@@ -144,7 +144,6 @@ const Header = () => {
     cargo_owner: [
       { to: '/cargo-dashboard', text: 'Dashboard' },
       { to: '/find-drivers', text: 'Find Drivers' },
-      { to: '/cargoowner/profile', text: 'Profile' },
       { to: '/support', text: 'Support' }
     ],
     admin: [

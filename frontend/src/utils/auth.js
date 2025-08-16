@@ -41,7 +41,7 @@ class AuthManager {
         if (!isAdmin) localStorage.removeItem(this.REMEMBER_KEY);
       }
 
-      console.log(`Auth stored for ${isAdmin ? 'admin' : 'user'}:`, { token: token.substring(0, 20) + '...', user: user.email || user.name });
+      ;
     } catch (error) {
       console.error('Failed to store auth data:', error);
     }
@@ -51,7 +51,6 @@ class AuthManager {
     try {
       const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
       const token = localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
-      console.log(`Getting token for ${isAdmin ? 'admin' : 'user'}:`, token ? 'Found' : 'Not found');
       return token;
     } catch (error) {
       console.error('Failed to get token:', error);

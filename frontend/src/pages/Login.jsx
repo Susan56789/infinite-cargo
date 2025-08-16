@@ -15,10 +15,7 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(false);
 
   // API Configuration
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 
-    (process.env.NODE_ENV === 'production' 
-      ? 'https://infinite-cargo-api.onrender.com/api' 
-      : 'http://localhost:5000/api');
+  const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api' ;
 
   useEffect(() => {
     // Check if user is already authenticated
