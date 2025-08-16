@@ -61,7 +61,7 @@ const LoadsTab = () => {
         ...(currentFilters.urgent && { urgent: 'true' })
       });
 
-      const response = await fetch(`${API_BASE_URL}/api/loads?${queryParams}`, {
+      const response = await fetch(`${API_BASE_URL}/loads?${queryParams}`, {
         method: 'GET',
         headers: getAuthHeaders()
       });

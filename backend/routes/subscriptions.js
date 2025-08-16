@@ -91,19 +91,75 @@ const SUBSCRIPTION_PLANS = {
   }
 };
 
+
 // @route   GET /api/subscriptions/plans
 // @desc    Get available subscription plans
-// @access  Public
-router.get('/plans', corsHandler, async (req, res) => {
+// @access  Private
+router.get('/plans', corsHandler, auth, async (req, res) => {
   try {
+    const plans = {
+      basic: {
+        id: 'basic',
+        name: 'Basic Plan',
+        price: 0,
+        currency: 'KES',
+        interval: 'monthly',
+        maxLoads: 3,
+        features: [
+          'Post up to 3 loads per month',
+          'Basic analytics',
+          'Email support',
+          'Standard listing visibility'
+        ],
+        recommended: false
+      },
+      pro: {
+        id: 'pro',
+        name: 'Pro Plan',
+        price: 2999,
+        currency: 'KES', 
+        interval: 'monthly',
+        maxLoads: 25,
+        features: [
+          'Post up to 25 loads per month',
+          'Advanced analytics & reporting',
+          'Priority support',
+          'Enhanced listing visibility',
+          'Bid management tools',
+          'Performance insights'
+        ],
+        recommended: true
+      },
+      business: {
+        id: 'business',
+        name: 'Business Plan',
+        price: 9999,
+        currency: 'KES',
+        interval: 'monthly', 
+        maxLoads: -1, // Unlimited
+        features: [
+          'Unlimited load postings',
+          'Premium analytics dashboard',
+          'Dedicated account manager',
+          'Priority listing placement',
+          'Custom integrations',
+          'Advanced reporting',
+          'Phone & email support',
+          'Bulk operations'
+        ],
+        recommended: false
+      }
+    };
+
     res.json({
       status: 'success',
       data: {
-        plans: SUBSCRIPTION_PLANS
+        plans
       }
     });
+
   } catch (error) {
-    console.error('Get plans error:', error);
+    console.error('Get subscription plans error:', error);
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching subscription plans',
