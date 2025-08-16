@@ -91,6 +91,121 @@ const SUBSCRIPTION_PLANS = {
   }
 };
 
+// @route   GET /api/subscriptions/status
+// @desc    Get current user's subscription status (simplified)
+// @access  Private (Cargo owners only)
+router.get('/status', corsHandler, auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only cargo owners can view subscription status'
+      });
+    }
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+
+    // Get the most recent active or pending subscription
+    const subscription = await subscriptionsCollection.findOne(
+      {
+        userId: new mongoose.Types.ObjectId(req.user.id),
+        status: { $in: ['active', 'pending'] }
+      },
+      { sort: { createdAt: -1 } }
+    );
+
+    // If no subscription found, return basic plan
+    if (!subscription) {
+      return res.json({
+        status: 'success',
+        data: {
+          hasActiveSubscription: false,
+          planId: 'basic',
+          planName: 'Basic Plan',
+          status: 'active',
+          features: SUBSCRIPTION_PLANS.basic.features,
+          price: 0,
+          isExpired: false,
+          daysUntilExpiry: null
+        }
+      });
+    }
+
+    // Check if subscription is expired
+    let isExpired = false;
+    let daysUntilExpiry = null;
+    
+    if (subscription.expiresAt) {
+      const now = new Date();
+      const expiryDate = new Date(subscription.expiresAt);
+      isExpired = now > expiryDate;
+      
+      if (!isExpired) {
+        const timeUntilExpiry = expiryDate - now;
+        daysUntilExpiry = Math.max(0, Math.ceil(timeUntilExpiry / (1000 * 60 * 60 * 24)));
+      }
+      
+      // Auto-update expired subscriptions
+      if (isExpired && subscription.status === 'active') {
+        await subscriptionsCollection.updateOne(
+          { _id: subscription._id },
+          { 
+            $set: { 
+              status: 'expired',
+              updatedAt: new Date()
+            }
+          }
+        );
+      }
+    }
+
+    // Get current month's load count for usage tracking
+    const loadsCollection = db.collection('loads');
+    const currentMonthStart = new Date();
+    currentMonthStart.setDate(1);
+    currentMonthStart.setHours(0, 0, 0, 0);
+
+    const monthlyUsage = await loadsCollection.countDocuments({
+      postedBy: new mongoose.Types.ObjectId(req.user.id),
+      createdAt: { $gte: currentMonthStart }
+    });
+
+    const maxLoads = subscription.features?.maxLoads || 0;
+    const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - monthlyUsage);
+
+    res.json({
+      status: 'success',
+      data: {
+        hasActiveSubscription: subscription.status === 'active' && !isExpired,
+        planId: subscription.planId,
+        planName: subscription.planName,
+        status: isExpired ? 'expired' : subscription.status,
+        features: subscription.features,
+        price: subscription.price,
+        currency: subscription.currency,
+        isExpired,
+        daysUntilExpiry,
+        expiresAt: subscription.expiresAt,
+        usage: {
+          loadsThisMonth: monthlyUsage,
+          maxLoads: maxLoads,
+          remainingLoads: remainingLoads,
+          usagePercentage: maxLoads === -1 ? 0 : Math.min(100, (monthlyUsage / maxLoads) * 100)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get subscription status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching subscription status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // @route   GET /api/subscriptions/plans
 // @desc    Get available subscription plans
