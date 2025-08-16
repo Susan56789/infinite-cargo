@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Infinite Cargo API Documentation and Health Status" />
+  <title>Infinite Cargo API</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f5f5;
+      color: #333;
+      margin: 0;
+      padding: 0;
+    }
+    header {
+      background-color: #111827;
+      color: #fff;
+      padding: 2rem;
+      text-align: center;
+    }
+    main {
+      max-width: 800px;
+      margin: 2rem auto;
+      background: #fff;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-top: 0;
+    }
+    section {
+      margin-bottom: 2rem;
+    }
+    code {
+      background-color: #eef1f4;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+    }
+    .endpoint {
+      background-color: #f9fafb;
+      border-left: 5px solid #2563eb;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .health-btn {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background-color: #2563eb;
+      color: #fff;
+      border-radius: 5px;
+      text-decoration: none;
+      transition: background-color 0.3s ease;
+    }
+    .health-btn:hover {
+      background-color: #1e40af;
+    }
+    footer {
+      text-align: center;
+      padding: 1rem;
+      color: #666;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Infinite Cargo API</h1>
+    <p>Secure, Scalable, Reliable APIs for Freight Management</p>
+  </header>
+  <main>
+    <section>
+      <h2>API Base URL</h2>
+      <p>
+        <code>https://api.infinitecargo.co.ke/api</code>
+        (or <code>http://localhost:5000/api</code> in development)
+      </p>
+    </section>
+
+    <section>
+      <h2>Key Endpoints</h2>
+      <div class="endpoint"><strong>GET</strong> /api/health — Check API health</div>
+      <div class="endpoint"><strong>POST</strong> /api/auth/login — Authenticate user</div>
+      <div class="endpoint"><strong>GET</strong> /api/users — Get list of users</div>
+      <div class="endpoint"><strong>GET</strong> /api/trucks — Get all trucks</div>
+      <div class="endpoint"><strong>GET</strong> /api/loads — View posted loads</div>
+      <div class="endpoint"><strong>GET</strong> /api/bids — See all bids</div>
+      <div class="endpoint"><strong>GET</strong> /api/bookings — View bookings</div>
+    </section>
+
+    <section>
+      <h2>Health Check</h2>
+      <p>
+        Use this endpoint to monitor uptime and DB connection:
+      </p>
+      <p><a class="health-btn" href="/api/health" target="_blank">Run Health Check</a></p>
+    </section>
+
+    <section>
+      <h2>Rate Limiting</h2>
+      <p>
+        Each IP is limited to <strong>100 requests per 15 minutes</strong> to prevent abuse.
+      </p>
+    </section>
+
+    <section>
+      <h2>CORS Settings</h2>
+      <p>
+        Allowed Origins:
+        <ul>
+          <li><code>https://infinitecargo.co.ke</code></li>
+          <li><code>http://localhost:3000</code></li>
+        </ul>
+        Credentials and preflight responses are enabled.
+      </p>
+    </section>
+  </main>
+  <footer>
+    &copy; 2025 Infinite Cargo. All rights reserved.
+  </footer>
+</body>
+</html>

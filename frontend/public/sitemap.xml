@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
+        http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
+
+  <!-- Main Pages -->
+  <url>
+    <loc>https://infinitecargo.co.ke/</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/about</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/services</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/how-it-works</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/pricing</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+  <!-- Authentication Pages -->
+  <url>
+    <loc>https://infinitecargo.co.ke/login</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/register</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/forgot-password</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+
+  <!-- Admin Routes (Consider excluding from public sitemap) -->
+  <!--
+  <url>
+    <loc>https://infinitecargo.co.ke/admin/login</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.1</priority>
+  </url>
+  -->
+
+  <!-- Core Functionality Pages -->
+  <url>
+    <loc>https://infinitecargo.co.ke/search-loads</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/post-load</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/find-drivers</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <!-- Support & Info Pages -->
+  <url>
+    <loc>https://infinitecargo.co.ke/support</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/requirements</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <!-- Legal Pages -->
+  <url>
+    <loc>https://infinitecargo.co.ke/privacy-policy</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.4</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/terms-of-service</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.4</priority>
+  </url>
+
+  <!-- Legacy URL Redirects (Optional - include if they serve unique content) -->
+  <url>
+    <loc>https://infinitecargo.co.ke/driver-register</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  
+  <url>
+    <loc>https://infinitecargo.co.ke/cargo-register</loc>
+    <lastmod>2025-08-14</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+
+</urlset>

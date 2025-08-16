@@ -1,0 +1,35 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+a {
+    pointer-events: auto; 
+    position: relative;
+    z-index: 1; 
+    cursor: pointer; 
+}
+
+a:hover {
+    text-decoration: underline;
+    color: #0066cc;
+}
+
+/* Custom classes with your brand colors */
+@layer utilities {
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-500 to-secondary-600 bg-clip-text text-transparent;
+  }
+  
+  .btn-icon {
+    @apply ml-2 transition-transform;
+  }
+  
+  .group:hover .btn-icon {
+    @apply translate-x-1;
+  }
+  
+  .ocean-gradient {
+    @apply bg-gradient-to-br from-primary-400 via-primary-500 to-secondary-700;
+  }
+}
