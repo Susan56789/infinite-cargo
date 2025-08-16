@@ -1,9 +1,10 @@
-import React, { useState,useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Search, RefreshCw, Package, Plus, Eye, Edit, Ban, 
   MapPin, ArrowRight, DollarSign, Calendar, Clock, 
   Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
   AlertCircle, CheckCircle, XCircle} from 'lucide-react';
+  import {getAuthHeader } from '../../utils/auth';
 
 const LoadsTab = () => {
   // State management
@@ -34,12 +35,14 @@ const LoadsTab = () => {
     totalPages: 0
   });
 
-  // API Configuration
+  // API Configuration - Fixed the endpoint path
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
-  const getAuthHeaders = () => ({
-    'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
-    'Content-Type': 'application/json'
-  });
+  const getAuthHeaders = () => {
+  return {
+      ...getAuthHeader(),
+            'Content-Type': 'application/json'
+    };
+  };
 
   // API Functions
   const fetchLoads = useCallback(async (page = 1, customFilters = null) => {
@@ -48,38 +51,49 @@ const LoadsTab = () => {
       setError('');
       
       const currentFilters = customFilters || filters;
+      
+      // Build query parameters - fixed the sort format to match backend expectation
       const queryParams = new URLSearchParams({
         page: page.toString(),
         limit: pagination.limit.toString(),
-        sort: `${sortConfig.key}:${sortConfig.direction}`,
+        sortBy: sortConfig.key,
+        sortOrder: sortConfig.direction,
         ...(currentFilters.search && { search: currentFilters.search }),
         ...(currentFilters.status && { status: currentFilters.status }),
         ...(currentFilters.minBudget && { minBudget: currentFilters.minBudget }),
         ...(currentFilters.maxBudget && { maxBudget: currentFilters.maxBudget }),
         ...(currentFilters.pickupDate && { pickupDate: currentFilters.pickupDate }),
         ...(currentFilters.deliveryDate && { deliveryDate: currentFilters.deliveryDate }),
-        ...(currentFilters.urgent && { urgent: 'true' })
+        ...(currentFilters.urgent && { urgentOnly: 'true' })
       });
 
-      const response = await fetch(`${API_BASE_URL}/loads?${queryParams}`, {
+      // Use the user/my-loads endpoint for authenticated users
+      const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams}`;
+
+      const response = await fetch(endpoint, {
         method: 'GET',
         headers: getAuthHeaders()
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
+      console.log('API Response:', data);
       
-      if (data.success) {
-        setLoads(data.data.loads);
-        setPagination({
-          page: data.data.pagination.page,
-          limit: data.data.pagination.limit,
-          total: data.data.pagination.total,
-          totalPages: data.data.pagination.totalPages
-        });
+      if (data.status === 'success') {
+        setLoads(data.data.loads || []);
+        if (data.data.pagination) {
+          setPagination({
+            page: data.data.pagination.currentPage,
+            limit: data.data.pagination.limit || pagination.limit,
+            total: data.data.pagination.totalLoads,
+            totalPages: data.data.pagination.totalPages
+          });
+        }
       } else {
         throw new Error(data.message || 'Failed to fetch loads');
       }
@@ -95,19 +109,20 @@ const LoadsTab = () => {
   const updateLoadStatus = async (loadId, newStatus) => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/loads/${loadId}/status`, {
+      const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({ status: newStatus })
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
       
-      if (data.success) {
+      if (data.status === 'success') {
         // Update local state
         setLoads(loads.map(load => 
           load._id === loadId ? { ...load, status: newStatus } : load
@@ -125,18 +140,19 @@ const LoadsTab = () => {
 
   const deleteLoad = async (loadId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/loads/${loadId}`, {
+      const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
       
-      if (data.success) {
+      if (data.status === 'success') {
         setLoads(loads.filter(load => load._id !== loadId));
         setSelectedLoads(prev => {
           const newSet = new Set(prev);
@@ -154,20 +170,21 @@ const LoadsTab = () => {
 
   const checkUserLimits = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/users/limits`, {
+      const response = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
         method: 'GET',
         headers: getAuthHeaders()
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
-      return data.data;
+      return data.data?.limits || { canCreateLoads: true, remainingLoads: 0 };
     } catch (err) {
       console.error('Error checking user limits:', err);
-      return { canPostLoads: true, remainingLoads: 0 };
+      return { canCreateLoads: true, remainingLoads: 0 };
     }
   };
 
@@ -176,7 +193,7 @@ const LoadsTab = () => {
     fetchLoads();
   }, []);
 
-  // Refetch when filters or sort changes
+  // Refetch when filters or sort changes with debounce
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       fetchLoads(1);
@@ -191,6 +208,7 @@ const LoadsTab = () => {
       posted: 'bg-blue-100 text-blue-800',
       receiving_bids: 'bg-yellow-100 text-yellow-800',
       driver_assigned: 'bg-purple-100 text-purple-800',
+      assigned: 'bg-purple-100 text-purple-800',
       in_transit: 'bg-orange-100 text-orange-800',
       delivered: 'bg-green-100 text-green-800',
       not_available: 'bg-gray-100 text-gray-800',
@@ -204,6 +222,7 @@ const LoadsTab = () => {
       posted: <Package className="h-3 w-3" />,
       receiving_bids: <Clock className="h-3 w-3" />,
       driver_assigned: <Truck className="h-3 w-3" />,
+      assigned: <Truck className="h-3 w-3" />,
       in_transit: <ArrowRight className="h-3 w-3" />,
       delivered: <CheckCircle className="h-3 w-3" />,
       not_available: <XCircle className="h-3 w-3" />,
@@ -213,7 +232,8 @@ const LoadsTab = () => {
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', {
+    if (!amount) return 'KES 0';
+    return new Intl.NumberFormat('en-KE', {
       style: 'currency',
       currency: 'KES',
       minimumFractionDigits: 0
@@ -221,6 +241,7 @@ const LoadsTab = () => {
   };
 
   const formatDate = (date) => {
+    if (!date) return 'N/A';
     return new Date(date).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -233,7 +254,7 @@ const LoadsTab = () => {
   const canPostLoads = async () => {
     try {
       const limits = await checkUserLimits();
-      return limits.canPostLoads;
+      return limits.canCreateLoads;
     } catch (error) {
       console.error('Error checking limits:', error);
       return false;
@@ -277,7 +298,7 @@ const LoadsTab = () => {
       const loadIds = Array.from(selectedLoads);
 
       if (action === 'export') {
-        const response = await fetch(`${API_BASE_URL}/api/loads/export`, {
+        const response = await fetch(`${API_BASE_URL}/loads/export`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({ loadIds })
@@ -297,7 +318,7 @@ const LoadsTab = () => {
           throw new Error('Export failed');
         }
       } else if (action === 'archive') {
-        const response = await fetch(`${API_BASE_URL}/api/loads/bulk-archive`, {
+        const response = await fetch(`${API_BASE_URL}/loads/bulk-archive`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({ loadIds })
