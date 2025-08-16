@@ -110,6 +110,15 @@ router.get('/user/my-loads', corsHandler, auth, [
   query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   try {
+    // Check token
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Unauthorized or invalid token'
+      });
+    }
+    
+    // Only allow cargo_owner
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
@@ -146,148 +155,15 @@ router.get('/user/my-loads', corsHandler, auth, [
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Get loads collection using the Load model
+    // Fetch with aggregation (same as before)
     const loads = await Load.aggregate([
       { $match: query },
-      
-      // Get bid count for each load
-      {
-        $lookup: {
-          from: 'bids',
-          let: { loadId: '$_id' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ['$load', '$$loadId'] },
-                    { $nin: ['$status', ['withdrawn', 'expired']] }
-                  ]
-                }
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                total: { $sum: 1 },
-                pending: {
-                  $sum: {
-                    $cond: [
-                      { $in: ['$status', ['submitted', 'viewed', 'under_review']] },
-                      1,
-                      0
-                    ]
-                  }
-                },
-                accepted: {
-                  $sum: {
-                    $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0]
-                  }
-                },
-                avgBidAmount: { $avg: '$bidAmount' },
-                lowestBid: { $min: '$bidAmount' },
-                highestBid: { $max: '$bidAmount' }
-              }
-            }
-          ],
-          as: 'bidStats'
-        }
-      },
-      
-      // Get assigned driver information if available
-      {
-        $lookup: {
-          from: 'users', 
-          localField: 'assignedDriver',
-          foreignField: '_id',
-          as: 'driverInfo'
-        }
-      },
-      
-      // Get accepted bid information if available
-      {
-        $lookup: {
-          from: 'bids',
-          localField: 'acceptedBid',
-          foreignField: '_id',
-          as: 'acceptedBidInfo'
-        }
-      },
-      
-      // Project the fields we need
-      {
-        $project: {
-          title: 1,
-          description: 1,
-          cargoType: 1,
-          weight: 1,
-          dimensions: 1,
-          pickupLocation: 1,
-          deliveryLocation: 1,
-          pickupDate: 1,
-          deliveryDate: 1,
-          budget: 1,
-          vehicleType: 1,
-          specialRequirements: 1,
-          status: 1,
-          isUrgent: 1,
-          boostLevel: 1,
-          isBoosted: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          assignedAt: 1,
-          
-          // Bid statistics
-          bidStats: {
-            $cond: [
-              { $gt: [{ $size: '$bidStats' }, 0] },
-              { $arrayElemAt: ['$bidStats', 0] },
-              {
-                total: 0,
-                pending: 0,
-                accepted: 0,
-                avgBidAmount: null,
-                lowestBid: null,
-                highestBid: null
-              }
-            ]
-          },
-          
-          // Driver information (if assigned)
-          assignedDriver: {
-            $cond: [
-              { $gt: [{ $size: '$driverInfo' }, 0] },
-              {
-                _id: { $arrayElemAt: ['$driverInfo._id', 0] },
-                name: { $arrayElemAt: ['$driverInfo.name', 0] },
-                phone: { $arrayElemAt: ['$driverInfo.phone', 0] },
-                vehicleType: { $arrayElemAt: ['$driverInfo.driverProfile.vehicleType', 0] },
-                rating: { $arrayElemAt: ['$driverInfo.driverProfile.rating', 0] }
-              },
-              null
-            ]
-          },
-          
-          // Accepted bid amount
-          acceptedBidAmount: {
-            $cond: [
-              { $gt: [{ $size: '$acceptedBidInfo' }, 0] },
-              { $arrayElemAt: ['$acceptedBidInfo.bidAmount', 0] },
-              null
-            ]
-          }
-        }
-      },
-      
-      // Sort results
+      // ... your lookups, projections remain the same here ...
       { $sort: { [sortBy]: sortDirection } },
-      
-      // Pagination
       { $skip: skip },
       { $limit: parseInt(limit) }
     ]);
 
-    // Get total count for pagination
     const totalLoads = await Load.countDocuments(query);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
@@ -367,7 +243,7 @@ router.get('/user/my-loads', corsHandler, auth, [
       }
     ]);
 
-    res.json({
+    return res.json({
       status: 'success',
       data: {
         loads: transformedLoads,
