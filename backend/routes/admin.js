@@ -10,10 +10,10 @@ const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
 const mongoose = require('mongoose');
 
-// CORS configuration for credentials + allow any origin in development
+// CORS configuration 
 const corsOptions = {
   origin: (origin, callback) => {
-    callback(null, origin || true); // Reflects the requesting origin
+    callback(null, origin || true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -1515,58 +1515,174 @@ router.post('/subscriptions/:id/reject', adminAuth, async (req, res) => {
 router.get('/loads', 
   adminAuth, 
   [
-    query('page').optional().isInt({ min: 1 }),
-    query('limit').optional().isInt({ min: 1, max: 100 }),
-    query('status').optional().isIn(['posted','receiving_bids','driver_assigned','in_transit','delivered','cancelled'])
+    query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    query('status').optional().isIn([
+      'posted', 'receiving_bids', 'driver_assigned', 'in_transit', 'delivered', 'cancelled'
+    ]).withMessage('Invalid status'),
+    query('search').optional().trim().isLength({ max: 100 }).withMessage('Search query too long')
   ],
   async (req, res) => {
     try {
-      if (!req.admin.permissions.manageCargo) {
+      // Check admin permissions
+      if (!req.admin.permissions?.manageCargo) {
         return res.status(403).json({
           status: 'error',
-          message: 'Access denied. You do not have permission to manage loads.'
+          message: 'Access denied. You do not have permission to manage cargo.'
         });
       }
 
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 50;
-      const status = req.query.status;
-      const skip = (page - 1) * limit;
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
 
-      const query = {};
-      if (status) {
+      const {
+        page = 1,
+        limit = 20,
+        status,
+        search
+      } = req.query;
+
+      console.log('Admin loads request:', { page, limit, status, search });
+
+      // Check database connection
+      if (mongoose.connection.readyState !== 1) {
+        console.error('Database not connected, state:', mongoose.connection.readyState);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Database connection not available'
+        });
+      }
+
+      // Build query
+      let query = {};
+
+      // Apply status filter
+      if (status && status !== 'all') {
         query.status = status;
       }
 
-      const [loads, total] = await Promise.all([
-        Load.find(query)
-          .populate('postedBy', 'name email phone')
+      // Apply search filter
+      if (search && search.trim()) {
+        const searchRegex = new RegExp(search.trim(), 'i');
+        query.$or = [
+          { title: searchRegex },
+          { description: searchRegex },
+          { pickupLocation: searchRegex },
+          { deliveryLocation: searchRegex }
+        ];
+      }
+
+      console.log('Query:', JSON.stringify(query, null, 2));
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+
+      try {
+        // Query loads with populated cargo owner data
+        const loads = await Load.find(query)
+          .populate('postedBy', 'name email phone location isVerified')
           .sort({ createdAt: -1 })
           .skip(skip)
-          .limit(limit)
-          .lean(),
-        Load.countDocuments(query)
-      ]);
+          .limit(parseInt(limit))
+          .lean();
 
-      const totalPages = Math.ceil(total / limit);
+        console.log(`Found ${loads.length} loads`);
 
-      return res.json({
-        status: 'success',
-        data: {
-          loads,
-          total,
-          totalPages,
-          currentPage: page,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        }
-      });
+        const totalLoads = await Load.countDocuments(query);
+        const totalPages = Math.ceil(totalLoads / parseInt(limit));
+
+        console.log(`Total loads: ${totalLoads}, Total pages: ${totalPages}`);
+
+        // Transform loads data for frontend compatibility
+        const transformedLoads = loads.map(load => ({
+          _id: load._id,
+          loadNumber: load.loadNumber || load._id.toString(),
+          title: load.title || 'Untitled Load',
+          description: load.description || '',
+          pickupLocation: load.pickupLocation || '',
+          deliveryLocation: load.deliveryLocation || '',
+          origin: load.pickupLocation || '', // For frontend compatibility
+          destination: load.deliveryLocation || '', // For frontend compatibility
+          weight: load.weight || 0,
+          cargoType: load.cargoType || 'other',
+          vehicleType: load.vehicleType || '',
+          budget: load.budget || 0,
+          pickupDate: load.pickupDate,
+          deliveryDate: load.deliveryDate,
+          status: load.status,
+          isActive: load.isActive,
+          isUrgent: load.isUrgent || false,
+          createdAt: load.createdAt,
+          updatedAt: load.updatedAt,
+          daysSincePosted: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
+          
+          // Cargo owner information with safe access
+          cargoOwnerName: load.postedBy?.name || 'Unknown',
+          cargoOwnerEmail: load.postedBy?.email || '',
+          cargoOwnerPhone: load.postedBy?.phone || '',
+          
+          // Additional admin info
+          canEdit: true,
+          canDelete: !['in_transit', 'delivered'].includes(load.status)
+        }));
+
+        // Response
+        res.json({
+          status: 'success',
+          data: {
+            loads: transformedLoads,
+            totalPages,
+            currentPage: parseInt(page),
+            totalLoads,
+            hasNextPage: parseInt(page) < totalPages,
+            hasPrevPage: parseInt(page) > 1,
+            limit: parseInt(limit)
+          },
+          filters: {
+            status: status || 'all',
+            search: search || ''
+          }
+        });
+
+      } catch (dbError) {
+        console.error('Database query error:', dbError);
+        
+        return res.status(500).json({
+          status: 'error',
+          message: 'Database query failed',
+          error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
+        });
+      }
+
     } catch (error) {
-      console.error('Load listing error:', error);
-      return res.status(500).json({
+      console.error('Admin loads fetch error:', error);
+      
+      // Provide detailed error information in development
+      const errorResponse = {
         status: 'error',
-        message: 'Server error fetching loads'
-      });
+        message: 'Failed to fetch loads',
+        error: process.env.NODE_ENV === 'development' ? {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        } : undefined
+      };
+
+      // Handle specific error types
+      if (error.name === 'MongoNetworkError') {
+        errorResponse.message = 'Database connection failed';
+      } else if (error.name === 'ValidationError') {
+        errorResponse.message = 'Data validation error';
+      } else if (error.name === 'CastError') {
+        errorResponse.message = 'Invalid data format';
+      }
+
+      res.status(500).json(errorResponse);
     }
   }
 );
