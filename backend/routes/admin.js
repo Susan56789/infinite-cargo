@@ -2,18 +2,17 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const cors = require('cors');
+const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
 const Admin = require('../models/admin');
 const Load = require('../models/load');
 const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
-const mongoose = require('mongoose');
 const corsHandler = require('../middleware/corsHandler');
 
-
 // Apply CORS middleware
-router.use(cors(corsHandler));
+router.use(corsHandler);
+
 
 
 // @route   POST /api/admin/login
