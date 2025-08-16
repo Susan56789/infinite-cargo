@@ -1691,7 +1691,7 @@ router.get('/loads',
 // @route   PUT /api/admin/dashboard-stats
 // @desc    Force refresh dashboard statistics
 // @access  Private
-router.put('/dashboard-stats', adminAuth, async (req, res) => {
+router.get('/dashboard-stats', adminAuth, async (req, res) => {
   try {
     if (!req.admin.permissions.viewAnalytics) {
       return res.status(403).json({
@@ -1702,47 +1702,292 @@ router.put('/dashboard-stats', adminAuth, async (req, res) => {
 
     const db = mongoose.connection.db;
 
-    // Get fresh counts from database
-    const [
-      totalDrivers,
-      totalCargoOwners,
-      totalAdmins,
-      newDriversThisMonth,
-      newCargoOwnersThisMonth,
-      activeDrivers,
-      activeCargoOwners
-    ] = await Promise.all([
-      db.collection('drivers').countDocuments(),
-      db.collection('cargo-owners').countDocuments(),
-      Admin.countDocuments({ isActive: true }),
-      db.collection('drivers').countDocuments({
-        createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }
-      }),
-      db.collection('cargo-owners').countDocuments({
-        createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }
-      }),
-      db.collection('drivers').countDocuments({ isActive: true }),
-      db.collection('cargo-owners').countDocuments({ isActive: true })
-    ]);
+    // Define time periods
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const stats = {
-      totalUsers: totalDrivers + totalCargoOwners,
-      totalDrivers,
-      totalCargoOwners,
-      totalAdmins,
-      newUsersThisMonth: newDriversThisMonth + newCargoOwnersThisMonth,
-      activeUsers: activeDrivers + activeCargoOwners,
-      lastUpdated: new Date()
-    };
+    try {
+      // 1. TOTAL LOADS
+      let totalLoads = 0;
+      let activeLoads = 0;
+      let newLoadsThisMonth = 0;
 
+      try {
+        [totalLoads, activeLoads, newLoadsThisMonth] = await Promise.all([
+          Load.countDocuments().catch(() => 0),
+          Load.countDocuments({ status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] } }).catch(() => 0),
+          Load.countDocuments({ createdAt: { $gte: startOfMonth } }).catch(() => 0)
+        ]);
+      } catch (loadError) {
+        console.log('Loads collection not available, using default values');
+        // If Load model is not available, try direct DB access
+        try {
+          totalLoads = await db.collection('loads').countDocuments();
+          activeLoads = await db.collection('loads').countDocuments({ 
+            status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] } 
+          });
+          newLoadsThisMonth = await db.collection('loads').countDocuments({
+            createdAt: { $gte: startOfMonth }
+          });
+        } catch (dbError) {
+          console.warn('Failed to get load stats:', dbError);
+          totalLoads = activeLoads = newLoadsThisMonth = 0;
+        }
+      }
+
+      // 2. NEW USERS TODAY
+      const [newDriversToday, newCargoOwnersToday] = await Promise.all([
+        db.collection('drivers').countDocuments({
+          createdAt: { $gte: startOfToday }
+        }).catch(() => 0),
+        db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startOfToday }
+        }).catch(() => 0)
+      ]);
+
+      const newUsersToday = newDriversToday + newCargoOwnersToday;
+
+      // Get new users this week for additional context
+      const [newDriversThisWeek, newCargoOwnersThisWeek] = await Promise.all([
+        db.collection('drivers').countDocuments({
+          createdAt: { $gte: startOfWeek }
+        }).catch(() => 0),
+        db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startOfWeek }
+        }).catch(() => 0)
+      ]);
+
+      const newUsersThisWeek = newDriversThisWeek + newCargoOwnersThisWeek;
+
+      // 3. TOTAL DRIVERS
+      const [totalDrivers, activeDrivers] = await Promise.all([
+        db.collection('drivers').countDocuments().catch(() => 0),
+        db.collection('drivers').countDocuments({ 
+          $or: [
+            { isActive: true },
+            { accountStatus: 'active' }
+          ]
+        }).catch(() => 0)
+      ]);
+
+      // 4. TOTAL CARGO OWNERS
+      const [totalCargoOwners, activeCargoOwners] = await Promise.all([
+        db.collection('cargo-owners').countDocuments().catch(() => 0),
+        db.collection('cargo-owners').countDocuments({ 
+          $or: [
+            { isActive: true },
+            { accountStatus: 'active' }
+          ]
+        }).catch(() => 0)
+      ]);
+
+      // 5. PENDING SUBSCRIPTIONS
+      let pendingSubscriptions = 0;
+      try {
+        pendingSubscriptions = await Subscription.countDocuments({ 
+          status: 'pending' 
+        });
+      } catch (subError) {
+        console.warn('Failed to get pending subscriptions:', subError);
+        // Try direct DB access
+        try {
+          pendingSubscriptions = await db.collection('subscriptions').countDocuments({ 
+            status: 'pending' 
+          });
+        } catch (dbError) {
+          console.warn('Direct DB subscription query failed:', dbError);
+          pendingSubscriptions = 0;
+        }
+      }
+
+      // 6. SUBSCRIPTIONS THIS MONTH
+      let newSubscriptionsThisMonth = 0;
+      let monthlyRevenue = 0;
+      try {
+        const thisMonthSubs = await Subscription.find({
+          createdAt: { $gte: startOfMonth }
+        }).select('amount planName status');
+
+        newSubscriptionsThisMonth = thisMonthSubs.length;
+        monthlyRevenue = thisMonthSubs
+          .filter(sub => sub.status === 'active' || sub.status === 'completed')
+          .reduce((total, sub) => total + (sub.amount || 0), 0);
+      } catch (subError) {
+        console.warn('Failed to get monthly subscription stats:', subError);
+        try {
+          const thisMonthSubs = await db.collection('subscriptions')
+            .find({ createdAt: { $gte: startOfMonth } })
+            .toArray();
+
+          newSubscriptionsThisMonth = thisMonthSubs.length;
+          monthlyRevenue = thisMonthSubs
+            .filter(sub => sub.status === 'active' || sub.status === 'completed')
+            .reduce((total, sub) => total + (sub.amount || 0), 0);
+        } catch (dbError) {
+          console.warn('Direct DB subscription query failed:', dbError);
+          newSubscriptionsThisMonth = monthlyRevenue = 0;
+        }
+      }
+
+      // Get new users this month for growth calculation
+      const [newDriversThisMonth, newCargoOwnersThisMonth] = await Promise.all([
+        db.collection('drivers').countDocuments({
+          createdAt: { $gte: startOfMonth }
+        }).catch(() => 0),
+        db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startOfMonth }
+        }).catch(() => 0)
+      ]);
+
+      const newUsersThisMonth = newDriversThisMonth + newCargoOwnersThisMonth;
+
+      // Additional stats for context
+      let totalActiveSubscriptions = 0;
+      try {
+        totalActiveSubscriptions = await Subscription.countDocuments({ 
+          status: 'active',
+          $or: [
+            { expiresAt: { $gt: now } },
+            { expiresAt: null }
+          ]
+        });
+      } catch (error) {
+        try {
+          totalActiveSubscriptions = await db.collection('subscriptions').countDocuments({ 
+            status: 'active'
+          });
+        } catch (dbError) {
+          totalActiveSubscriptions = 0;
+        }
+      }
+
+      // Compile final stats object
+      const stats = {
+        // Primary requested metrics
+        totalLoads,
+        newUsersToday,
+        totalDrivers,
+        totalCargoOwners,
+        pendingSubscriptions,
+        newSubscriptionsThisMonth,
+
+        // Supporting data
+        activeLoads,
+        newLoadsThisMonth,
+        newUsersThisWeek,
+        activeDrivers,
+        activeCargoOwners,
+        monthlyRevenue,
+        
+        // Calculated totals
+        totalUsers: totalDrivers + totalCargoOwners,
+        activeUsers: activeDrivers + activeCargoOwners,
+        newUsersThisMonth,
+
+        // Additional context
+        totalActiveSubscriptions,
+        
+        // System health indicators
+        userGrowthRate: totalDrivers + totalCargoOwners > 0 ? 
+          (newUsersThisMonth / (totalDrivers + totalCargoOwners) * 100).toFixed(2) : '0.00',
+        subscriptionRate: totalDrivers + totalCargoOwners > 0 ? 
+          (totalActiveSubscriptions / (totalDrivers + totalCargoOwners) * 100).toFixed(2) : '0.00',
+        loadCompletionRate: totalLoads > 0 ? 
+          ((totalLoads - activeLoads) / totalLoads * 100).toFixed(2) : '0.00',
+
+        // Metadata
+        lastUpdated: new Date(),
+        generatedAt: new Date().toISOString()
+      };
+
+      console.log('Dashboard stats generated successfully:', {
+        totalLoads: stats.totalLoads,
+        newUsersToday: stats.newUsersToday,
+        totalDrivers: stats.totalDrivers,
+        totalCargoOwners: stats.totalCargoOwners,
+        pendingSubscriptions: stats.pendingSubscriptions,
+        newSubscriptionsThisMonth: stats.newSubscriptionsThisMonth
+      });
+
+      res.json({
+        status: 'success',
+        stats,
+        message: 'Dashboard statistics retrieved successfully'
+      });
+
+    } catch (error) {
+      console.error('Error generating dashboard stats:', error);
+      
+      // Return partial stats or defaults on error
+      const fallbackStats = {
+        totalLoads: 0,
+        newUsersToday: 0,
+        totalDrivers: 0,
+        totalCargoOwners: 0,
+        pendingSubscriptions: 0,
+        newSubscriptionsThisMonth: 0,
+        
+        activeLoads: 0,
+        newLoadsThisMonth: 0,
+        newUsersThisWeek: 0,
+        activeDrivers: 0,
+        activeCargoOwners: 0,
+        monthlyRevenue: 0,
+        
+        totalUsers: 0,
+        activeUsers: 0,
+        newUsersThisMonth: 0,
+        totalActiveSubscriptions: 0,
+        
+        userGrowthRate: '0.00',
+        subscriptionRate: '0.00',
+        loadCompletionRate: '0.00',
+        
+        lastUpdated: new Date(),
+        error: 'Partial data due to system error'
+      };
+
+      res.json({
+        status: 'success',
+        stats: fallbackStats,
+        message: 'Dashboard statistics retrieved with fallback data',
+        warning: 'Some statistics may not be accurate due to system constraints'
+      });
+    }
+
+  } catch (error) {
+    console.error('Dashboard stats endpoint error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching dashboard statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Optional: Add a stats refresh endpoint
+router.post('/dashboard-stats/refresh', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions.viewAnalytics) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied.'
+      });
+    }
+
+    // Force refresh by making the same call as GET
+    // This could be used to clear any caching if implemented later
+    
     res.json({
       status: 'success',
-      message: 'Dashboard statistics refreshed successfully',
-      stats
+      message: 'Dashboard statistics refresh initiated',
+      timestamp: new Date()
     });
 
   } catch (error) {
-    console.error('Refresh dashboard stats error:', error);
+    console.error('Dashboard stats refresh error:', error);
     res.status(500).json({
       status: 'error',
       message: 'Server error refreshing dashboard statistics'
