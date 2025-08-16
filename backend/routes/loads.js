@@ -28,6 +28,7 @@ const corsHandler = (req, res, next) => {
     'http://localhost:5173',
     'https://infinitecargo.co.ke',
     'https://www.infinitecargo.co.ke',
+    
   ];
   
   const origin = req.headers.origin;
@@ -763,12 +764,13 @@ router.post('/', corsHandler, auth, [
     }
 
     const loadData = {
-      ...req.body,
-      postedBy: req.user.id,
-      status: 'posted',
-      isActive: true,
-      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
-    };
+  ...req.body,
+  postedBy: req.user.id,
+  cargoOwnerName: req.user.cargoOwnerProfile?.companyName || req.user.companyName || req.user.name,
+  status: 'posted',
+  isActive: true,
+  biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+};
 
     const load = new Load(loadData);
     await load.save();
@@ -934,25 +936,21 @@ router.get('/', corsHandler, optionalAuth, [
     if (sortBy !== 'createdAt') {
       sortOptions.createdAt = -1;
     }
-
-    // SIMPLIFIED: Use basic find instead of complex aggregation for reliability
     try {
-      // Get loads with basic population
-      const loads = await Load.find(query)
-        .populate({
-          path: 'postedBy',
-          select: 'name location rating isVerified',
-          options: { 
-            strictPopulate: false // Allow missing references
-          }
-        })
-        .sort(sortOptions)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean()
-        .exec();
-
-      console.log(`Found ${loads.length} loads`);
+       // Get loads with cargo owner information
+    const loads = await Load.find(query)
+      .populate({
+        path: 'postedBy',
+        select: 'name companyName cargoOwnerProfile.companyName location rating isVerified',
+        options: { 
+          strictPopulate: false 
+        }
+      })
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean()
+      .exec();
 
       // Get total count for pagination
       const totalLoads = await Load.countDocuments(query);
@@ -978,77 +976,37 @@ router.get('/', corsHandler, optionalAuth, [
       }
 
       // Transform data for frontend with safe property access
-      const transformedLoads = loads.map(load => {
-        const daysUntilPickup = load.pickupDate 
-          ? Math.ceil((new Date(load.pickupDate) - new Date()) / (1000 * 60 * 60 * 24))
-          : 0;
-        const daysSincePosted = Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24));
+     // Transform data to include cargo owner name
+    const transformedLoads = loads.map(load => {
+      // Get cargo owner name from different possible sources
+      const cargoOwnerName = load.postedBy?.cargoOwnerProfile?.companyName 
+        || load.postedBy?.companyName 
+        || load.postedBy?.name 
+        || 'Anonymous';
+
+      return {
+        _id: load._id,
+        title: load.title || 'Untitled Load',
+        description: load.description || '',
+        cargoType: load.cargoType || 'other',
+        weight: load.weight || 0,
+        pickupLocation: load.pickupLocation || '',
+        deliveryLocation: load.deliveryLocation || '',
+        budget: load.budget || 0,
+        status: load.status,
+        createdAt: load.createdAt,
         
-        return {
-          _id: load._id,
-          title: load.title || 'Untitled Load',
-          description: load.description || '',
-          cargoType: load.cargoType || 'other',
-          weight: load.weight || 0,
-          dimensions: load.dimensions,
-          pickupLocation: load.pickupLocation || '',
-          deliveryLocation: load.deliveryLocation || '',
-          pickupDate: load.pickupDate,
-          deliveryDate: load.deliveryDate,
-          budget: load.budget || 0,
-          vehicleType: load.vehicleType || '',
-          specialRequirements: load.specialRequirements,
-          isUrgent: load.isUrgent || false,
-          boostLevel: load.boostLevel || 0,
-          isBoosted: load.isBoosted || false,
-          status: load.status,
-          createdAt: load.createdAt,
-          
-          // Calculated fields
-          daysUntilPickup,
-          daysSincePosted,
-          isExpiringSoon: daysUntilPickup <= 2 && daysUntilPickup >= 0,
-          
-          // Cargo owner info (safe access)
-          postedBy: load.postedBy ? {
-            name: load.postedBy.name || 'Anonymous',
-            location: load.postedBy.location || '',
-            rating: load.postedBy.rating || 4.5,
-            isVerified: load.postedBy.isVerified || false
-          } : {
-            name: 'Anonymous',
-            location: '',
-            rating: 4.5,
-            isVerified: false
-          },
-          
-          // Bid information
-          bidCount: bidCountMap[load._id.toString()] || 0,
-          
-          // Competition level indicator
-          competitionLevel: (() => {
-            const bidCount = bidCountMap[load._id.toString()] || 0;
-            if (bidCount === 0) return 'low';
-            if (bidCount <= 3) return 'medium';
-            return 'high';
-          })(),
-          
-          // Boost indicator
-          boostLabel: (() => {
-            const boostLevel = load.boostLevel || 0;
-            if (boostLevel >= 3) return 'urgent';
-            if (boostLevel >= 2) return 'premium';
-            if (boostLevel >= 1) return 'standard';
-            return null;
-          })(),
-
-          // Priority listing flag
-          isPriorityListing: load.isBoosted || load.boostLevel > 0
-        };
-      });
-
-      console.log(`Successfully transformed ${transformedLoads.length} loads`);
-
+        // Cargo owner information
+        cargoOwnerName, 
+        postedBy: {
+          name: load.postedBy?.name || 'Anonymous',
+          companyName: cargoOwnerName,
+          location: load.postedBy?.location || '',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false
+        },
+         };
+    });
       // Response
       res.json({
         status: 'success',

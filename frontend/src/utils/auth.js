@@ -93,12 +93,10 @@ class AuthManager {
   isAuthenticated(isAdmin = false) {
     const token = this.getToken(isAdmin);
     if (!token) {
-      console.log(`No token found for ${isAdmin ? 'admin' : 'user'}`);
       return false;
     }
 
     if (this.isTokenExpiredByTime(isAdmin)) {
-      console.log('Token expired after 6 hours, clearing auth data');
       this.clearAuth(isAdmin);
       return false;
     }
@@ -108,12 +106,9 @@ class AuthManager {
       const currentTime = Date.now() / 1000;
       
       if (decoded.exp && decoded.exp < currentTime) {
-        console.log('JWT token expired, clearing auth data');
         this.clearAuth(isAdmin);
         return false;
       }
-
-      console.log(`User ${isAdmin ? 'admin' : 'user'} is authenticated`);
       return true;
     } catch (error) {
       console.error('Invalid token:', error);
@@ -187,7 +182,6 @@ class AuthManager {
         sessionStorage.removeItem(this.USER_KEY);
         sessionStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
       }
-      console.log(`Auth cleared for ${isAdmin ? 'admin' : 'user'}`);
     } catch (error) {
       console.error('Failed to clear auth data:', error);
     }
@@ -195,13 +189,11 @@ class AuthManager {
 
   getAuthHeader(isAdmin = false) {
     if (!this.isAuthenticated(isAdmin)) {
-      console.log(`Not authenticated for ${isAdmin ? 'admin' : 'user'}, returning empty header`);
       return {};
     }
     
     const token = this.getToken(isAdmin);
     const header = token ? { Authorization: `Bearer ${token}` } : {};
-    console.log(`Auth header for ${isAdmin ? 'admin' : 'user'}:`, header.Authorization ? 'Present' : 'Missing');
     return header;
   }
 
@@ -307,12 +299,10 @@ class AuthManager {
   startTokenExpiryCheck() {
     setInterval(() => {
       if (this.getToken(false) && this.isTokenExpiredByTime(false)) {
-        console.log('Regular user token expired, forcing logout');
         this.forceLogoutDueToExpiry(false);
       }
       
       if (this.getToken(true) && this.isTokenExpiredByTime(true)) {
-        console.log('Admin token expired, forcing logout');
         this.forceLogoutDueToExpiry(true);
       }
     }, 5 * 60 * 1000);
