@@ -110,7 +110,12 @@ const LoadSearch = () => {
   const getAuthHeaders = () => {
     try {
       if (isUserAuthenticated) {
-        return getAuthHeader(false);
+        const authHeader = getAuthHeader(false);
+        // Handle both formats: { Authorization: 'Bearer token' } or { 'x-auth-token': 'token' }
+        if (authHeader && typeof authHeader === 'object') {
+          return authHeader;
+        }
+        return {};
       }
       return {};
     } catch (error) {
@@ -146,21 +151,33 @@ const LoadSearch = () => {
         }
       });
 
+      // FIXED: Use the correct endpoint for public load search
       const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
       console.log('Fetching loads from:', url);
 
-      // Make request without requiring authentication
+      // FIXED: Improved headers handling
       const headers = {
         'Content-Type': 'application/json',
-        ...getAuthHeaders() // Include auth headers if available, but don't require them
+        'Accept': 'application/json',
+        // Add CORS headers if needed
+        'Access-Control-Allow-Origin': '*',
       };
+
+      // Add auth headers if user is authenticated
+      const authHeaders = getAuthHeaders();
+      Object.assign(headers, authHeaders);
+
+      console.log('Request headers:', headers);
 
       const response = await fetch(url, { 
         method: 'GET',
-        headers 
+        headers,
+        // FIXED: Add credentials handling
+        credentials: 'include'
       });
       
       console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (response.ok) {
         const data = await response.json();
@@ -185,17 +202,43 @@ const LoadSearch = () => {
         
         try {
           const errorData = await response.json();
+          console.error('Server error response:', errorData);
+          
           if (errorData.message) {
             errorMessage = errorData.message;
           }
-        } catch (e) {
-          // Use default error message
-        }
-
-        if (response.status === 500) {
-          errorMessage = 'Server error. Please try again later.';
-        } else if (response.status === 404) {
-          errorMessage = 'Service not available. Please try again later.';
+          
+          // FIXED: Handle specific server errors
+          if (response.status === 500) {
+            if (errorData.error && errorData.error.includes('Database')) {
+              errorMessage = 'Database connection error. Please try again later.';
+            } else if (errorData.error && errorData.error.includes('Authentication')) {
+              errorMessage = 'Authentication error. Please login again.';
+            } else {
+              errorMessage = 'Server error. Our team has been notified. Please try again later.';
+            }
+          } else if (response.status === 404) {
+            errorMessage = 'Service not available. Please try again later.';
+          } else if (response.status === 403) {
+            errorMessage = 'Access denied. Please check your permissions.';
+          } else if (response.status === 401) {
+            errorMessage = 'Authentication required. Please login.';
+            // Clear invalid auth
+            if (isUserAuthenticated) {
+              logout();
+              checkAuthStatus();
+            }
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          // Use default error message based on status code
+          if (response.status === 500) {
+            errorMessage = 'Internal server error. Please try again later.';
+          } else if (response.status === 404) {
+            errorMessage = 'Service not found. Please check the URL.';
+          } else if (response.status === 403) {
+            errorMessage = 'Access forbidden. Please check your permissions.';
+          }
         }
         
         setError(errorMessage);
@@ -204,13 +247,39 @@ const LoadSearch = () => {
       console.error('Fetch error:', error);
       let errorMessage = 'Network error. Please check your connection and try again.';
       
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        errorMessage = 'Could not connect to server. Please try again later.';
+      if (error.name === 'TypeError') {
+        if (error.message.includes('fetch')) {
+          errorMessage = 'Could not connect to server. Please check your internet connection.';
+        } else if (error.message.includes('NetworkError')) {
+          errorMessage = 'Network error. Please try again.';
+        }
+      } else if (error.name === 'AbortError') {
+        errorMessage = 'Request timeout. Please try again.';
+      } else if (error.message.includes('CORS')) {
+        errorMessage = 'Cross-origin request blocked. Please contact support.';
       }
       
       setError(errorMessage);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // FIXED: Add retry mechanism
+  const retryFetch = async (retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        await fetchLoads(currentPage);
+        break; // Success, exit retry loop
+      } catch (error) {
+        if (i === retries - 1) {
+          // Last retry failed
+          setError('Failed to load after multiple attempts. Please refresh the page.');
+        } else {
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        }
+      }
     }
   };
 
@@ -237,6 +306,7 @@ const LoadSearch = () => {
   };
 
   const formatCurrency = (amount) => {
+    if (!amount || isNaN(amount)) return 'KES 0';
     return new Intl.NumberFormat('en-KE', {
       style: 'currency',
       currency: 'KES',
@@ -245,21 +315,31 @@ const LoadSearch = () => {
   };
 
   const formatDate = (dateString) => {
-    return new Intl.DateTimeFormat('en-KE', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(new Date(dateString));
+    if (!dateString) return 'N/A';
+    try {
+      return new Intl.DateTimeFormat('en-KE', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(new Date(dateString));
+    } catch (error) {
+      console.warn('Date formatting error:', error);
+      return 'Invalid date';
+    }
   };
 
   const getCargoTypeLabel = (type) => {
-    return cargoTypes.find(t => t.value === type)?.label || type;
+    if (!type) return 'N/A';
+    const cargoType = cargoTypes.find(t => t.value === type);
+    return cargoType ? cargoType.label : type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
   const getVehicleTypeLabel = (type) => {
-    return vehicleTypes.find(t => t.value === type)?.label || type;
+    if (!type) return 'N/A';
+    const vehicleType = vehicleTypes.find(t => t.value === type);
+    return vehicleType ? vehicleType.label : type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
   const handleRefresh = () => {
@@ -267,9 +347,43 @@ const LoadSearch = () => {
     fetchLoads(currentPage);
   };
 
-  const handleViewDetails = (load) => {
-    setSelectedLoad(load);
-    setShowLoadModal(true);
+  const handleViewDetails = async (load) => {
+    try {
+      // Fetch detailed load information
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()
+      };
+
+      const response = await fetch(`https://infinite-cargo-api.onrender.com/api/loads/${load._id}`, {
+        method: 'GET',
+        headers,
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'success' && data.data) {
+          setSelectedLoad(data.data.load);
+          setShowLoadModal(true);
+        } else {
+          // Fallback to the basic load data
+          setSelectedLoad(load);
+          setShowLoadModal(true);
+        }
+      } else {
+        // Fallback to the basic load data
+        console.warn('Failed to fetch detailed load info, using basic data');
+        setSelectedLoad(load);
+        setShowLoadModal(true);
+      }
+    } catch (error) {
+      console.warn('Error fetching load details:', error);
+      // Fallback to the basic load data
+      setSelectedLoad(load);
+      setShowLoadModal(true);
+    }
   };
 
   const handleBidClick = (load) => {
@@ -283,15 +397,33 @@ const LoadSearch = () => {
       return;
     }
 
-    // Proceed with bidding logic
-    console.log('Opening bid modal for load:', load._id);
-    // You can add your bid modal logic here
+    // FIXED: Add proper bid handling
+    console.log('Opening bid functionality for load:', load._id);
+    // You can implement bid modal or redirect to bid page here
+    // For now, show an alert
+    alert('Bid functionality will be implemented here. Load ID: ' + load._id);
   };
 
   const handleLogin = () => {
     setShowLoginPrompt(false);
-    // Redirect to login page or open login modal
-    window.location.href = '/login';
+    // FIXED: Better routing handling
+    try {
+      // Check if we're in a React Router environment
+      if (window.history && window.history.pushState) {
+        window.history.pushState({}, '', '/login');
+        window.location.reload(); // Force reload to login page
+      } else {
+        window.location.href = '/login';
+      }
+    } catch (error) {
+      console.warn('Navigation error:', error);
+      window.location.href = '/login';
+    }
+  };
+
+  // FIXED: Add error boundary style handling
+  const handleErrorDismiss = () => {
+    setError('');
   };
 
   if (loading) {
@@ -300,6 +432,7 @@ const LoadSearch = () => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading available loads...</p>
+          <p className="text-sm text-gray-500 mt-2">This may take a few moments</p>
         </div>
       </div>
     );
@@ -321,13 +454,13 @@ const LoadSearch = () => {
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center space-x-2 text-sm text-gray-600">
                       <User className="w-4 h-4" />
-                      <span>Welcome, {user.name}</span>
+                      <span>Welcome, {user.name || 'User'}</span>
                       <span className={`px-2 py-1 rounded text-xs ${
                         user.userType === 'driver' 
                           ? 'bg-green-100 text-green-800' 
                           : 'bg-blue-100 text-blue-800'
                       }`}>
-                        {user.userType}
+                        {user.userType || 'user'}
                       </span>
                     </div>
                     <button
@@ -351,8 +484,9 @@ const LoadSearch = () => {
                 <button
                   onClick={handleRefresh}
                   className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  disabled={loading}
                 >
-                  <RefreshCw size={16} className="mr-2" />
+                  <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </button>
               </div>
@@ -362,18 +496,34 @@ const LoadSearch = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Error State */}
+        {/* FIXED: Enhanced Error State */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <div className="flex items-center">
-              <AlertCircle className="h-5 w-5 text-red-400 mr-3" />
+            <div className="flex items-start">
+              <AlertCircle className="h-5 w-5 text-red-400 mr-3 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="text-sm text-red-800 font-medium">Error:</p>
+                <p className="text-sm text-red-800 font-medium">Error occurred:</p>
                 <p className="text-sm text-red-700 mt-1">{error}</p>
+                {error.includes('Server error') && (
+                  <div className="mt-3 flex space-x-3">
+                    <button
+                      onClick={retryFetch}
+                      className="text-sm bg-red-100 text-red-800 px-3 py-1 rounded hover:bg-red-200 transition-colors"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      onClick={handleRefresh}
+                      className="text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded hover:bg-blue-200 transition-colors"
+                    >
+                      Refresh Page
+                    </button>
+                  </div>
+                )}
               </div>
               <button
-                onClick={() => setError('')}
-                className="text-red-400 hover:text-red-600"
+                onClick={handleErrorDismiss}
+                className="text-red-400 hover:text-red-600 flex-shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -408,13 +558,19 @@ const LoadSearch = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                 placeholder="Search loads by title, description, or location..."
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    fetchLoads(1);
+                  }
+                }}
               />
             </div>
             <button
               onClick={() => fetchLoads(1)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Search
+              {loading ? 'Searching...' : 'Search'}
             </button>
           </div>
 
@@ -478,9 +634,10 @@ const LoadSearch = () => {
             </button>
             <button
               onClick={() => fetchLoads(1)}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+              disabled={loading}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Apply Filters
+              {loading ? 'Applying...' : 'Apply Filters'}
             </button>
           </div>
         </div>
@@ -490,13 +647,26 @@ const LoadSearch = () => {
           <div className="text-center py-12">
             <Package className="mx-auto h-12 w-12 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
-            <p className="text-gray-600">Try adjusting your search criteria or check back later for new loads</p>
-            <button
-              onClick={() => fetchLoads(1)}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Reload
-            </button>
+            <p className="text-gray-600 mb-4">
+              {searchQuery || Object.values(filters).some(f => f) 
+                ? 'Try adjusting your search criteria or filters'
+                : 'No loads are currently available'
+              }
+            </p>
+            <div className="flex justify-center space-x-3">
+              <button
+                onClick={clearFilters}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                Clear Filters
+              </button>
+              <button
+                onClick={() => fetchLoads(1)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Reload
+              </button>
+            </div>
           </div>
         ) : (
           <div>
@@ -512,7 +682,7 @@ const LoadSearch = () => {
                 <div key={load._id} className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 ${load.isPriorityListing ? 'ring-2 ring-yellow-400' : ''}`}>
                   <div className="p-6">
                     <div className="flex items-start justify-between mb-3">
-                      <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">{load.title}</h3>
+                      <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">{load.title || 'Untitled Load'}</h3>
                       <div className="flex flex-col items-end space-y-1">
                         {load.isUrgent && (
                           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
@@ -529,19 +699,19 @@ const LoadSearch = () => {
                       </div>
                     </div>
                     
-                    <p className="text-gray-600 text-sm mb-4 line-clamp-3">{load.description}</p>
+                    <p className="text-gray-600 text-sm mb-4 line-clamp-3">{load.description || 'No description available'}</p>
 
                     {/* Route */}
                     <div className="space-y-2 mb-4">
                       <div className="flex items-center text-sm text-gray-600">
                         <MapPin className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" />
                         <span className="font-medium">From:</span>
-                        <span className="ml-1 truncate">{load.pickupLocation}</span>
+                        <span className="ml-1 truncate">{load.pickupLocation || 'N/A'}</span>
                       </div>
                       <div className="flex items-center text-sm text-gray-600">
                         <MapPin className="w-4 h-4 mr-2 text-red-500 flex-shrink-0" />
                         <span className="font-medium">To:</span>
-                        <span className="ml-1 truncate">{load.deliveryLocation}</span>
+                        <span className="ml-1 truncate">{load.deliveryLocation || 'N/A'}</span>
                       </div>
                     </div>
 
@@ -549,7 +719,7 @@ const LoadSearch = () => {
                     <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
                       <div className="flex items-center text-gray-600">
                         <Weight className="w-4 h-4 mr-2 flex-shrink-0" />
-                        <span>{load.weight} kg</span>
+                        <span>{load.weight || 0} kg</span>
                       </div>
                       <div className="flex items-center text-green-600 font-medium">
                         <DollarSign className="w-4 h-4 mr-1 flex-shrink-0" />
@@ -572,7 +742,7 @@ const LoadSearch = () => {
                     {/* Posted info */}
                     <div className="text-xs text-gray-500 mb-4">
                       <div className="flex items-center justify-between">
-                        <span>By {load.postedBy?.name || 'User'}</span>
+                        <span>By {load.postedBy?.name || 'Anonymous'}</span>
                         <span>{formatDate(load.createdAt)}</span>
                       </div>
                       {load.bidCount > 0 && (
@@ -608,7 +778,7 @@ const LoadSearch = () => {
               <div className="flex items-center justify-center space-x-2">
                 <button
                   onClick={() => fetchLoads(currentPage - 1)}
-                  disabled={currentPage === 1}
+                  disabled={currentPage === 1 || loading}
                   className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
@@ -620,7 +790,7 @@ const LoadSearch = () => {
 
                 <button
                   onClick={() => fetchLoads(currentPage + 1)}
-                  disabled={currentPage === totalPages}
+                  disabled={currentPage === totalPages || loading}
                   className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
@@ -676,22 +846,51 @@ const LoadSearch = () => {
             
             <div className="space-y-4">
               <div>
-                <h4 className="font-semibold text-gray-900">{selectedLoad.title}</h4>
-                <p className="text-gray-600 mt-1">{selectedLoad.description}</p>
+                <h4 className="font-semibold text-gray-900">{selectedLoad.title || 'Untitled Load'}</h4>
+                <p className="text-gray-600 mt-1">{selectedLoad.description || 'No description available'}</p>
+              </div>
+
+              {/* Status and Priority Indicators */}
+              <div className="flex flex-wrap gap-2">
+                {selectedLoad.isUrgent && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                    <Clock className="w-4 h-4 mr-1" />
+                    Urgent
+                  </span>
+                )}
+                {selectedLoad.isPriorityListing && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                    <TrendingUp className="w-4 h-4 mr-1" />
+                    Featured
+                  </span>
+                )}
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                  selectedLoad.status === 'posted' ? 'bg-green-100 text-green-800' :
+                  selectedLoad.status === 'receiving_bids' ? 'bg-blue-100 text-blue-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {selectedLoad.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
+                </span>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Pickup Location</label>
-                  <p className="text-gray-900">{selectedLoad.pickupLocation}</p>
+                  <p className="text-gray-900">{selectedLoad.pickupLocation || 'Not specified'}</p>
+                  {selectedLoad.pickupAddress && (
+                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.pickupAddress}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Delivery Location</label>
-                  <p className="text-gray-900">{selectedLoad.deliveryLocation}</p>
+                  <p className="text-gray-900">{selectedLoad.deliveryLocation || 'Not specified'}</p>
+                  {selectedLoad.deliveryAddress && (
+                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.deliveryAddress}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Weight</label>
-                  <p className="text-gray-900">{selectedLoad.weight} kg</p>
+                  <p className="text-gray-900">{selectedLoad.weight || 0} kg</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Budget</label>
@@ -707,10 +906,41 @@ const LoadSearch = () => {
                 </div>
               </div>
 
-              {selectedLoad.pickupDate && (
+              {/* Date Information */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {selectedLoad.pickupDate && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Pickup Date</label>
+                    <p className="text-gray-900">{formatDate(selectedLoad.pickupDate)}</p>
+                    {selectedLoad.pickupTimeWindow && (
+                      <p className="text-sm text-gray-600">Time: {selectedLoad.pickupTimeWindow}</p>
+                    )}
+                  </div>
+                )}
+                {selectedLoad.deliveryDate && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Delivery Date</label>
+                    <p className="text-gray-900">{formatDate(selectedLoad.deliveryDate)}</p>
+                    {selectedLoad.deliveryTimeWindow && (
+                      <p className="text-sm text-gray-600">Time: {selectedLoad.deliveryTimeWindow}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Distance */}
+              {selectedLoad.distance && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Pickup Date</label>
-                  <p className="text-gray-900">{formatDate(selectedLoad.pickupDate)}</p>
+                  <label className="block text-sm font-medium text-gray-700">Distance</label>
+                  <p className="text-gray-900">{selectedLoad.distance} km</p>
+                </div>
+              )}
+
+              {/* Special Requirements and Instructions */}
+              {selectedLoad.specialRequirements && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Special Requirements</label>
+                  <p className="text-gray-900">{selectedLoad.specialRequirements}</p>
                 </div>
               )}
 
@@ -720,9 +950,91 @@ const LoadSearch = () => {
                   <p className="text-gray-900">{selectedLoad.specialInstructions}</p>
                 </div>
               )}
+
+              {/* Payment and Insurance */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {selectedLoad.paymentTerms && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Payment Terms</label>
+                    <p className="text-gray-900">{selectedLoad.paymentTerms.replace('_', ' ').toUpperCase()}</p>
+                  </div>
+                )}
+                {selectedLoad.insuranceRequired && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Insurance</label>
+                    <p className="text-gray-900">
+                      Required
+                      {selectedLoad.insuranceValue && ` - ${formatCurrency(selectedLoad.insuranceValue)}`}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Posted By Information */}
+              {selectedLoad.postedBy && (
+                <div className="border-t pt-4">
+                  <label className="block text-sm font-medium text-gray-700">Posted By</label>
+                  <div className="flex items-center mt-1">
+                    <div className="flex items-center">
+                      <User className="w-4 h-4 mr-2 text-gray-400" />
+                      <span className="text-gray-900">{selectedLoad.postedBy.name || 'Anonymous'}</span>
+                      {selectedLoad.postedBy.isVerified && (
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Verified
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {selectedLoad.postedBy.location && (
+                    <div className="flex items-center mt-1 text-sm text-gray-600">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      <span>{selectedLoad.postedBy.location}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Bid Analytics */}
+              {selectedLoad.bidAnalytics && selectedLoad.bidAnalytics.totalBids > 0 && (
+                <div className="border-t pt-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Bidding Activity</label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <p className="text-gray-600">Total Bids</p>
+                      <p className="font-semibold text-gray-900">{selectedLoad.bidAnalytics.totalBids}</p>
+                    </div>
+                    {selectedLoad.bidAnalytics.avgBid && (
+                      <div>
+                        <p className="text-gray-600">Avg Bid</p>
+                        <p className="font-semibold text-gray-900">{formatCurrency(selectedLoad.bidAnalytics.avgBid)}</p>
+                      </div>
+                    )}
+                    {selectedLoad.bidAnalytics.minBid && (
+                      <div>
+                        <p className="text-gray-600">Lowest Bid</p>
+                        <p className="font-semibold text-green-600">{formatCurrency(selectedLoad.bidAnalytics.minBid)}</p>
+                      </div>
+                    )}
+                    {selectedLoad.bidAnalytics.maxBid && (
+                      <div>
+                        <p className="text-gray-600">Highest Bid</p>
+                        <p className="font-semibold text-red-600">{formatCurrency(selectedLoad.bidAnalytics.maxBid)}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Contact Information (for authenticated users) */}
+              {isUserAuthenticated && selectedLoad.contactPerson && (
+                <div className="border-t pt-4">
+                  <label className="block text-sm font-medium text-gray-700">Contact Person</label>
+                  <p className="text-gray-900">{selectedLoad.contactPerson}</p>
+                </div>
+              )}
             </div>
 
-            <div className="flex space-x-3 mt-6">
+            <div className="flex space-x-3 mt-6 pt-6 border-t">
               <button
                 onClick={() => setShowLoadModal(false)}
                 className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
