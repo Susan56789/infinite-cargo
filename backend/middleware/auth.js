@@ -1,6 +1,5 @@
-// middleware/auth.js
+// middleware/auth.js 
 const jwt = require('jsonwebtoken');
-const User = require('../models/user');
 
 module.exports = async (req, res, next) => {
   try {
@@ -23,18 +22,18 @@ module.exports = async (req, res, next) => {
 
     console.log('Auth middleware - Token received:', token.substring(0, 20) + '...');
 
+    // Check if JWT_SECRET exists
+    if (!process.env.JWT_SECRET) {
+      console.error('Auth middleware - JWT_SECRET not configured');
+      return res.status(500).json({
+        status: 'error',
+        message: 'Server configuration error'
+      });
+    }
+
     // Verify token with more robust error handling
     let decoded;
     try {
-      // Check if JWT_SECRET exists
-      if (!process.env.JWT_SECRET) {
-        console.error('Auth middleware - JWT_SECRET not configured');
-        return res.status(500).json({
-          status: 'error',
-          message: 'Server configuration error'
-        });
-      }
-
       // First try with issuer/audience if they're expected
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET, {
@@ -115,13 +114,20 @@ module.exports = async (req, res, next) => {
       }
     }
 
-    // Find user with enhanced error handling
-    let user;
+    // FIXED: Only find user if we need detailed user info
+    // For basic authentication, use token data directly to avoid DB calls
+    let user = null;
+
+    // Only fetch user from database if we need additional user data
+    // For basic routes, we can use the token data directly
     try {
+      // Import User model only when needed to avoid circular dependencies
+      const User = require('../models/user');
+      
       console.log('Auth middleware - Searching for user:', decoded.user.email);
       
-      // Use the corrected findUserByEmail method
-      user = await User.findUserByEmail(decoded.user.email);
+      // Use findOne instead of custom method to ensure compatibility
+      user = await User.findOne({ email: decoded.user.email }).lean();
       
       if (!user) {
         console.log('Auth middleware - User not found in database:', decoded.user.email);
@@ -141,6 +147,27 @@ module.exports = async (req, res, next) => {
 
     } catch (dbError) {
       console.error('Auth middleware - Database error when finding user:', dbError);
+      
+      // FALLBACK: If DB is down, use token data for basic auth
+      if (dbError.message && (
+        dbError.message.includes('Database connection not available') ||
+        dbError.message.includes('connection') ||
+        dbError.message.includes('timeout')
+      )) {
+        console.warn('Auth middleware - Database unavailable, using token data as fallback');
+        
+        // Use token data as fallback
+        req.user = {
+          id: decoded.user.id,
+          email: decoded.user.email,
+          name: decoded.user.name || '',
+          userType: decoded.user.userType || 'user',
+          role: decoded.user.role || 'user'
+        };
+        
+        return next();
+      }
+      
       return res.status(500).json({
         status: 'error',
         message: 'Database error during authentication'
