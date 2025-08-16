@@ -175,38 +175,62 @@ const CargoOwnerDashboard = () => {
       // Fetch subscription status first
       let subscriptionData = null;
       try {
-        const subscriptionResponse = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
-          headers: authHeaders,
-          timeout: 10000
-        });
-        
-        subscriptionData = await handleResponse(subscriptionResponse, {
-          plan: 'basic',
-          planName: 'Basic Plan',
-          remainingLoads: 3,
-          features: { maxLoads: 3 },
-          usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
-          billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-          status: 'inactive',
-          isActive: false
-        });
-        
-        if (subscriptionData) {
-          setSubscription(subscriptionData);
-        }
-      } catch (error) {
-        console.warn('Could not fetch subscription status:', error.message);
-        setSubscription({
-          plan: 'basic',
-          planName: 'Basic Plan',
-          remainingLoads: 3,
-          features: { maxLoads: 3 },
-          usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
-          billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-          status: 'inactive',
-          isActive: false
-        });
-      }
+  const subscriptionResponse = await fetch(`${API_BASE_URL}/subscriptions/status`, {
+    headers: authHeaders,
+    timeout: 10000
+  });
+  
+  subscriptionData = await handleResponse(subscriptionResponse, {
+    plan: 'basic',
+    planName: 'Basic Plan',
+    remainingLoads: 3,
+    features: { maxLoads: 3 },
+    usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
+    billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
+    status: 'inactive',
+    isActive: false
+  });
+  
+  if (subscriptionData) {
+    setSubscription(subscriptionData);
+  }
+} catch (error) {
+  console.warn('Could not fetch subscription status:', error.message);
+  // Try alternative endpoint
+  try {
+    const altResponse = await fetch(`${API_BASE_URL}/cargo-owners/subscription`, {
+      headers: authHeaders,
+      timeout: 10000
+    });
+    
+    subscriptionData = await handleResponse(altResponse, {
+      plan: 'basic',
+      planName: 'Basic Plan',
+      remainingLoads: 3,
+      features: { maxLoads: 3 },
+      usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
+      billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
+      status: 'inactive',
+      isActive: false
+    });
+    
+    if (subscriptionData) {
+      setSubscription(subscriptionData);
+    }
+  } catch (altError) {
+    console.warn('Alternative subscription endpoint also failed:', altError.message);
+    setSubscription({
+      plan: 'basic',
+      planName: 'Basic Plan',
+      remainingLoads: 3,
+      features: { maxLoads: 3 },
+      usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
+      billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
+      status: 'inactive',
+      isActive: false
+    });
+  }
+}
 
       // Fetch loads data
       let loadsData = [];
