@@ -1275,6 +1275,422 @@ router.patch('/:id/status', corsHandler, auth, [
   }
 });
 
+// @route   GET /api/loads/user/my-loads
+// @desc    Get current user's loads (convenience route)
+// @access  Private (Cargo Owners only)
+router.get('/user/my-loads', corsHandler, auth, [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('status').optional().isIn([
+    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired'
+  ]).withMessage('Invalid status'),
+  query('search').optional().trim()
+], async (req, res) => {
+  try {
+    // Redirect to existing user-specific route
+    req.params.userId = req.user.id;
+    
+    // Call the existing handler logic
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      search
+    } = req.query;
+
+    // Build query for current user's loads
+    let query = { postedBy: req.user.id };
+
+    // Apply status filter
+    if (status) {
+      query.status = status;
+    }
+
+    // Text search
+    if (search && search.trim()) {
+      query.$or = [
+        { title: new RegExp(search.trim(), 'i') },
+        { description: new RegExp(search.trim(), 'i') },
+        { pickupLocation: new RegExp(search.trim(), 'i') },
+        { deliveryLocation: new RegExp(search.trim(), 'i') }
+      ];
+    }
+
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Execute query
+    const loads = await Load.find(query)
+      .populate('postedBy', 'name email phone location isVerified subscriptionPlan')
+      .populate('assignedDriver', 'name phone email location vehicleType rating profilePicture')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    const totalLoads = await Load.countDocuments(query);
+    const totalPages = Math.ceil(totalLoads / parseInt(limit));
+
+    // Get bid counts
+    let bidCountMap = {};
+    if (loads.length > 0) {
+      try {
+        const loadIds = loads.map(load => load._id);
+        const bidCounts = await Bid.aggregate([
+          { $match: { load: { $in: loadIds }, status: { $nin: ['withdrawn', 'expired'] } } },
+          { $group: { _id: '$load', count: { $sum: 1 } } }
+        ]);
+
+        bidCounts.forEach(item => {
+          bidCountMap[item._id.toString()] = item.count;
+        });
+      } catch (bidError) {
+        console.warn('Error fetching bid counts:', bidError);
+      }
+    }
+
+    // Add bid counts and additional analytics
+    const loadsWithAnalytics = loads.map(load => ({
+      ...load,
+      bidCount: bidCountMap[load._id.toString()] || 0,
+      daysActive: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
+      isExpired: load.biddingEndDate && new Date() > new Date(load.biddingEndDate)
+    }));
+
+    // Calculate summary statistics
+    const summary = {
+      totalLoads,
+      activeLoads: loads.filter(l => l.isActive && ['posted', 'receiving_bids'].includes(l.status)).length,
+      completedLoads: loads.filter(l => l.status === 'delivered').length,
+      inTransitLoads: loads.filter(l => l.status === 'in_transit').length,
+      totalBids: Object.values(bidCountMap).reduce((sum, count) => sum + count, 0)
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        loads: loadsWithAnalytics,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalLoads,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1
+        },
+        summary,
+        filters: {
+          status,
+          search
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user loads error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching user loads',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/loads/analytics/dashboard
+// @desc    Get dashboard analytics for current user
+// @access  Private (Cargo Owners only)
+router.get('/analytics/dashboard', corsHandler, auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only cargo owners can access dashboard analytics'
+      });
+    }
+
+    const userId = req.user.id;
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    try {
+      // Basic load statistics
+      const totalLoads = await Load.countDocuments({ postedBy: userId });
+      const activeLoads = await Load.countDocuments({ 
+        postedBy: userId, 
+        isActive: true, 
+        status: { $in: ['posted', 'receiving_bids', 'assigned', 'in_transit'] } 
+      });
+      const completedLoads = await Load.countDocuments({ 
+        postedBy: userId, 
+        status: 'delivered' 
+      });
+      const inTransitLoads = await Load.countDocuments({ 
+        postedBy: userId, 
+        status: 'in_transit' 
+      });
+
+      // Loads created this month
+      const loadsThisMonth = await Load.countDocuments({
+        postedBy: userId,
+        createdAt: { $gte: startOfMonth }
+      });
+
+      // Get all user loads for detailed analytics
+      const userLoads = await Load.find({ postedBy: userId }).lean();
+      
+      // Calculate average bids per load
+      let totalBids = 0;
+      if (userLoads.length > 0) {
+        const loadIds = userLoads.map(load => load._id);
+        const bidCounts = await Bid.aggregate([
+          { $match: { load: { $in: loadIds }, status: { $nin: ['withdrawn', 'expired'] } } },
+          { $group: { _id: '$load', count: { $sum: 1 } } }
+        ]);
+        totalBids = bidCounts.reduce((sum, item) => sum + item.count, 0);
+      }
+      
+      const averageBidsPerLoad = userLoads.length > 0 ? totalBids / userLoads.length : 0;
+
+      // Monthly performance data for charts (last 6 months)
+      const monthlyData = [];
+      for (let i = 5; i >= 0; i--) {
+        const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+        
+        const monthLoads = await Load.countDocuments({
+          postedBy: userId,
+          createdAt: { $gte: monthStart, $lte: monthEnd }
+        });
+        
+        const monthCompleted = await Load.countDocuments({
+          postedBy: userId,
+          status: 'delivered',
+          deliveredAt: { $gte: monthStart, $lte: monthEnd }
+        });
+
+        monthlyData.push({
+          month: monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          loads: monthLoads,
+          completed: monthCompleted
+        });
+      }
+
+      // Status distribution
+      const statusDistribution = await Load.aggregate([
+        { $match: { postedBy: new mongoose.Types.ObjectId(userId) } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]);
+
+      // Recent activity (last 30 days)
+      const recentLoads = await Load.find({
+        postedBy: userId,
+        createdAt: { $gte: thirtyDaysAgo }
+      }).select('title status createdAt').sort({ createdAt: -1 }).limit(10);
+
+      // Budget analytics
+      const budgetStats = await Load.aggregate([
+        { $match: { postedBy: new mongoose.Types.ObjectId(userId) } },
+        {
+          $group: {
+            _id: null,
+            avgBudget: { $avg: '$budget' },
+            minBudget: { $min: '$budget' },
+            maxBudget: { $max: '$budget' },
+            totalBudget: { $sum: '$budget' }
+          }
+        }
+      ]);
+
+      const response = {
+        status: 'success',
+        data: {
+          // Basic stats
+          totalLoads,
+          activeLoads,
+          completedLoads,
+          inTransitLoads,
+          loadsThisMonth,
+          averageBidsPerLoad: Math.round(averageBidsPerLoad * 100) / 100,
+          totalBids,
+
+          // Performance metrics
+          completionRate: totalLoads > 0 ? Math.round((completedLoads / totalLoads) * 100) : 0,
+          avgTimeToComplete: 0, // Could calculate from delivered loads
+          
+          // Charts data
+          monthlyPerformance: monthlyData,
+          statusDistribution: statusDistribution.map(item => ({
+            status: item._id,
+            count: item.count
+          })),
+
+          // Budget analytics
+          budgetAnalytics: budgetStats[0] || {
+            avgBudget: 0,
+            minBudget: 0,
+            maxBudget: 0,
+            totalBudget: 0
+          },
+
+          // Recent activity
+          recentActivity: recentLoads,
+
+          // Calculated at
+          calculatedAt: new Date()
+        }
+      };
+
+      res.json(response);
+
+    } catch (aggregationError) {
+      console.error('Error in dashboard analytics aggregation:', aggregationError);
+      
+      // Fallback to basic stats if aggregation fails
+      const basicStats = {
+        totalLoads: await Load.countDocuments({ postedBy: userId }),
+        activeLoads: await Load.countDocuments({ 
+          postedBy: userId, 
+          status: { $in: ['posted', 'receiving_bids', 'assigned', 'in_transit'] } 
+        }),
+        completedLoads: await Load.countDocuments({ 
+          postedBy: userId, 
+          status: 'delivered' 
+        }),
+        inTransitLoads: await Load.countDocuments({ 
+          postedBy: userId, 
+          status: 'in_transit' 
+        }),
+        averageBidsPerLoad: 0
+      };
+
+      res.json({
+        status: 'success',
+        data: basicStats,
+        fallback: true
+      });
+    }
+
+  } catch (error) {
+    console.error('Dashboard analytics error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching dashboard analytics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/loads/subscription-status
+// @desc    Get current user's subscription status
+// @access  Private
+router.get('/subscription-status', corsHandler, auth, async (req, res) => {
+  try {
+    // Get user with subscription details
+    const User = require('../models/user');
+    const user = await User.findById(req.user.id)
+      .select('subscriptionPlan subscriptionStatus subscriptionFeatures billing')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Get current month's load count for usage calculation
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const loadsThisMonth = await Load.countDocuments({
+      postedBy: req.user.id,
+      createdAt: { $gte: startOfMonth }
+    });
+
+    // Define subscription plans (you might want to move this to a config file)
+    const subscriptionPlans = {
+      basic: {
+        name: 'Basic Plan',
+        maxLoads: 3,
+        features: ['Basic support', 'Load posting', 'Basic analytics'],
+        price: 0
+      },
+      pro: {
+        name: 'Pro Plan', 
+        maxLoads: 25,
+        features: ['Priority support', 'Advanced analytics', 'Priority listings'],
+        price: 2999
+      },
+      business: {
+        name: 'Business Plan',
+        maxLoads: -1, // Unlimited
+        features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
+        price: 9999
+      }
+    };
+
+    const currentPlan = user.subscriptionPlan || 'basic';
+    const planDetails = subscriptionPlans[currentPlan];
+    const isActive = user.subscriptionStatus === 'active';
+    
+    const maxLoads = planDetails.maxLoads;
+    const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - loadsThisMonth);
+
+    const subscriptionData = {
+      plan: currentPlan,
+      planName: planDetails.name,
+      status: user.subscriptionStatus || 'inactive',
+      isActive,
+      features: {
+        maxLoads,
+        supportLevel: currentPlan === 'basic' ? 'basic' : currentPlan === 'pro' ? 'priority' : 'premium',
+        analyticsLevel: currentPlan === 'basic' ? 'basic' : 'advanced',
+        priorityListings: currentPlan !== 'basic'
+      },
+      usage: {
+        loadsThisMonth,
+        maxLoads,
+        remainingLoads,
+        usagePercentage: maxLoads === -1 ? 0 : Math.round((loadsThisMonth / maxLoads) * 100)
+      },
+      billing: {
+        nextBillingDate: user.billing?.nextBillingDate || null,
+        amount: planDetails.price,
+        currency: 'KES',
+        interval: 'monthly'
+      },
+      // Add any additional subscription features
+      limits: {
+        canCreateLoads: maxLoads === -1 || loadsThisMonth < maxLoads,
+        canAccessAnalytics: true,
+        canContactSupport: true
+      }
+    };
+
+    res.json({
+      status: 'success',
+      data: subscriptionData
+    });
+
+  } catch (error) {
+    console.error('Get subscription status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching subscription status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   GET /api/loads/:id/status-history
 // @desc    Get status change history for a load
 // @access  Private (Load owner, assigned driver, or admin)
@@ -1356,6 +1772,7 @@ router.get('/:id/status-history', corsHandler, auth, async (req, res) => {
     });
   }
 });
+
 
 // @route   POST /api/loads/:id/bid
 // @desc    Place a bid on a load (DRIVER AUTHENTICATION REQUIRED)
