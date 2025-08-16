@@ -54,7 +54,6 @@ router.post('/login', [
       userAgent: req.headers['user-agent']
     });
 
-
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ 
@@ -71,11 +70,11 @@ router.post('/login', [
 
     // Check if admin exists
     const admin = await Admin.findOne({ 
-  email: email.toLowerCase().trim(),
-  isActive: true 
-}).select('+password');
+      email: email.toLowerCase().trim(),
+      isActive: true 
+    }).select('+password');
 
-console.log("ADMIN = ", admin);
+    console.log("ADMIN = ", admin);
     
     if (!admin) {
       console.log('Admin login failed: Admin not found or inactive for email:', email);
@@ -100,23 +99,26 @@ console.log("ADMIN = ", admin);
     await admin.save();
 
     console.log('Admin login successful:', { id: admin._id, email: admin.email, role: admin.role });
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
 
-    const auditLogsCollection = db.collection('audit_logs');
+      await auditLogsCollection.insertOne({
+        action: 'admin_login',   
+        entityType: 'admin',         
+        entityId: new mongoose.Types.ObjectId(admin._id),
+        adminId: new mongoose.Types.ObjectId(admin._id),
+        adminName: admin.name,
+        adminEmail: admin.email,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+      // Don't fail login if audit log fails
+    }
 
-await auditLogsCollection.insertOne({
-  action: 'admin_login',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
-   
     // Create JWT payload
     const payload = {
       admin: {
@@ -192,7 +194,7 @@ router.get('/audit-logs', adminAuth, async (req, res) => {
 // POST /api/admin/users/:id/verify
 router.post('/users/:id/verify', adminAuth, async (req, res) => {
   const { id } = req.params;
-  const { verified = true } = req.body; // can be true or false
+  const { verified = true } = req.body;
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({
@@ -212,6 +214,7 @@ router.post('/users/:id/verify', adminAuth, async (req, res) => {
     const db = mongoose.connection.db;
     const collections = ['drivers', 'cargo-owners'];
     let updated = null;
+    let userType = null;
 
     for (const col of collections) {
       const result = await db.collection(col).findOneAndUpdate(
@@ -223,19 +226,13 @@ router.post('/users/:id/verify', adminAuth, async (req, res) => {
             ...(col === 'drivers'
               ? { 'driverProfile.verified': verified }
               : { 'cargoOwnerProfile.verified': verified })
-          },
-          ...(verified ? {} : {
-            // optional: unset verificationDate if unverifying
-            $unset: { 
-              'driverProfile.verificationDate': "",
-              'cargoOwnerProfile.verificationDate': ""
-            }
-          })
+          }
         },
         { returnDocument: 'after' }
       );
       if (result.value) {
         updated = result.value;
+        userType = col === 'drivers' ? 'driver' : 'cargo_owner';
         break;
       }
     }
@@ -247,20 +244,25 @@ router.post('/users/:id/verify', adminAuth, async (req, res) => {
       });
     }
 
-    const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'user_verify',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
+    // FIX: Correct audit log
+    try {
+      const auditLogsCollection = db.collection('audit_logs');
+      await auditLogsCollection.insertOne({
+        action: 'user_verify',   
+        entityType: 'user',         
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        userId: id,    
+        userType: userType,
+        verified: verified,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+    }
 
     return res.json({
       status: 'success',
@@ -283,39 +285,49 @@ await auditLogsCollection.insertOne({
 // @desc    Update user status (active/suspended)
 router.post('/users/:id/status', adminAuth, async (req, res) => {
   const { id } = req.params;
-  const { newStatus } = req.body; // 'active' | 'on_hold' | 'suspended'
+  const { newStatus } = req.body;
 
   try {
     const db = mongoose.connection.db;
-    // Could be driver or cargo-owner
     const collections = ['drivers', 'cargo-owners'];
-
     let updated = null;
+    let userType = null;
+
     for (const collectionName of collections) {
-      updated = await db.collection(collectionName).findOneAndUpdate(
+      const result = await db.collection(collectionName).findOneAndUpdate(
         { _id: new mongoose.Types.ObjectId(id) },
         { $set: { accountStatus: newStatus, updatedAt: new Date() } },
         { returnDocument: 'after' }
       );
-      if (updated.value) break;
+      if (result.value) {
+        updated = result;
+        userType = collectionName === 'drivers' ? 'driver' : 'cargo_owner';
+        break;
+      }
     }
- const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'user_status_update',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
 
     if (!updated.value) {
       return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    // FIX: Correct audit log
+    try {
+      const auditLogsCollection = db.collection('audit_logs');
+      await auditLogsCollection.insertOne({
+        action: 'user_status_update',   
+        entityType: 'user',         
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        userId: id,    
+        userType: userType,
+        newStatus: newStatus,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
     }
 
     res.json({
@@ -452,22 +464,24 @@ router.post('/register',
 
       await admin.save();
       console.log('Admin created successfully:', { id: admin._id, email: admin.email, role: admin.role });
- const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'admin_create',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
-      
+try {
+  const db = mongoose.connection.db;
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'admin_create',   
+    entityType: 'admin',         
+    entityId: new mongoose.Types.ObjectId(admin._id),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    newAdminEmail: admin.email,
+    newAdminRole: admin.role,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
       res.status(201).json({
         status: 'success',
         message: 'Admin created successfully',
@@ -889,22 +903,24 @@ router.post('/users/:id/suspend', adminAuth, async (req, res) => {
         message: 'User not found'
       });
     }
- const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'user_suspend',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
-    console.log('User suspended:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
+try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_suspend',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
+  console.log('User suspended:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
 
     res.json({
       status: 'success',
@@ -999,23 +1015,24 @@ router.post('/users/:id/activate', adminAuth, async (req, res) => {
       });
     }
 
-     const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'user_activate',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
-
-    console.log('User activated:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
+    try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_activate',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
+console.log('User activated:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
 
     res.json({
       status: 'success',
@@ -1158,21 +1175,23 @@ router.post('/users/:id/verify', adminAuth, async (req, res) => {
         message: 'User not found'
       });
     }
- const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'user_verify',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
+try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_verify',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
     console.log('User verified:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
 
     res.json({
@@ -1368,21 +1387,23 @@ router.post('/subscriptions/:id/approve', adminAuth, async (req, res) => {
       admin: req.admin.id 
     });
 
-     const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'subscription_approve',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
+     try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'subscription_approve',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
 
     res.json({
       status: 'success',
@@ -1451,21 +1472,23 @@ router.post('/subscriptions/:id/reject', adminAuth, async (req, res) => {
 
     await subscription.save();
 
-     const auditLogsCollection = db.collection('audit_logs');
-
-await auditLogsCollection.insertOne({
-  action: 'subscription_reject',   
-  entityType: 'user',         
-  entityId: new mongoose.Types.ObjectId(userId),
-  adminId: new mongoose.Types.ObjectId(req.admin.id),
-  adminName: req.admin.name,
-  userId: userId,    
-  userType: userType,
-  ipAddress: req.ip,
-  userAgent: req.get('User-Agent'),
-  createdAt: new Date()
-});
-
+    try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'subscription_reject',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
     console.log('Subscription rejected:', { 
       id: subscriptionId, 
       reason, 
