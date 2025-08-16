@@ -89,607 +89,9 @@ function deg2rad(deg) {
   return deg * (Math.PI / 180);
 }
 
-// @route   GET /api/loads
-// @desc    Get loads with search, filter, and pagination (for drivers/public)
-// @access  Public/Private (accessible to drivers and cargo owners)
-router.get('/', corsHandler, [
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 50 }),
-  query('search').optional().isLength({ max: 100 }),
-  query('cargoType').optional().isString(),
-  query('vehicleType').optional().isString(),
-  query('pickupLocation').optional().isString(),
-  query('deliveryLocation').optional().isString(),
-  query('minBudget').optional().isFloat({ min: 0 }),
-  query('maxBudget').optional().isFloat({ min: 0 }),
-  query('minWeight').optional().isFloat({ min: 0 }),
-  query('maxWeight').optional().isFloat({ min: 0 }),
-  query('urgentOnly').optional().isBoolean(),
-  query('sortBy').optional().isIn(['createdAt', 'budget', 'weight', 'pickupDate', 'boostLevel']),
-  query('sortOrder').optional().isIn(['asc', 'desc'])
-], async (req, res) => {
-  try {
-    const {
-      page = 1,
-      limit = 12,
-      search,
-      cargoType,
-      vehicleType,
-      pickupLocation,
-      deliveryLocation,
-      minBudget,
-      maxBudget,
-      minWeight,
-      maxWeight,
-      urgentOnly,
-      sortBy = 'createdAt',
-      sortOrder = 'desc'
-    } = req.query;
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const loadsCollection = db.collection('loads');
-
-    // Build the base query - only show loads that can receive bids
-    let query = {
-      status: { $in: ['posted', 'receiving_bids'] },
-      // Ensure pickup date is in the future or within reasonable range
-      $or: [
-        { pickupDate: { $gte: new Date() } },
-        { pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } // Allow 1 day past
-      ]
-    };
-
-    // Apply filters
-    if (search) {
-      query.$text = { $search: search };
-    }
-
-    if (cargoType) {
-      query.cargoType = new RegExp(cargoType, 'i');
-    }
-
-    if (vehicleType) {
-      query.vehicleType = new RegExp(vehicleType, 'i');
-    }
-
-    if (pickupLocation) {
-      query.pickupLocation = new RegExp(pickupLocation, 'i');
-    }
-
-    if (deliveryLocation) {
-      query.deliveryLocation = new RegExp(deliveryLocation, 'i');
-    }
-
-    if (minBudget || maxBudget) {
-      query.budget = {};
-      if (minBudget) query.budget.$gte = parseFloat(minBudget);
-      if (maxBudget) query.budget.$lte = parseFloat(maxBudget);
-    }
-
-    if (minWeight || maxWeight) {
-      query.weight = {};
-      if (minWeight) query.weight.$gte = parseFloat(minWeight);
-      if (maxWeight) query.weight.$lte = parseFloat(maxWeight);
-    }
-
-    if (urgentOnly === 'true') {
-      query.isUrgent = true;
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const sortDirection = sortOrder === 'desc' ? -1 : 1;
-
-    // Create sort object - prioritize boosted loads
-    let sortOptions = {};
-    
-    // First sort by boost level (higher boost = higher priority)
-    sortOptions.boostLevel = -1;
-    sortOptions.isBoosted = -1;
-    
-    // Then by the requested sort field
-    sortOptions[sortBy] = sortDirection;
-    
-    // Finally by creation date as tiebreaker
-    if (sortBy !== 'createdAt') {
-      sortOptions.createdAt = -1;
-    }
-
-    // Get loads with cargo owner information and bid statistics
-    const loads = await loadsCollection.aggregate([
-      { $match: query },
-      
-      // Add text search score if searching
-      ...(search ? [{ $addFields: { score: { $meta: "textScore" } } }] : []),
-      
-      // Get cargo owner information
-      {
-        $lookup: {
-          from: 'cargo-owners',
-          localField: 'postedBy',
-          foreignField: '_id',
-          as: 'cargoOwner'
-        }
-      },
-      
-      // Get bid count and statistics
-      {
-        $lookup: {
-          from: 'bids',
-          let: { loadId: '$_id' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ['$load', '$$loadId'] },
-                    { $nin: ['$status', ['withdrawn', 'expired']] }
-                  ]
-                }
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                totalBids: { $sum: 1 },
-                avgBidAmount: { $avg: '$bidAmount' },
-                lowestBid: { $min: '$bidAmount' },
-                highestBid: { $max: '$bidAmount' }
-              }
-            }
-          ],
-          as: 'bidStats'
-        }
-      },
-      
-      // Project fields for response
-      {
-        $project: {
-          title: 1,
-          description: 1,
-          cargoType: 1,
-          weight: 1,
-          dimensions: 1,
-          pickupLocation: 1,
-          deliveryLocation: 1,
-          pickupDate: 1,
-          deliveryDate: 1,
-          budget: 1,
-          vehicleType: 1,
-          specialRequirements: 1,
-          isUrgent: 1,
-          boostLevel: { $ifNull: ['$boostLevel', 0] },
-          isBoosted: { $ifNull: ['$isBoosted', false] },
-          createdAt: 1,
-          status: 1,
-          
-          // Cargo owner info (limited for privacy)
-          cargoOwner: {
-            $cond: [
-              { $gt: [{ $size: '$cargoOwner' }, 0] },
-              {
-                name: { $arrayElemAt: ['$cargoOwner.name', 0] },
-                companyName: { $arrayElemAt: ['$cargoOwner.cargoOwnerProfile.companyName', 0] },
-                location: { $arrayElemAt: ['$cargoOwner.location', 0] },
-                rating: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.rating', 0] }, 4.5] },
-                isVerified: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.isVerified', 0] }, false] }
-              },
-              null
-            ]
-          },
-          
-          // Bid statistics
-          bidStats: {
-            $cond: [
-              { $gt: [{ $size: '$bidStats' }, 0] },
-              { $arrayElemAt: ['$bidStats', 0] },
-              {
-                totalBids: 0,
-                avgBidAmount: null,
-                lowestBid: null,
-                highestBid: null
-              }
-            ]
-          },
-          
-          // Add search score if applicable
-          ...(search ? { score: { $meta: "textScore" } } : {})
-        }
-      },
-      
-      // Sort results
-      { $sort: search ? { score: { $meta: "textScore" }, ...sortOptions } : sortOptions },
-      
-      // Pagination
-      { $skip: skip },
-      { $limit: parseInt(limit) }
-    ]).toArray();
-
-    // Get total count for pagination
-    const totalLoads = await loadsCollection.countDocuments(query);
-    const totalPages = Math.ceil(totalLoads / parseInt(limit));
-
-    // Transform data for frontend
-    const transformedLoads = loads.map(load => {
-      const daysUntilPickup = Math.ceil((new Date(load.pickupDate) - new Date()) / (1000 * 60 * 60 * 24));
-      const daysSincePosted = Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24));
-      
-      return {
-        _id: load._id,
-        title: load.title,
-        description: load.description,
-        cargoType: load.cargoType,
-        weight: load.weight,
-        dimensions: load.dimensions,
-        pickupLocation: load.pickupLocation,
-        deliveryLocation: load.deliveryLocation,
-        pickupDate: load.pickupDate,
-        deliveryDate: load.deliveryDate,
-        budget: load.budget,
-        vehicleType: load.vehicleType,
-        specialRequirements: load.specialRequirements,
-        isUrgent: load.isUrgent,
-        boostLevel: load.boostLevel,
-        isBoosted: load.isBoosted,
-        status: load.status,
-        createdAt: load.createdAt,
-        
-        // Calculated fields
-        daysUntilPickup,
-        daysSincePosted,
-        isExpiringSoon: daysUntilPickup <= 2 && daysUntilPickup >= 0,
-        
-        // Cargo owner info
-        cargoOwner: load.cargoOwner,
-        
-        // Bid information
-        bidCount: load.bidStats?.totalBids || 0,
-        averageBidAmount: load.bidStats?.avgBidAmount,
-        lowestBid: load.bidStats?.lowestBid,
-        highestBid: load.bidStats?.highestBid,
-        
-        // Competition level indicator
-        competitionLevel: (() => {
-          const bidCount = load.bidStats?.totalBids || 0;
-          if (bidCount === 0) return 'low';
-          if (bidCount <= 3) return 'medium';
-          return 'high';
-        })(),
-        
-        // Boost indicator
-        boostLabel: (() => {
-          if (load.boostLevel >= 3) return 'urgent';
-          if (load.boostLevel >= 2) return 'premium';
-          if (load.boostLevel >= 1) return 'standard';
-          return null;
-        })()
-      };
-    });
-
-    // Get filter options for frontend
-    const filterOptions = await loadsCollection.aggregate([
-      { $match: { status: { $in: ['posted', 'receiving_bids'] } } },
-      {
-        $group: {
-          _id: null,
-          cargoTypes: { $addToSet: '$cargoType' },
-          vehicleTypes: { $addToSet: '$vehicleType' },
-          pickupLocations: { $addToSet: '$pickupLocation' },
-          deliveryLocations: { $addToSet: '$deliveryLocation' },
-          budgetRange: {
-            min: { $min: '$budget' },
-            max: { $max: '$budget' }
-          },
-          weightRange: {
-            min: { $min: '$weight' },
-            max: { $max: '$weight' }
-          }
-        }
-      }
-    ]).toArray();
-
-    res.json({
-      status: 'success',
-      data: {
-        loads: transformedLoads,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages,
-          totalLoads,
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1,
-          limit: parseInt(limit)
-        },
-        filters: {
-          applied: {
-            search,
-            cargoType,
-            vehicleType,
-            pickupLocation,
-            deliveryLocation,
-            minBudget,
-            maxBudget,
-            minWeight,
-            maxWeight,
-            urgentOnly,
-            sortBy,
-            sortOrder
-          },
-          available: filterOptions[0] || {
-            cargoTypes: [],
-            vehicleTypes: [],
-            pickupLocations: [],
-            deliveryLocations: [],
-            budgetRange: { min: 0, max: 0 },
-            weightRange: { min: 0, max: 0 }
-          }
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Load search error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching loads',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   PUT /api/loads/:id
-// @desc    Update a load (AUTHENTICATION REQUIRED - Load owner only)
-// @access  Private (Load owner or admin)
-router.put('/:id', corsHandler, [
-  body('title').optional().trim().isLength({ min: 5, max: 100 }).withMessage('Title must be 5-100 characters'),
-  body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
-  body('pickupLocation').optional().trim().notEmpty().withMessage('Pickup location cannot be empty'),
-  body('deliveryLocation').optional().trim().notEmpty().withMessage('Delivery location cannot be empty'),
-  body('weight').optional().isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
-  body('budget').optional().isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
-  body('cargoType').optional().isIn([
-    'electronics', 'furniture', 'construction_materials', 'food_beverages',
-    'textiles', 'machinery', 'medical_supplies', 'automotive_parts',
-    'agricultural_products', 'chemicals', 'fragile_items', 'hazardous_materials',
-    'livestock', 'containers', 'other'
-  ]).withMessage('Invalid cargo type'),
-  body('vehicleType').optional().isIn([
-    'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck',
-    'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
-  ]).withMessage('Invalid vehicle type'),
-  body('pickupDate').optional().isISO8601().withMessage('Invalid pickup date format'),
-  body('deliveryDate').optional().isISO8601().withMessage('Invalid delivery date format'),
-  body('isUrgent').optional().isBoolean().withMessage('isUrgent must be boolean'),
-  body('status').optional().isIn([
-    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled'
-  ]).withMessage('Invalid status')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid load ID'
-      });
-    }
-
-    // Find the load
-    const load = await Load.findById(id);
-
-    if (!load) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Load not found'
-      });
-    }
-
-    // Authorization check: only load owner or admin can update
-    if (load.postedBy.toString() !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You can only update your own loads'
-      });
-    }
-
-    // Restrict updates based on load status
-    const restrictedStatuses = ['assigned', 'in_transit', 'delivered'];
-    if (restrictedStatuses.includes(load.status)) {
-      // Only allow limited updates for loads in progress
-      const allowedFields = ['specialInstructions', 'contactPerson'];
-      const updateFields = Object.keys(req.body);
-      const hasRestrictedFields = updateFields.some(field => !allowedFields.includes(field));
-      
-      if (hasRestrictedFields) {
-        return res.status(400).json({
-          status: 'error',
-          message: `Load cannot be fully updated when status is ${load.status}. Only special instructions and contact person can be modified.`
-        });
-      }
-    }
-
-    // If updating dates, validate pickup date is before delivery date
-    const pickupDate = req.body.pickupDate ? new Date(req.body.pickupDate) : load.pickupDate;
-    const deliveryDate = req.body.deliveryDate ? new Date(req.body.deliveryDate) : load.deliveryDate;
-    
-    if (pickupDate && deliveryDate && pickupDate >= deliveryDate) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Pickup date must be before delivery date'
-      });
-    }
-
-    // Calculate distance if coordinates are provided or updated
-    let distance = load.distance;
-    if (req.body.pickupCoordinates || req.body.deliveryCoordinates) {
-      const pickup = req.body.pickupCoordinates || load.pickupCoordinates;
-      const delivery = req.body.deliveryCoordinates || load.deliveryCoordinates;
-      
-      if (pickup && delivery && pickup.lat && pickup.lng && delivery.lat && delivery.lng) {
-        distance = calculateDistance(pickup.lat, pickup.lng, delivery.lat, delivery.lng);
-      }
-    }
-
-    // Update the load
-    const updateData = {
-      ...req.body,
-      distance,
-      updatedAt: new Date()
-    };
-
-    // If status is being changed to 'posted' or 'receiving_bids', ensure isActive is true
-    if (['posted', 'receiving_bids'].includes(updateData.status)) {
-      updateData.isActive = true;
-    }
-
-    // If cancelling, set isActive to false
-    if (updateData.status === 'cancelled') {
-      updateData.isActive = false;
-    }
-
-    const updatedLoad = await Load.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    )
-    .populate('postedBy', 'name email phone location isVerified')
-    .populate('assignedDriver', 'name phone email location vehicleType rating profilePicture');
-
-    // If status changed to cancelled, update related bids
-    if (updateData.status === 'cancelled' && load.status !== 'cancelled') {
-      try {
-        await Bid.updateMany(
-          { load: id, status: { $in: ['submitted', 'viewed', 'under_review'] } },
-          { status: 'expired', updatedAt: new Date() }
-        );
-      } catch (bidUpdateError) {
-        console.warn('Error updating bids after load cancellation:', bidUpdateError);
-      }
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Load updated successfully',
-      data: {
-        load: updatedLoad
-      }
-    });
-
-  } catch (error) {
-    console.error('Update load error:', error);
-    
-    // Handle validation errors
-    if (error.name === 'ValidationError') {
-      const validationErrors = Object.values(error.errors).map(err => ({
-        field: err.path,
-        message: err.message
-      }));
-      
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: validationErrors
-      });
-    }
-
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error updating load',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   DELETE /api/loads/:id
-// @desc    Delete a load (AUTHENTICATION REQUIRED - Load owner only)
-// @access  Private (Load owner or admin)
-router.delete('/:id', corsHandler, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid load ID'
-      });
-    }
-
-    const load = await Load.findById(id);
-
-    if (!load) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Load not found'
-      });
-    }
-
-    // Authorization check
-    if (load.postedBy.toString() !== req.user.id && req.user.role !== 'admin') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You can only delete your own loads'
-      });
-    }
-
-    // Check if load can be deleted
-    if (['assigned', 'in_transit'].includes(load.status)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Cannot delete loads that are assigned or in transit. Cancel the load instead.'
-      });
-    }
-
-    // Soft delete: mark as inactive and cancelled instead of actual deletion
-    await Load.findByIdAndUpdate(id, {
-      isActive: false,
-      status: 'cancelled',
-      updatedAt: new Date()
-    });
-
-    // Update related bids
-    try {
-      await Bid.updateMany(
-        { load: id, status: { $in: ['submitted', 'viewed', 'under_review'] } },
-        { status: 'expired', updatedAt: new Date() }
-      );
-    } catch (bidUpdateError) {
-      console.warn('Error updating bids after load deletion:', bidUpdateError);
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Load deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete load error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error deleting load',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
+// =====================================================================
+// PROTECTED ROUTES FIRST (These need specific auth and route matching)
+// =====================================================================
 
 // @route   GET /api/loads/user/my-loads
 // @desc    Get cargo owner's loads with detailed information
@@ -726,9 +128,6 @@ router.get('/user/my-loads', corsHandler, auth, [
       });
     }
 
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    
     // Build query
     let query = { 
       postedBy: new mongoose.Types.ObjectId(req.user.id) 
@@ -741,11 +140,8 @@ router.get('/user/my-loads', corsHandler, auth, [
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Get loads collection
-    const loadsCollection = db.collection('loads');
-
-    // Get loads with bid counts and driver information
-    const loads = await loadsCollection.aggregate([
+    // Get loads collection using the Load model
+    const loads = await Load.aggregate([
       { $match: query },
       
       // Get bid count for each load
@@ -795,7 +191,7 @@ router.get('/user/my-loads', corsHandler, auth, [
       // Get assigned driver information if available
       {
         $lookup: {
-          from: 'drivers',
+          from: 'users', 
           localField: 'assignedDriver',
           foreignField: '_id',
           as: 'driverInfo'
@@ -859,7 +255,7 @@ router.get('/user/my-loads', corsHandler, auth, [
                 _id: { $arrayElemAt: ['$driverInfo._id', 0] },
                 name: { $arrayElemAt: ['$driverInfo.name', 0] },
                 phone: { $arrayElemAt: ['$driverInfo.phone', 0] },
-                vehicleType: { $arrayElemAt: ['$driverInfo.vehicleType', 0] },
+                vehicleType: { $arrayElemAt: ['$driverInfo.driverProfile.vehicleType', 0] },
                 rating: { $arrayElemAt: ['$driverInfo.driverProfile.rating', 0] }
               },
               null
@@ -883,10 +279,10 @@ router.get('/user/my-loads', corsHandler, auth, [
       // Pagination
       { $skip: skip },
       { $limit: parseInt(limit) }
-    ]).toArray();
+    ]);
 
     // Get total count for pagination
-    const totalLoads = await loadsCollection.countDocuments(query);
+    const totalLoads = await Load.countDocuments(query);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
     // Transform the data for frontend
@@ -940,7 +336,7 @@ router.get('/user/my-loads', corsHandler, auth, [
     }));
 
     // Get summary statistics
-    const summaryStats = await loadsCollection.aggregate([
+    const summaryStats = await Load.aggregate([
       { $match: { postedBy: new mongoose.Types.ObjectId(req.user.id) } },
       {
         $group: {
@@ -963,7 +359,7 @@ router.get('/user/my-loads', corsHandler, auth, [
           totalBudget: { $sum: '$budget' }
         }
       }
-    ]).toArray();
+    ]);
 
     res.json({
       status: 'success',
@@ -1283,6 +679,663 @@ router.get('/analytics/dashboard', corsHandler, auth, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching dashboard analytics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/loads
+// @desc    Create a new load (CARGO OWNER AUTHENTICATION REQUIRED)
+// @access  Private (Cargo Owners only)
+router.post('/', corsHandler, auth, [
+  body('title').trim().notEmpty().withMessage('Title is required').isLength({ min: 5, max: 100 }),
+  body('description').trim().notEmpty().withMessage('Description is required').isLength({ min: 10, max: 1000 }),
+  body('pickupLocation').trim().notEmpty().withMessage('Pickup location is required'),
+  body('deliveryLocation').trim().notEmpty().withMessage('Delivery location is required'),
+  body('weight').isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
+  body('budget').isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only cargo owners can create loads'
+      });
+    }
+
+    const loadData = {
+      ...req.body,
+      postedBy: req.user.id,
+      status: 'posted',
+      isActive: true,
+      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+    };
+
+    const load = new Load(loadData);
+    await load.save();
+
+    await load.populate('postedBy', 'name email phone location');
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Load created successfully',
+      data: { load }
+    });
+
+  } catch (error) {
+    console.error('Create load error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error creating load',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// =====================================================================
+// PUBLIC AND SEMI-PUBLIC ROUTES (Order matters - more specific first)
+// =====================================================================
+
+// @route   GET /api/loads
+// @desc    Get loads with search, filter, and pagination (for drivers/public)
+// @access  Public/Private (accessible to drivers and cargo owners)
+router.get('/', corsHandler, [
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 50 }),
+  query('search').optional().isLength({ max: 100 }),
+  query('cargoType').optional().isString(),
+  query('vehicleType').optional().isString(),
+  query('pickupLocation').optional().isString(),
+  query('deliveryLocation').optional().isString(),
+  query('minBudget').optional().isFloat({ min: 0 }),
+  query('maxBudget').optional().isFloat({ min: 0 }),
+  query('minWeight').optional().isFloat({ min: 0 }),
+  query('maxWeight').optional().isFloat({ min: 0 }),
+  query('urgentOnly').optional().isBoolean(),
+  query('sortBy').optional().isIn(['createdAt', 'budget', 'weight', 'pickupDate', 'boostLevel']),
+  query('sortOrder').optional().isIn(['asc', 'desc'])
+], async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 12,
+      search,
+      cargoType,
+      vehicleType,
+      pickupLocation,
+      deliveryLocation,
+      minBudget,
+      maxBudget,
+      minWeight,
+      maxWeight,
+      urgentOnly,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    // Build the base query - only show loads that can receive bids
+    let query = {
+      status: { $in: ['posted', 'receiving_bids'] },
+      // Ensure pickup date is in the future or within reasonable range
+      $or: [
+        { pickupDate: { $gte: new Date() } },
+        { pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } // Allow 1 day past
+      ]
+    };
+
+    // Apply filters
+    if (search) {
+      query.$text = { $search: search };
+    }
+
+    if (cargoType) {
+      query.cargoType = new RegExp(cargoType, 'i');
+    }
+
+    if (vehicleType) {
+      query.vehicleType = new RegExp(vehicleType, 'i');
+    }
+
+    if (pickupLocation) {
+      query.pickupLocation = new RegExp(pickupLocation, 'i');
+    }
+
+    if (deliveryLocation) {
+      query.deliveryLocation = new RegExp(deliveryLocation, 'i');
+    }
+
+    if (minBudget || maxBudget) {
+      query.budget = {};
+      if (minBudget) query.budget.$gte = parseFloat(minBudget);
+      if (maxBudget) query.budget.$lte = parseFloat(maxBudget);
+    }
+
+    if (minWeight || maxWeight) {
+      query.weight = {};
+      if (minWeight) query.weight.$gte = parseFloat(minWeight);
+      if (maxWeight) query.weight.$lte = parseFloat(maxWeight);
+    }
+
+    if (urgentOnly === 'true') {
+      query.isUrgent = true;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
+
+    // Create sort object - prioritize boosted loads
+    let sortOptions = {};
+    
+    // First sort by boost level (higher boost = higher priority)
+    sortOptions.boostLevel = -1;
+    sortOptions.isBoosted = -1;
+    
+    // Then by the requested sort field
+    sortOptions[sortBy] = sortDirection;
+    
+    // Finally by creation date as tiebreaker
+    if (sortBy !== 'createdAt') {
+      sortOptions.createdAt = -1;
+    }
+
+    // Get loads with cargo owner information and bid statistics
+    const loads = await Load.aggregate([
+      { $match: query },
+      
+      // Add text search score if searching
+      ...(search ? [{ $addFields: { score: { $meta: "textScore" } } }] : []),
+      
+      // Get cargo owner information
+      {
+        $lookup: {
+          from: 'users', 
+          localField: 'postedBy',
+          foreignField: '_id',
+          as: 'cargoOwner'
+        }
+      },
+      
+      // Get bid count and statistics
+      {
+        $lookup: {
+          from: 'bids',
+          let: { loadId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$load', '$loadId'] },
+                    { $nin: ['$status', ['withdrawn', 'expired']] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalBids: { $sum: 1 },
+                avgBidAmount: { $avg: '$bidAmount' },
+                lowestBid: { $min: '$bidAmount' },
+                highestBid: { $max: '$bidAmount' }
+              }
+            }
+          ],
+          as: 'bidStats'
+        }
+      },
+      
+      // Project fields for response
+      {
+        $project: {
+          title: 1,
+          description: 1,
+          cargoType: 1,
+          weight: 1,
+          dimensions: 1,
+          pickupLocation: 1,
+          deliveryLocation: 1,
+          pickupDate: 1,
+          deliveryDate: 1,
+          budget: 1,
+          vehicleType: 1,
+          specialRequirements: 1,
+          isUrgent: 1,
+          boostLevel: { $ifNull: ['$boostLevel', 0] },
+          isBoosted: { $ifNull: ['$isBoosted', false] },
+          createdAt: 1,
+          status: 1,
+          
+          // Cargo owner info (limited for privacy)
+          cargoOwner: {
+            $cond: [
+              { $gt: [{ $size: '$cargoOwner' }, 0] },
+              {
+                name: { $arrayElemAt: ['$cargoOwner.name', 0] },
+                companyName: { $arrayElemAt: ['$cargoOwner.cargoOwnerProfile.companyName', 0] },
+                location: { $arrayElemAt: ['$cargoOwner.location', 0] },
+                rating: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.rating', 0] }, 4.5] },
+                isVerified: { $ifNull: [{ $arrayElemAt: ['$cargoOwner.isVerified', 0] }, false] }
+              },
+              null
+            ]
+          },
+          
+          // Bid statistics
+          bidStats: {
+            $cond: [
+              { $gt: [{ $size: '$bidStats' }, 0] },
+              { $arrayElemAt: ['$bidStats', 0] },
+              {
+                totalBids: 0,
+                avgBidAmount: null,
+                lowestBid: null,
+                highestBid: null
+              }
+            ]
+          },
+          
+          // Add search score if applicable
+          ...(search ? { score: { $meta: "textScore" } } : {})
+        }
+      },
+      
+      // Sort results
+      { $sort: search ? { score: { $meta: "textScore" }, ...sortOptions } : sortOptions },
+      
+      // Pagination
+      { $skip: skip },
+      { $limit: parseInt(limit) }
+    ]);
+
+    // Get total count for pagination
+    const totalLoads = await Load.countDocuments(query);
+    const totalPages = Math.ceil(totalLoads / parseInt(limit));
+
+    // Transform data for frontend
+    const transformedLoads = loads.map(load => {
+      const daysUntilPickup = Math.ceil((new Date(load.pickupDate) - new Date()) / (1000 * 60 * 60 * 24));
+      const daysSincePosted = Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24));
+      
+      return {
+        _id: load._id,
+        title: load.title,
+        description: load.description,
+        cargoType: load.cargoType,
+        weight: load.weight,
+        dimensions: load.dimensions,
+        pickupLocation: load.pickupLocation,
+        deliveryLocation: load.deliveryLocation,
+        pickupDate: load.pickupDate,
+        deliveryDate: load.deliveryDate,
+        budget: load.budget,
+        vehicleType: load.vehicleType,
+        specialRequirements: load.specialRequirements,
+        isUrgent: load.isUrgent,
+        boostLevel: load.boostLevel,
+        isBoosted: load.isBoosted,
+        status: load.status,
+        createdAt: load.createdAt,
+        
+        // Calculated fields
+        daysUntilPickup,
+        daysSincePosted,
+        isExpiringSoon: daysUntilPickup <= 2 && daysUntilPickup >= 0,
+        
+        // Cargo owner info
+        cargoOwner: load.cargoOwner,
+        
+        // Bid information
+        bidCount: load.bidStats?.totalBids || 0,
+        averageBidAmount: load.bidStats?.avgBidAmount,
+        lowestBid: load.bidStats?.lowestBid,
+        highestBid: load.bidStats?.highestBid,
+        
+        // Competition level indicator
+        competitionLevel: (() => {
+          const bidCount = load.bidStats?.totalBids || 0;
+          if (bidCount === 0) return 'low';
+          if (bidCount <= 3) return 'medium';
+          return 'high';
+        })(),
+        
+        // Boost indicator
+        boostLabel: (() => {
+          if (load.boostLevel >= 3) return 'urgent';
+          if (load.boostLevel >= 2) return 'premium';
+          if (load.boostLevel >= 1) return 'standard';
+          return null;
+        })()
+      };
+    });
+
+    // Get filter options for frontend
+    const filterOptions = await Load.aggregate([
+      { $match: { status: { $in: ['posted', 'receiving_bids'] } } },
+      {
+        $group: {
+          _id: null,
+          cargoTypes: { $addToSet: '$cargoType' },
+          vehicleTypes: { $addToSet: '$vehicleType' },
+          pickupLocations: { $addToSet: '$pickupLocation' },
+          deliveryLocations: { $addToSet: '$deliveryLocation' },
+          budgetRange: {
+            min: { $min: '$budget' },
+            max: { $max: '$budget' }
+          },
+          weightRange: {
+            min: { $min: '$weight' },
+            max: { $max: '$weight' }
+          }
+        }
+      }
+    ]);
+
+    res.json({
+      status: 'success',
+      data: {
+        loads: transformedLoads,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalLoads,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
+        },
+        filters: {
+          applied: {
+            search,
+            cargoType,
+            vehicleType,
+            pickupLocation,
+            deliveryLocation,
+            minBudget,
+            maxBudget,
+            minWeight,
+            maxWeight,
+            urgentOnly,
+            sortBy,
+            sortOrder
+          },
+          available: filterOptions[0] || {
+            cargoTypes: [],
+            vehicleTypes: [],
+            pickupLocations: [],
+            deliveryLocations: [],
+            budgetRange: { min: 0, max: 0 },
+            weightRange: { min: 0, max: 0 }
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Load search error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching loads',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/loads/:id
+// @desc    Update a load (AUTHENTICATION REQUIRED - Load owner only)
+// @access  Private (Load owner or admin)
+router.put('/:id', corsHandler, auth, [
+  body('title').optional().trim().isLength({ min: 5, max: 100 }).withMessage('Title must be 5-100 characters'),
+  body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
+  body('pickupLocation').optional().trim().notEmpty().withMessage('Pickup location cannot be empty'),
+  body('deliveryLocation').optional().trim().notEmpty().withMessage('Delivery location cannot be empty'),
+  body('weight').optional().isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
+  body('budget').optional().isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
+  body('cargoType').optional().isIn([
+    'electronics', 'furniture', 'construction_materials', 'food_beverages',
+    'textiles', 'machinery', 'medical_supplies', 'automotive_parts',
+    'agricultural_products', 'chemicals', 'fragile_items', 'hazardous_materials',
+    'livestock', 'containers', 'other'
+  ]).withMessage('Invalid cargo type'),
+  body('vehicleType').optional().isIn([
+    'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck',
+    'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
+  ]).withMessage('Invalid vehicle type'),
+  body('pickupDate').optional().isISO8601().withMessage('Invalid pickup date format'),
+  body('deliveryDate').optional().isISO8601().withMessage('Invalid delivery date format'),
+  body('isUrgent').optional().isBoolean().withMessage('isUrgent must be boolean'),
+  body('status').optional().isIn([
+    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled'
+  ]).withMessage('Invalid status')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid load ID'
+      });
+    }
+
+    // Find the load
+    const load = await Load.findById(id);
+
+    if (!load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found'
+      });
+    }
+
+    // Authorization check: only load owner or admin can update
+    if (load.postedBy.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You can only update your own loads'
+      });
+    }
+
+    // Restrict updates based on load status
+    const restrictedStatuses = ['assigned', 'in_transit', 'delivered'];
+    if (restrictedStatuses.includes(load.status)) {
+      // Only allow limited updates for loads in progress
+      const allowedFields = ['specialInstructions', 'contactPerson'];
+      const updateFields = Object.keys(req.body);
+      const hasRestrictedFields = updateFields.some(field => !allowedFields.includes(field));
+      
+      if (hasRestrictedFields) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Load cannot be fully updated when status is ${load.status}. Only special instructions and contact person can be modified.`
+        });
+      }
+    }
+
+    // If updating dates, validate pickup date is before delivery date
+    const pickupDate = req.body.pickupDate ? new Date(req.body.pickupDate) : load.pickupDate;
+    const deliveryDate = req.body.deliveryDate ? new Date(req.body.deliveryDate) : load.deliveryDate;
+    
+    if (pickupDate && deliveryDate && pickupDate >= deliveryDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Pickup date must be before delivery date'
+      });
+    }
+
+    // Calculate distance if coordinates are provided or updated
+    let distance = load.distance;
+    if (req.body.pickupCoordinates || req.body.deliveryCoordinates) {
+      const pickup = req.body.pickupCoordinates || load.pickupCoordinates;
+      const delivery = req.body.deliveryCoordinates || load.deliveryCoordinates;
+      
+      if (pickup && delivery && pickup.lat && pickup.lng && delivery.lat && delivery.lng) {
+        distance = calculateDistance(pickup.lat, pickup.lng, delivery.lat, delivery.lng);
+      }
+    }
+
+    // Update the load
+    const updateData = {
+      ...req.body,
+      distance,
+      updatedAt: new Date()
+    };
+
+    // If status is being changed to 'posted' or 'receiving_bids', ensure isActive is true
+    if (['posted', 'receiving_bids'].includes(updateData.status)) {
+      updateData.isActive = true;
+    }
+
+    // If cancelling, set isActive to false
+    if (updateData.status === 'cancelled') {
+      updateData.isActive = false;
+    }
+
+    const updatedLoad = await Load.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    )
+    .populate('postedBy', 'name email phone location isVerified')
+    .populate('assignedDriver', 'name phone email location vehicleType rating profilePicture');
+
+    // If status changed to cancelled, update related bids
+    if (updateData.status === 'cancelled' && load.status !== 'cancelled') {
+      try {
+        await Bid.updateMany(
+          { load: id, status: { $in: ['submitted', 'viewed', 'under_review'] } },
+          { status: 'expired', updatedAt: new Date() }
+        );
+      } catch (bidUpdateError) {
+        console.warn('Error updating bids after load cancellation:', bidUpdateError);
+      }
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Load updated successfully',
+      data: {
+        load: updatedLoad
+      }
+    });
+
+  } catch (error) {
+    console.error('Update load error:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }));
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: validationErrors
+      });
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating load',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/loads/:id
+// @desc    Delete a load (AUTHENTICATION REQUIRED - Load owner only)
+// @access  Private (Load owner or admin)
+router.delete('/:id', corsHandler, auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid load ID'
+      });
+    }
+
+    const load = await Load.findById(id);
+
+    if (!load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found'
+      });
+    }
+
+    // Authorization check
+    if (load.postedBy.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You can only delete your own loads'
+      });
+    }
+
+    // Check if load can be deleted
+    if (['assigned', 'in_transit'].includes(load.status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot delete loads that are assigned or in transit. Cancel the load instead.'
+      });
+    }
+
+    // Soft delete: mark as inactive and cancelled instead of actual deletion
+    await Load.findByIdAndUpdate(id, {
+      isActive: false,
+      status: 'cancelled',
+      updatedAt: new Date()
+    });
+
+    // Update related bids
+    try {
+      await Bid.updateMany(
+        { load: id, status: { $in: ['submitted', 'viewed', 'under_review'] } },
+        { status: 'expired', updatedAt: new Date() }
+      );
+    } catch (bidUpdateError) {
+      console.warn('Error updating bids after load deletion:', bidUpdateError);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Load deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete load error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting load',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1621,7 +1674,8 @@ router.patch('/:id/status', corsHandler, auth, [
         }
 
         // Validate driver exists and is a driver
-        const driver = await require('../models/user').findById(assignedDriver);
+        const User = require('../models/user');
+        const driver = await User.findById(assignedDriver);
         if (!driver || driver.userType !== 'driver') {
           return res.status(400).json({
             status: 'error',
@@ -1973,9 +2027,6 @@ router.get('/:userId/my-loads', corsHandler, auth, [
   }
 });
 
-
-
-
 // @route   GET /api/loads/:id/status-history
 // @desc    Get status change history for a load
 // @access  Private (Load owner, assigned driver, or admin)
@@ -2017,7 +2068,8 @@ router.get('/:id/status-history', corsHandler, auth, async (req, res) => {
 
     // Get user details for status history
     const userIds = [...new Set(load.statusHistory?.map(h => h.changedBy.toString()) || [])];
-    const users = await require('../models/user').find(
+    const User = require('../models/user');
+    const users = await User.find(
       { _id: { $in: userIds } },
       'name userType'
     ).lean();
@@ -2057,7 +2109,6 @@ router.get('/:id/status-history', corsHandler, auth, async (req, res) => {
     });
   }
 });
-
 
 // @route   POST /api/loads/:id/bid
 // @desc    Place a bid on a load (DRIVER AUTHENTICATION REQUIRED)
@@ -2164,66 +2215,6 @@ router.post('/:id/bid', corsHandler, auth, [
     res.status(500).json({
       status: 'error',
       message: 'Server error placing bid',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Protected routes that require authentication
-router.use('*', auth); // All routes below require authentication
-
-// @route   POST /api/loads
-// @desc    Create a new load (CARGO OWNER AUTHENTICATION REQUIRED)
-// @access  Private (Cargo Owners only)
-router.post('/', corsHandler, [
-  body('title').trim().notEmpty().withMessage('Title is required').isLength({ min: 5, max: 100 }),
-  body('description').trim().notEmpty().withMessage('Description is required').isLength({ min: 10, max: 1000 }),
-  body('pickupLocation').trim().notEmpty().withMessage('Pickup location is required'),
-  body('deliveryLocation').trim().notEmpty().withMessage('Delivery location is required'),
-  body('weight').isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
-  body('budget').isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    if (req.user.userType !== 'cargo_owner') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only cargo owners can create loads'
-      });
-    }
-
-    const loadData = {
-      ...req.body,
-      postedBy: req.user.id,
-      status: 'posted',
-      isActive: true,
-      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
-    };
-
-    const load = new Load(loadData);
-    await load.save();
-
-    await load.populate('postedBy', 'name email phone location');
-
-    res.status(201).json({
-      status: 'success',
-      message: 'Load created successfully',
-      data: { load }
-    });
-
-  } catch (error) {
-    console.error('Create load error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error creating load',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

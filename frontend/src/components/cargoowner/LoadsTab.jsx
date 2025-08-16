@@ -3,8 +3,10 @@ import {
   Search, RefreshCw, Package, Plus, Eye, Edit, Ban, 
   MapPin, ArrowRight, DollarSign, Calendar, Clock, 
   Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
-  AlertCircle, CheckCircle, XCircle} from 'lucide-react';
-  import {getAuthHeader } from '../../utils/auth';
+  AlertCircle, CheckCircle, XCircle
+} from 'lucide-react';
+
+import { getAuthHeader } from '../../utils/auth'; 
 
 const LoadsTab = () => {
   // State management
@@ -24,10 +26,29 @@ const LoadsTab = () => {
   });
   
   const [loading, setLoading] = useState(true);
+  const [showLoadForm, setShowLoadForm] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [error, setError] = useState('');
   const [selectedLoads, setSelectedLoads] = useState(new Set());
   const [loads, setLoads] = useState([]);
+  const [editingLoad, setEditingLoad] = useState(null);
+  const [loadForm, setLoadForm] = useState({
+    title: '',
+    description: '',
+    pickupLocation: '',
+    deliveryLocation: '',
+    pickupAddress: '',
+    deliveryAddress: '',
+    weight: '',
+    cargoType: 'other',
+    vehicleType: 'small_truck',
+    vehicleCapacityRequired: '',
+    budget: '',
+    pickupDate: '',
+    deliveryDate: '',
+    specialInstructions: '',
+    isUrgent: false
+  });
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 10,
@@ -35,12 +56,12 @@ const LoadsTab = () => {
     totalPages: 0
   });
 
-  // API Configuration - Fixed the endpoint path
+  // API Configuration
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
   const getAuthHeaders = () => {
-  return {
+    return {
       ...getAuthHeader(),
-            'Content-Type': 'application/json'
+      'Content-Type': 'application/json'
     };
   };
 
@@ -52,7 +73,7 @@ const LoadsTab = () => {
       
       const currentFilters = customFilters || filters;
       
-      // Build query parameters - fixed the sort format to match backend expectation
+      // Build query parameters
       const queryParams = new URLSearchParams({
         page: page.toString(),
         limit: pagination.limit.toString(),
@@ -67,7 +88,6 @@ const LoadsTab = () => {
         ...(currentFilters.urgent && { urgentOnly: 'true' })
       });
 
-      // Use the user/my-loads endpoint for authenticated users
       const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams}`;
 
       const response = await fetch(endpoint, {
@@ -123,7 +143,6 @@ const LoadsTab = () => {
       const data = await response.json();
       
       if (data.status === 'success') {
-        // Update local state
         setLoads(loads.map(load => 
           load._id === loadId ? { ...load, status: newStatus } : load
         ));
@@ -197,7 +216,7 @@ const LoadsTab = () => {
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       fetchLoads(1);
-    }, 500); // Debounce search
+    }, 500);
 
     return () => clearTimeout(timeoutId);
   }, [filters, sortConfig]);
@@ -251,16 +270,6 @@ const LoadsTab = () => {
     });
   };
 
-  const canPostLoads = async () => {
-    try {
-      const limits = await checkUserLimits();
-      return limits.canCreateLoads;
-    } catch (error) {
-      console.error('Error checking limits:', error);
-      return false;
-    }
-  };
-
   // Event handlers
   const handleSort = (key) => {
     setSortConfig({
@@ -270,17 +279,25 @@ const LoadsTab = () => {
   };
 
   const handlePostLoadClick = async () => {
-    try {
-      const canPost = await canPostLoads();
-      if (!canPost) {
-        setError('You have reached your monthly load limit. Please upgrade your plan.');
-        return;
-      }
-      // Navigate to post load form or open modal
-      window.location.href = '/dashboard/post-load';
-    } catch (error) {
-      setError('Unable to verify posting limits. Please try again.');
-    }
+    setEditingLoad(null);
+    setLoadForm({
+      title: '',
+      description: '',
+      pickupLocation: '',
+      deliveryLocation: '',
+      pickupAddress: '',
+      deliveryAddress: '',
+      weight: '',
+      cargoType: 'other',
+      vehicleType: 'small_truck',
+      vehicleCapacityRequired: '',
+      budget: '',
+      pickupDate: '',
+      deliveryDate: '',
+      specialInstructions: '',
+      isUrgent: false
+    });
+    setShowLoadForm(true);
   };
 
   const onRefresh = () => {
@@ -325,7 +342,6 @@ const LoadsTab = () => {
         });
 
         if (response.ok) {
-          // Remove archived loads from the current view
           setLoads(loads.filter(load => !selectedLoads.has(load._id)));
         } else {
           throw new Error('Archive failed');
@@ -363,11 +379,13 @@ const LoadsTab = () => {
   };
 
   const handleViewDetails = (loadId) => {
-    window.location.href = `/dashboard/loads/${loadId}`;
+    // In a real app, you'd use React Router
+    console.log('Navigate to load details:', loadId);
   };
 
   const handleEditLoad = (loadId) => {
-    window.location.href = `/dashboard/loads/${loadId}/edit`;
+    // In a real app, you'd use React Router or open edit form
+    console.log('Edit load:', loadId);
   };
 
   const handleUpdateLoadStatus = async (loadId, newStatus) => {
@@ -574,7 +592,7 @@ const LoadsTab = () => {
         </div>
       </div>
 
-     {/* Loads Table/Grid */}
+      {/* Loads Table/Grid */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -707,55 +725,58 @@ const LoadsTab = () => {
                     </td>
                     <td className="px-6 py-4">
                       <div className="space-y-1 text-sm">
-                        <div className="flex items-center text-gray-600">
-                          <Calendar className="h-4 w-4 mr-1" />
-                          <span>Pickup: {formatDate(load.pickupDate)}</span>
+                      <div className="flex items-center">
+                          <Calendar className="h-4 w-4 text-gray-400 mr-1" />
+                          <span className="text-gray-900">
+                            {formatDate(load.pickupDate)}
+                          </span>
                         </div>
-                        <div className="flex items-center text-gray-600">
-                          <Calendar className="h-4 w-4 mr-1" />
-                          <span>Delivery: {formatDate(load.deliveryDate)}</span>
+                        <div className="flex items-center">
+                          <Clock className="h-4 w-4 text-gray-400 mr-1" />
+                          <span className="text-gray-900">
+                            {formatDate(load.deliveryDate)}
+                          </span>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => handleViewDetails(load._id)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="View Details"
+                          className="text-blue-600 hover:text-blue-900 p-1 rounded-lg hover:bg-blue-50 transition-colors"
+                          title="View details"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleEditLoad(load._id)}
-                          className="text-gray-600 hover:text-gray-900"
-                          title="Edit Load"
+                          className="text-gray-600 hover:text-gray-900 p-1 rounded-lg hover:bg-gray-50 transition-colors"
+                          title="Edit load"
                         >
                           <Edit className="h-4 w-4" />
                         </button>
-                        
-                        {/* Status Update Dropdown */}
-                        <select
-                          value={load.status}
-                          onChange={(e) => handleUpdateLoadStatus(load._id, e.target.value)}
-                          className="text-xs border-gray-300 rounded px-2 py-1"
-                          title="Update Status"
-                        >
-                          <option value="posted">Posted</option>
-                          <option value="receiving_bids">Receiving Bids</option>
-                          <option value="driver_assigned">Driver Assigned</option>
-                          <option value="in_transit">In Transit</option>
-                          <option value="delivered">Delivered</option>
-                          <option value="not_available">Not Available</option>
-                          <option value="cancelled">Cancelled</option>
-                        </select>
-                        
+                        <div className="relative group">
+                          <select
+                            value={load.status}
+                            onChange={(e) => handleUpdateLoadStatus(load._id, e.target.value)}
+                            className="text-xs border-0 bg-transparent focus:ring-0 text-gray-600 hover:text-gray-900 cursor-pointer"
+                            title="Change status"
+                          >
+                            <option value="posted">Posted</option>
+                            <option value="receiving_bids">Receiving Bids</option>
+                            <option value="driver_assigned">Driver Assigned</option>
+                            <option value="in_transit">In Transit</option>
+                            <option value="delivered">Delivered</option>
+                            <option value="not_available">Not Available</option>
+                            <option value="cancelled">Cancelled</option>
+                          </select>
+                        </div>
                         <button
                           onClick={() => handleDeleteLoad(load._id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="Delete Load"
+                          className="text-red-600 hover:text-red-900 p-1 rounded-lg hover:bg-red-50 transition-colors"
+                          title="Delete load"
                         >
-                          <Ban className="h-4 w-4" />
+                          <XCircle className="h-4 w-4" />
                         </button>
                       </div>
                     </td>
@@ -769,48 +790,232 @@ const LoadsTab = () => {
 
       {/* Pagination */}
       {pagination.totalPages > 1 && (
-        <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 rounded-lg shadow">
-          <div className="flex-1 flex justify-between items-center">
-            <div>
-              <p className="text-sm text-gray-700">
-                Page <span className="font-medium">{pagination.page}</span> of{' '}
-                <span className="font-medium">{pagination.totalPages}</span>
-              </p>
-            </div>
-            <div className="flex space-x-2">
-              <button
-                onClick={() => handlePageChange(pagination.page - 1)}
-                disabled={pagination.page === 1}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              
-              {/* Page Numbers */}
-              {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
-                const page = Math.max(1, Math.min(pagination.totalPages - 4, pagination.page - 2)) + i;
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-700">
+              Page {pagination.page} of {pagination.totalPages}
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => handlePageChange(pagination.page - 1)}
+              disabled={pagination.page === 1}
+              className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            
+            {/* Page numbers */}
+            <div className="flex space-x-1">
+              {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
+                const pageNum = Math.max(1, pagination.page - 2) + i;
+                if (pageNum > pagination.totalPages) return null;
+                
                 return (
                   <button
-                    key={page}
-                    onClick={() => handlePageChange(page)}
-                    className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium rounded-md ${
-                      page === pagination.page
-                        ? 'bg-blue-600 border-blue-600 text-white'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                    key={pageNum}
+                    onClick={() => handlePageChange(pageNum)}
+                    className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                      pageNum === pagination.page
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    {page}
+                    {pageNum}
                   </button>
                 );
               })}
+            </div>
+
+            <button
+              onClick={() => handlePageChange(pagination.page + 1)}
+              disabled={pagination.page === pagination.totalPages}
+              className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Load Form Modal would go here */}
+      {showLoadForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-screen overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {editingLoad ? 'Edit Load' : 'Post New Load'}
+                </h3>
+                <button
+                  onClick={() => setShowLoadForm(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <XCircle className="h-6 w-6" />
+                </button>
+              </div>
               
-              <button
-                onClick={() => handlePageChange(pagination.page + 1)}
-                disabled={pagination.page === pagination.totalPages}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
+              {/* Form content would be implemented here */}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Load Title *
+                  </label>
+                  <input
+                    type="text"
+                    value={loadForm.title}
+                    onChange={(e) => setLoadForm({ ...loadForm, title: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Enter load title"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Description
+                  </label>
+                  <textarea
+                    value={loadForm.description}
+                    onChange={(e) => setLoadForm({ ...loadForm, description: e.target.value })}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Describe your cargo and any special requirements"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Pickup Location *
+                    </label>
+                    <input
+                      type="text"
+                      value={loadForm.pickupLocation}
+                      onChange={(e) => setLoadForm({ ...loadForm, pickupLocation: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Enter pickup location"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Delivery Location *
+                    </label>
+                    <input
+                      type="text"
+                      value={loadForm.deliveryLocation}
+                      onChange={(e) => setLoadForm({ ...loadForm, deliveryLocation: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="Enter delivery location"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Weight (kg) *
+                    </label>
+                    <input
+                      type="number"
+                      value={loadForm.weight}
+                      onChange={(e) => setLoadForm({ ...loadForm, weight: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="0"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Cargo Type *
+                    </label>
+                    <select
+                      value={loadForm.cargoType}
+                      onChange={(e) => setLoadForm({ ...loadForm, cargoType: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="other">Other</option>
+                      <option value="electronics">Electronics</option>
+                      <option value="furniture">Furniture</option>
+                      <option value="food">Food & Beverages</option>
+                      <option value="clothing">Clothing</option>
+                      <option value="machinery">Machinery</option>
+                      <option value="documents">Documents</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Budget (KES) *
+                    </label>
+                    <input
+                      type="number"
+                      value={loadForm.budget}
+                      onChange={(e) => setLoadForm({ ...loadForm, budget: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Pickup Date *
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={loadForm.pickupDate}
+                      onChange={(e) => setLoadForm({ ...loadForm, pickupDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Delivery Date
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={loadForm.deliveryDate}
+                      onChange={(e) => setLoadForm({ ...loadForm, deliveryDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="urgent"
+                    checked={loadForm.isUrgent}
+                    onChange={(e) => setLoadForm({ ...loadForm, isUrgent: e.target.checked })}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="urgent" className="ml-2 text-sm text-gray-700">
+                    This is an urgent load
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-end space-x-3 pt-6">
+                  <button
+                    onClick={() => setShowLoadForm(false)}
+                    className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      // Handle form submission here
+                      console.log('Form submitted:', loadForm);
+                      setShowLoadForm(false);
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    {editingLoad ? 'Update Load' : 'Post Load'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -819,4 +1024,4 @@ const LoadsTab = () => {
   );
 };
 
-export default LoadsTab; 
+export default LoadsTab;
