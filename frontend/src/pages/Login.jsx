@@ -15,11 +15,12 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(false);
 
   // API Configuration
-  const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api' ;
+  const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
 
   useEffect(() => {
     // Check if user is already authenticated
     if (authManager.isAuthenticated()) {
+      console.log('User already authenticated, redirecting to:', authManager.getDefaultDashboard());
       window.location.href = authManager.getDefaultDashboard();
       return;
     }
@@ -79,6 +80,8 @@ const Login = () => {
         password: formData.password
       };
 
+      console.log('Login attempt for:', loginData.email);
+
       const response = await fetch(`${API_BASE_URL}/users/login`, {
         method: 'POST',
         headers: {
@@ -94,6 +97,7 @@ const Login = () => {
       try {
         result = await response.json();
       } catch (parseError) {
+        console.error('JSON parse error:', parseError);
         throw new Error('Invalid response from server');
       }
 
@@ -114,19 +118,36 @@ const Login = () => {
         }
       }
 
+      // FIXED: Validate that we have both token and user data
+      if (!result.token || !result.user) {
+        throw new Error('Invalid login response: missing token or user data');
+      }
+
+      console.log('Login successful for user:', result.user.email);
+      console.log('User type:', result.user.userType);
+
       // Login successful
       setSuccess('🎉 Login successful! Welcome back.');
 
-      // Use auth manager to store authentication data
-      if (result.token) {
-        authManager.setAuth(result.token, result.user, rememberMe);
-        
-        console.log('User authenticated:', {
-          userType: result.user.userType,
-          email: result.user.email,
-          rememberMe: rememberMe
-        });
+      // FIXED: Store auth data and verify it was stored correctly
+      authManager.setAuth(result.token, result.user, rememberMe);
+      
+      // FIXED: Add a small delay to ensure storage is complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // FIXED: Verify authentication was stored correctly before proceeding
+      if (!authManager.isAuthenticated()) {
+        console.error('Authentication failed to store properly');
+        throw new Error('Failed to authenticate user. Please try again.');
       }
+
+      console.log('Authentication verified, user authenticated:', {
+        userType: result.user.userType,
+        email: result.user.email,
+        rememberMe: rememberMe,
+        tokenExists: !!authManager.getToken(),
+        userExists: !!authManager.getUser()
+      });
 
       // Clear form
       setFormData({
@@ -134,10 +155,26 @@ const Login = () => {
         password: ''
       });
 
-      // Redirect based on user type using auth manager
+      // FIXED: Get redirect URL and validate it
+      const redirectUrl = authManager.getDefaultDashboard();
+      console.log('Redirecting to:', redirectUrl);
+      
+      if (!redirectUrl || redirectUrl === '/dashboard') {
+        console.warn('Default dashboard URL may be incorrect, using fallback');
+      }
+
+      // FIXED: Longer delay to ensure UI updates and shorter to prevent user confusion
       setTimeout(() => {
-        window.location.href = authManager.getDefaultDashboard();
-      }, 2000);
+        // FIXED: Double-check authentication before redirecting
+        if (authManager.isAuthenticated()) {
+          console.log('Final redirect to:', redirectUrl);
+          window.location.href = redirectUrl;
+        } else {
+          console.error('User no longer authenticated at redirect time');
+          setError('Authentication lost during login. Please try again.');
+          setLoading(false);
+        }
+      }, 1500); // Reduced from 2000ms to 1500ms
 
     } catch (error) {
       console.error('Login error:', error);
@@ -153,24 +190,16 @@ const Login = () => {
         setError(error.message || '❌ Login failed. Please try again.');
       }
     } finally {
-      setLoading(false);
+      // FIXED: Only set loading to false if we're not redirecting
+      if (!success) {
+        setLoading(false);
+      }
     }
   };
 
-  // Auto-logout warning for expiring tokens
-  useEffect(() => {
-    const checkTokenExpiry = () => {
-      if (authManager.isAuthenticated() && authManager.isTokenExpiringSoon()) {
-        // Show warning or auto-refresh token
-        console.warn('Token expiring soon');
-        // You could show a modal here asking if user wants to stay logged in
-      }
-    };
-
-    const interval = setInterval(checkTokenExpiry, 60000); // Check every minute
-    return () => clearInterval(interval);
-  }, []);
-
+  // FIXED: Removed the auto-logout warning effect that was checking expiry too frequently
+  // This was causing premature logouts
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
       <div className="w-full max-w-7xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">

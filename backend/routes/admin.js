@@ -1722,7 +1722,6 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         ]);
       } catch (loadError) {
         console.log('Loads collection not available, using default values');
-        // If Load model is not available, try direct DB access
         try {
           totalLoads = await db.collection('loads').countDocuments();
           activeLoads = await db.collection('loads').countDocuments({ 
@@ -1791,7 +1790,6 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         });
       } catch (subError) {
         console.warn('Failed to get pending subscriptions:', subError);
-        // Try direct DB access
         try {
           pendingSubscriptions = await db.collection('subscriptions').countDocuments({ 
             status: 'pending' 
@@ -1802,32 +1800,105 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         }
       }
 
-      // 6. SUBSCRIPTIONS THIS MONTH
+      // 6. SUBSCRIPTIONS THIS MONTH - FIXED REVENUE CALCULATION
       let newSubscriptionsThisMonth = 0;
       let monthlyRevenue = 0;
+      let totalRevenue = 0; // All-time revenue
+      
       try {
+        // Get this month's subscriptions
         const thisMonthSubs = await Subscription.find({
           createdAt: { $gte: startOfMonth }
-        }).select('amount planName status');
+        }).select('price amount planName status paymentStatus');
 
         newSubscriptionsThisMonth = thisMonthSubs.length;
+        
+        // Calculate monthly revenue from paid subscriptions
         monthlyRevenue = thisMonthSubs
-          .filter(sub => sub.status === 'active' || sub.status === 'completed')
-          .reduce((total, sub) => total + (sub.amount || 0), 0);
+          .filter(sub => {
+            // Include active subscriptions or those with completed payment
+            return (sub.status === 'active' && sub.paymentStatus === 'completed') ||
+                   (sub.paymentStatus === 'completed');
+          })
+          .reduce((total, sub) => {
+            // Use 'price' field first, fallback to 'amount'
+            const subAmount = sub.price || sub.amount || 0;
+            return total + subAmount;
+          }, 0);
+
+        // Get all-time revenue
+        const allSubscriptions = await Subscription.find({
+          $and: [
+            {
+              $or: [
+                { status: 'active', paymentStatus: 'completed' },
+                { paymentStatus: 'completed' }
+              ]
+            },
+            {
+              $or: [
+                { price: { $gt: 0 } },
+                { amount: { $gt: 0 } }
+              ]
+            }
+          ]
+        }).select('price amount');
+
+        totalRevenue = allSubscriptions.reduce((total, sub) => {
+          const subAmount = sub.price || sub.amount || 0;
+          return total + subAmount;
+        }, 0);
+
       } catch (subError) {
         console.warn('Failed to get monthly subscription stats:', subError);
         try {
+          // Direct DB access with corrected field names
           const thisMonthSubs = await db.collection('subscriptions')
-            .find({ createdAt: { $gte: startOfMonth } })
+            .find({ 
+              createdAt: { $gte: startOfMonth }
+            })
             .toArray();
 
           newSubscriptionsThisMonth = thisMonthSubs.length;
+          
           monthlyRevenue = thisMonthSubs
-            .filter(sub => sub.status === 'active' || sub.status === 'completed')
-            .reduce((total, sub) => total + (sub.amount || 0), 0);
+            .filter(sub => {
+              return (sub.status === 'active' && sub.paymentStatus === 'completed') ||
+                     (sub.paymentStatus === 'completed');
+            })
+            .reduce((total, sub) => {
+              const subAmount = sub.price || sub.amount || 0;
+              return total + subAmount;
+            }, 0);
+
+          // Get all-time revenue from DB
+          const allPaidSubs = await db.collection('subscriptions')
+            .find({
+              $and: [
+                {
+                  $or: [
+                    { status: 'active', paymentStatus: 'completed' },
+                    { paymentStatus: 'completed' }
+                  ]
+                },
+                {
+                  $or: [
+                    { price: { $gt: 0 } },
+                    { amount: { $gt: 0 } }
+                  ]
+                }
+              ]
+            })
+            .toArray();
+
+          totalRevenue = allPaidSubs.reduce((total, sub) => {
+            const subAmount = sub.price || sub.amount || 0;
+            return total + subAmount;
+          }, 0);
+
         } catch (dbError) {
           console.warn('Direct DB subscription query failed:', dbError);
-          newSubscriptionsThisMonth = monthlyRevenue = 0;
+          newSubscriptionsThisMonth = monthlyRevenue = totalRevenue = 0;
         }
       }
 
@@ -1880,6 +1951,7 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         activeDrivers,
         activeCargoOwners,
         monthlyRevenue,
+        totalRevenue, // Add all-time revenue
         
         // Calculated totals
         totalUsers: totalDrivers + totalCargoOwners,
@@ -1908,7 +1980,9 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         totalDrivers: stats.totalDrivers,
         totalCargoOwners: stats.totalCargoOwners,
         pendingSubscriptions: stats.pendingSubscriptions,
-        newSubscriptionsThisMonth: stats.newSubscriptionsThisMonth
+        newSubscriptionsThisMonth: stats.newSubscriptionsThisMonth,
+        monthlyRevenue: stats.monthlyRevenue,
+        totalRevenue: stats.totalRevenue
       });
 
       res.json({
@@ -1935,6 +2009,7 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
         activeDrivers: 0,
         activeCargoOwners: 0,
         monthlyRevenue: 0,
+        totalRevenue: 0,
         
         totalUsers: 0,
         activeUsers: 0,

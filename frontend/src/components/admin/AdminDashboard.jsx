@@ -161,7 +161,6 @@ const AdminDashboard = () => {
       const response = await apiCall('/admin/dashboard-stats');
       if (response.status === 'success' && response.stats) {
         setDashboardStats(response.stats);
-        console.log('Dashboard stats:', response.stats);
       } else {
         setDashboardStats({});
       }
