@@ -1,28 +1,42 @@
 // middleware/corsHandler.js
+
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
   'https://infinitecargo.co.ke',
-  'https://www.infinitecargo.co.ke'
+  'https://www.infinitecargo.co.ke',
+  'https://infinite-cargo-api.onrender.com',
 ];
 
-module.exports = function corsHandler(req, res, next) {
+const corsHandler = (req, res, next) => {
   const origin = req.headers.origin;
 
+  // Only set allow-origin if it matches allowed list
   if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Origin', origin);
   }
 
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token'
+  // Required if you want to accept cookies / auth headers
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  // Allowed methods
+  res.setHeader(
+    'Access-Control-Allow-Methods',
+    'GET,POST,PUT,PATCH,DELETE,OPTIONS'
   );
 
+  // Allowed headers from client
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, x-auth-token'
+  );
+
+  // If preflight request, respond immediately
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
   next();
 };
+
+module.exports = corsHandler;
