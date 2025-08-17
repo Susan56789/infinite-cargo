@@ -5,15 +5,14 @@ const helmet = require('helmet');
 const path = require('path');
 const compression = require('compression');
 require('dotenv').config();
-const corsHandler = require('./middleware/corsHandler')
+
 
 const app = express();
 
 // Security middleware
 app.use(helmet());
 app.use(compression());
-// Apply CORS middleware
-app.use(corsHandler);
+
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
