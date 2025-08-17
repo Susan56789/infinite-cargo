@@ -22,12 +22,12 @@ import ForgotPassword from './pages/ForgotPassword';
 // Admin Pages
 import AdminLogin from './components/admin/AdminLogin';
 import AdminDashboard from './components/admin/AdminDashboard';
-import AdminSettings from './components/admin/AdminSettings';
-import AdminSubscriptionDashboard from './components/admin/AdminSubscriptionDashboard';
+
 
 // Dashboard Pages (User-type specific dashboards)
 import DriverDashboard from './components/driver/DriverDashboard';
 import CargoOwnerDashboard from './components/cargoowner/CargoOwnerDashboard';
+import DriverProfile from './components/driver/DriverProfile';
 
 // Core Functionality Pages
 import LoadSearch from './components/driver/LoadSearch';
@@ -272,41 +272,7 @@ element={
                     <AdminDashboard />
                   </>
                 } 
-              />
-              < Route
-              path="/admin/subscriptions"
-              element={
-                <>
-                  <SEOHelmet 
-                    title="Admin - Subscription Management"
-                    description="Manage user subscriptions, view active plans, and handle subscription requests. Admin access required  for subscription management."
-                    keywords="subscription management, admin panel, user subscriptions, cargo owner plans"
-                    canonicalUrl="https://infinitecargo.co.ke/admin/subscriptions"        
-              />
-                  <AdminSubscriptionDashboard />
-                </>
-              }
-            />  
-              
-             
-              
-              <Route 
-                path="/admin/settings" 
-                element={
-                  <>
-                    <SEOHelmet 
-                      title="Admin - System Settings"
-                      description="Configure system settings, manage admin accounts, and adjust platform parameters for optimal performance."
-                      keywords="system settings, admin configuration, platform management"
-                      canonicalUrl="https://infinitecargo.co.ke/admin/settings"
-                    />
-                    <AdminSettings />
-                  </>
-                } 
-              />
-              
-              
-
+              />    
               {/* Dashboard Pages - User-specific */}
               <Route 
                 path="/driver-dashboard" 
@@ -321,6 +287,21 @@ element={
                     <DriverDashboard />
                   </>
                 } 
+              />
+
+              <Route
+path='/driver/profile'
+element ={
+  <>
+  <SEOHelmet 
+                      title="Driver Profile"
+                      description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                      keywords="driver profile, update details, vehicle information, contact preferences"
+                      canonicalUrl="https://infinitecargo.co.ke/driver/profile"
+                    />
+                    <DriverProfile />
+  </>
+}
               />
               
               

@@ -1366,6 +1366,227 @@ router.put('/profile',  auth, driverLimiter, profileValidation, async (req, res)
   }
 });
 
+// @route   GET /api/drivers/profile
+// @desc    Get driver's own profile
+// @access  Private (Driver only)
+router.get('/profile', auth, driverLimiter, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can access driver profiles'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const driversCollection = db.collection('drivers');
+    const bookingsCollection = db.collection('bookings');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Get driver profile
+    const driver = await driversCollection.findOne(
+      { _id: driverId },
+      {
+        projection: {
+          password: 0,
+          loginHistory: 0,
+          registrationIp: 0,
+          failedLoginAttempts: 0,
+          __v: 0
+        }
+      }
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver profile not found'
+      });
+    }
+
+    // Get additional profile statistics in parallel
+    const [
+      totalBookings,
+      completedBookings,
+      activeBookings,
+      averageRatingData,
+      totalEarnings,
+      recentBookings
+    ] = await Promise.all([
+      // Total bookings count
+      bookingsCollection.countDocuments({ driverId }),
+      
+      // Completed bookings count
+      bookingsCollection.countDocuments({ driverId, status: 'completed' }),
+      
+      // Active bookings count
+      bookingsCollection.countDocuments({ 
+        driverId, 
+        status: { $in: ['accepted', 'in_progress', 'driver_assigned'] } 
+      }),
+      
+      // Average rating calculation
+      bookingsCollection.aggregate([
+        { 
+          $match: { 
+            driverId, 
+            rating: { $exists: true, $ne: null, $gte: 1 } 
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            avgRating: { $avg: '$rating' },
+            totalRatings: { $sum: 1 }
+          } 
+        }
+      ]).toArray(),
+      
+      // Total earnings from completed bookings
+      bookingsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'completed',
+            totalAmount: { $exists: true, $ne: null, $gt: 0 }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: { $sum: '$totalAmount' },
+            earningsCount: { $sum: 1 }
+          }
+        }
+      ]).toArray(),
+      
+      // Recent bookings for activity feed
+      bookingsCollection.find({ driverId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .project({
+          loadTitle: 1,
+          status: 1,
+          totalAmount: 1,
+          createdAt: 1,
+          completedAt: 1,
+          pickupLocation: 1,
+          deliveryLocation: 1
+        })
+        .toArray()
+    ]);
+
+    // Calculate derived statistics
+    const successRate = totalBookings > 0 ? 
+      Math.round((completedBookings / totalBookings) * 100) : 0;
+    
+    const averageRating = averageRatingData.length > 0 ? 
+      Math.round(averageRatingData[0].avgRating * 10) / 10 : 0;
+    
+    const totalRatingsReceived = averageRatingData.length > 0 ? 
+      averageRatingData[0].totalRatings : 0;
+    
+    const lifetimeEarnings = totalEarnings.length > 0 ? 
+      totalEarnings[0].totalEarnings : 0;
+    
+    const completedJobsWithEarnings = totalEarnings.length > 0 ? 
+      totalEarnings[0].earningsCount : 0;
+
+    // Enhanced driver profile with statistics
+    const enhancedProfile = {
+      ...driver,
+      statistics: {
+        totalJobs: totalBookings,
+        activeJobs: activeBookings,
+        completedJobs: completedBookings,
+        successRate,
+        averageRating,
+        totalRatingsReceived,
+        lifetimeEarnings,
+        completedJobsWithEarnings
+      },
+      recentActivity: recentBookings,
+      profileCompletion: calculateProfileCompletion(driver),
+      lastUpdated: driver.updatedAt || driver.createdAt
+    };
+
+    res.json({
+      status: 'success',
+      message: 'Driver profile retrieved successfully',
+      data: {
+        driver: enhancedProfile
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver profile error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error retrieving driver profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Helper function to calculate profile completion percentage
+function calculateProfileCompletion(driver) {
+  const requiredFields = [
+    'firstName',
+    'lastName', 
+    'email',
+    'phone',
+    'vehicleType',
+    'vehicleCapacity',
+    'licenseNumber'
+  ];
+  
+  const optionalFields = [
+    'address',
+    'city', 
+    'state',
+    'zipCode',
+    'licenseExpiry',
+    'vehiclePlate',
+    'vehicleModel',
+    'vehicleYear',
+    'emergencyContact',
+    'emergencyPhone',
+    'experienceYears',
+    'driverProfile.bio'
+  ];
+
+  let completedRequired = 0;
+  let completedOptional = 0;
+
+  // Check required fields
+  requiredFields.forEach(field => {
+    const fieldValue = getNestedValue(driver, field);
+    if (fieldValue && fieldValue.toString().trim() !== '') {
+      completedRequired++;
+    }
+  });
+
+  // Check optional fields  
+  optionalFields.forEach(field => {
+    const fieldValue = getNestedValue(driver, field);
+    if (fieldValue && fieldValue.toString().trim() !== '') {
+      completedOptional++;
+    }
+  });
+
+  const requiredPercentage = (completedRequired / requiredFields.length) * 70; // 70% weight for required
+  const optionalPercentage = (completedOptional / optionalFields.length) * 30; // 30% weight for optional
+  
+  return Math.round(requiredPercentage + optionalPercentage);
+}
+
+// Helper function to get nested object values
+function getNestedValue(obj, path) {
+  return path.split('.').reduce((current, key) => {
+    return current && current[key] !== undefined ? current[key] : undefined;
+  }, obj);
+}
+
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
 // @access  Private (Driver only)

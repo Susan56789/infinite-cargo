@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Loader, RefreshCw } from 'lucide-react';
 
 // Import child components
@@ -54,7 +53,6 @@ const DriverDashboard = () => {
   const [notifications, setNotifications] = useState([]);
   const [availabilityUpdating, setAvailabilityUpdating] = useState(false);
 
-  const navigate = useNavigate();
 
   // Get auth headers using AuthManager
   const getAuthHeaders = useCallback(() => {
@@ -471,48 +469,48 @@ const DriverDashboard = () => {
   };
 
   // Place a bid on a load
-  const placeBid = async (bidData) => {
-    try {
-      // Use the driver-specific bid endpoint if available, otherwise use general bids endpoint
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/bid', {
+const placeBid = async (bidData) => {
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...getAuthHeader()  
+    };
+
+    const response = await fetch(
+      'https://infinite-cargo-api.onrender.com/api/drivers/bid',
+      {
         method: 'POST',
-        headers: getAuthHeaders(),
+        headers,
         body: JSON.stringify(bidData)
-      });
-
-      // If driver-specific endpoint doesn't exist, try general endpoint
-      let finalResponse = response;
-      if (response.status === 404) {
-        finalResponse = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify(bidData)
-        });
       }
+    );
 
-      if (await handleApiError(finalResponse, 'placeBid')) {
-        return { success: false, error: 'Authentication failed' };
-      }
-
-      if (finalResponse.ok) {
-        const result = await finalResponse.json();
-        
-        // Refresh bids and available loads
-        await Promise.all([
-          fetchDriverBids(),
-          fetchAvailableLoads()
-        ]);
-        
-        return { success: true, data: result.data };
-      } else {
-        const errorData = await finalResponse.json();
-        return { success: false, error: errorData.message || 'Failed to place bid' };
-      }
-    } catch (error) {
-      console.error('Error placing bid:', error);
-      return { success: false, error: 'Failed to place bid' };
+    if (response.status === 401 || response.status === 403) {
+      setError('Authentication failed. Please login again.');
+      handleLogout();
+      return false;
     }
-  };
+
+    if (!response.ok) {
+      const resJSON = await response.json().catch(() => ({}));
+      const msg = resJSON.message || 'Failed to place bid';
+      setError(msg);
+      return false;
+    }
+
+    // Bid success
+    await fetchDriverBids();
+    await fetchAvailableLoads();
+
+    return true;
+  } catch (error) {
+    console.error('Error placing bid:', error);
+    setError('Network error. Please try again.');
+    return false;
+  }
+};
+
 
   // Update driver location
   const updateDriverLocation = async (latitude, longitude) => {
