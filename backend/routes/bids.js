@@ -78,7 +78,7 @@ const bidValidation = [
 // @route   POST /api/bids
 // @desc    Create a new bid on a load
 // @access  Private (Drivers only)
-router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
+router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -97,19 +97,22 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
       });
     }
 
-    const { load: loadId } = req.body;
-
-    // Get the load and validate it exists and can receive bids
-    const load = await Load.findById(loadId);
-    
-    if (!load) {
-      return res.status(404).json({
+    // Accept both load or loadId
+    const loadId = req.body.load || req.body.loadId;
+    if (!loadId) {
+      return res.status(400).json({
         status: 'error',
-        message: 'Load not found'
+        message: 'Missing load ID'
       });
     }
 
-    if (!load.canBid()) {
+    // Get the load and validate it
+    const load = await Load.findById(loadId);
+    if (!load) {
+      return res.status(404).json({ status: 'error', message: 'Load not found' });
+    }
+
+    if (!load.canReceiveBids()) {
       return res.status(400).json({
         status: 'error',
         message: 'This load is no longer accepting bids'
@@ -122,20 +125,17 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
       driver: req.user.id,
       status: { $nin: ['withdrawn', 'expired', 'rejected'] }
     });
-
     if (existingBid) {
       return res.status(400).json({
         status: 'error',
-        message: 'You already have an active bid on this load',
-        existingBid: existingBid._id
+        message: 'You already have an active bid on this load'
       });
     }
 
-    // Get driver information for snapshot
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const driver = await db.collection('drivers').findOne({ _id: new mongoose.Types.ObjectId(req.user.id) });
-
+    // Get driver information snapshot
+    const driver = await mongoose.connection.db.collection('drivers').findOne({
+      _id: new mongoose.Types.ObjectId(req.user.id)
+    });
     if (!driver) {
       return res.status(404).json({
         status: 'error',
@@ -143,7 +143,7 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
       });
     }
 
-    // Create bid data
+    // Prepare bid data
     const bidData = {
       load: loadId,
       driver: req.user.id,
@@ -153,19 +153,12 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
       proposedPickupDate: req.body.proposedPickupDate,
       proposedDeliveryDate: req.body.proposedDeliveryDate,
       message: req.body.message,
-      coverLetter: req.body.coverLetter,
-      vehicleDetails: req.body.vehicleDetails,
-      additionalServices: req.body.additionalServices || [],
-      pricingBreakdown: req.body.pricingBreakdown || {
+      pricingBreakdown: {
         baseFare: req.body.bidAmount,
         totalAmount: req.body.bidAmount
       },
-      terms: req.body.terms || {
-        paymentMethod: 'cash',
-        paymentTiming: 'on_delivery'
-      },
-      
-      // Driver information snapshot
+
+      // Driver snapshot
       driverInfo: {
         name: driver.name,
         phone: driver.phone,
@@ -177,7 +170,7 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
         isVerified: driver.driverProfile?.verified || false
       },
 
-      // Load information snapshot
+      // Load snapshot
       loadInfo: {
         title: load.title,
         pickupLocation: load.pickupLocation,
@@ -190,12 +183,9 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
     const bid = new Bid(bidData);
     await bid.save();
 
-    // Update load bid count
-    await Load.findByIdAndUpdate(loadId, {
-      $inc: { bidsReceived: 1 }
-    });
+    // Increment bid count on load
+    await Load.findByIdAndUpdate(loadId, { $inc: { bidsReceived: 1 } });
 
-    // Populate bid with driver and load information
     await bid.populate([
       { path: 'driver', select: 'name phone email location rating isVerified vehicleType vehicleCapacity' },
       { path: 'load', select: 'title pickupLocation deliveryLocation weight budget status' }
@@ -204,9 +194,7 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
     res.status(201).json({
       status: 'success',
       message: 'Bid submitted successfully',
-      data: {
-        bid
-      }
+      data: { bid }
     });
 
   } catch (error) {
@@ -218,6 +206,7 @@ router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
     });
   }
 });
+
 
 // @route   GET /api/bids
 // @desc    Get bids for current user (driver gets their bids, cargo owner gets bids on their loads)

@@ -14,7 +14,11 @@ import {
   Eye, 
   TrendingUp,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Plus,
+  MessageSquare,
+  Loader,
+  CheckCircle
 } from 'lucide-react';
 
 import { 
@@ -26,6 +30,401 @@ import {
   logout 
 } from '../../utils/auth';
 
+// BidForm Component
+const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
+  const [bidData, setBidData] = useState({
+    bidAmount: '',
+    proposedPickupDate: '',
+    proposedDeliveryDate: '',
+    message: '',
+    coverLetter: '',
+    vehicleDetails: {
+      type: 'medium_truck',
+      capacity: 5
+    },
+    additionalServices: [],
+    terms: {
+      paymentMethod: 'cash',
+      paymentTiming: 'on_delivery'
+    },
+    currency: 'KES'
+  });
+
+  const [errors, setErrors] = useState({});
+
+  const validateForm = () => {
+    const newErrors = {};
+    
+    // Bid amount validation (must be at least 1 KES)
+    if (!bidData.bidAmount || parseFloat(bidData.bidAmount) < 1) {
+      newErrors.bidAmount = 'Bid amount must be at least 1 KES';
+    }
+    
+    // Check if bid amount is reasonable compared to budget
+    if (load.budget && parseFloat(bidData.bidAmount) > parseFloat(load.budget) * 2) {
+      newErrors.bidAmount = 'Bid amount seems unusually high compared to budget';
+    }
+    
+    // Proposed pickup date validation (ISO 8601 format required)
+    if (!bidData.proposedPickupDate) {
+      newErrors.proposedPickupDate = 'Valid proposed pickup date is required';
+    } else {
+      const pickupDate = new Date(bidData.proposedPickupDate);
+      if (isNaN(pickupDate.getTime())) {
+        newErrors.proposedPickupDate = 'Invalid pickup date format';
+      } else if (pickupDate < new Date()) {
+        newErrors.proposedPickupDate = 'Pickup date cannot be in the past';
+      }
+    }
+    
+    // Proposed delivery date validation (ISO 8601 format required)
+    if (!bidData.proposedDeliveryDate) {
+      newErrors.proposedDeliveryDate = 'Valid proposed delivery date is required';
+    } else {
+      const deliveryDate = new Date(bidData.proposedDeliveryDate);
+      const pickupDate = new Date(bidData.proposedPickupDate);
+      
+      if (isNaN(deliveryDate.getTime())) {
+        newErrors.proposedDeliveryDate = 'Invalid delivery date format';
+      } else if (bidData.proposedPickupDate && deliveryDate <= pickupDate) {
+        newErrors.proposedDeliveryDate = 'Proposed delivery date must be after pickup date';
+      }
+    }
+
+    // Message length validation (max 1000 characters)
+    if (bidData.message && bidData.message.length > 1000) {
+      newErrors.message = 'Message cannot exceed 1000 characters';
+    }
+
+    // Cover letter length validation (max 2000 characters)
+    if (bidData.coverLetter && bidData.coverLetter.length > 2000) {
+      newErrors.coverLetter = 'Cover letter cannot exceed 2000 characters';
+    }
+
+    // Vehicle type validation
+    const validVehicleTypes = [
+      'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck', 
+      'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
+    ];
+    if (!validVehicleTypes.includes(bidData.vehicleDetails.type)) {
+      newErrors.vehicleType = 'Invalid vehicle type selected';
+    }
+
+    // Vehicle capacity validation (min 0.1 tonnes)
+    if (!bidData.vehicleDetails.capacity || parseFloat(bidData.vehicleDetails.capacity) < 0.1) {
+      newErrors.vehicleCapacity = 'Vehicle capacity must be at least 0.1 tonnes';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!validateForm()) return;
+
+    const bidPayload = {
+      load: load._id,
+      bidAmount: parseFloat(bidData.bidAmount),
+      currency: bidData.currency,
+      proposedPickupDate: bidData.proposedPickupDate,
+      proposedDeliveryDate: bidData.proposedDeliveryDate,
+      message: bidData.message || undefined,
+      coverLetter: bidData.coverLetter || undefined,
+      vehicleDetails: {
+        type: bidData.vehicleDetails.type,
+        capacity: parseFloat(bidData.vehicleDetails.capacity)
+      },
+      additionalServices: bidData.additionalServices,
+      pricingBreakdown: {
+        baseFare: parseFloat(bidData.bidAmount),
+        totalAmount: parseFloat(bidData.bidAmount)
+      },
+      terms: bidData.terms
+    };
+
+    await onBidSubmit(bidPayload);
+  };
+
+  const handleInputChange = (field, value) => {
+    setBidData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+    
+    if (errors[field]) {
+      setErrors(prev => ({
+        ...prev,
+        [field]: ''
+      }));
+    }
+  };
+
+  const handleVehicleDetailsChange = (field, value) => {
+    setBidData(prev => ({
+      ...prev,
+      vehicleDetails: {
+        ...prev.vehicleDetails,
+        [field]: value
+      }
+    }));
+  };
+
+  const handleTermsChange = (field, value) => {
+    setBidData(prev => ({
+      ...prev,
+      terms: {
+        ...prev.terms,
+        [field]: value
+      }
+    }));
+  };
+
+  return (
+    <div className="bg-gray-50 border rounded-lg p-4 mt-4">
+      <div className="flex items-center justify-between mb-4">
+        <h4 className="font-medium text-gray-900 flex items-center">
+          <Plus className="w-4 h-4 mr-2" />
+          Place Your Bid
+        </h4>
+        <button
+          onClick={onCancel}
+          className="text-gray-400 hover:text-gray-600"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Bid Amount */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            <DollarSign size={16} className="inline mr-1" />
+            Bid Amount (KES) *
+          </label>
+          <input
+            type="number"
+            value={bidData.bidAmount}
+            onChange={(e) => handleInputChange('bidAmount', e.target.value)}
+            placeholder={`Budget: KES ${load.budget || 'Not specified'}`}
+            className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              errors.bidAmount ? 'border-red-300' : 'border-gray-300'
+            }`}
+            min="1"
+            step="0.01"
+          />
+          {errors.bidAmount && (
+            <p className="mt-1 text-sm text-red-600">{errors.bidAmount}</p>
+          )}
+        </div>
+
+        {/* Dates */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <Calendar size={16} className="inline mr-1" />
+              Pickup Date *
+            </label>
+            <input
+              type="datetime-local"
+              value={bidData.proposedPickupDate}
+              onChange={(e) => handleInputChange('proposedPickupDate', e.target.value)}
+              min={new Date().toISOString().slice(0, 16)}
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.proposedPickupDate ? 'border-red-300' : 'border-gray-300'
+              }`}
+            />
+            {errors.proposedPickupDate && (
+              <p className="mt-1 text-sm text-red-600">{errors.proposedPickupDate}</p>
+            )}
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <Calendar size={16} className="inline mr-1" />
+              Delivery Date *
+            </label>
+            <input
+              type="datetime-local"
+              value={bidData.proposedDeliveryDate}
+              onChange={(e) => handleInputChange('proposedDeliveryDate', e.target.value)}
+              min={bidData.proposedPickupDate || new Date().toISOString().slice(0, 16)}
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.proposedDeliveryDate ? 'border-red-300' : 'border-gray-300'
+              }`}
+            />
+            {errors.proposedDeliveryDate && (
+              <p className="mt-1 text-sm text-red-600">{errors.proposedDeliveryDate}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Vehicle Details */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Vehicle Type *
+            </label>
+            <select
+              value={bidData.vehicleDetails.type}
+              onChange={(e) => handleVehicleDetailsChange('type', e.target.value)}
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.vehicleType ? 'border-red-300' : 'border-gray-300'
+              }`}
+            >
+              <option value="pickup">Pickup Truck</option>
+              <option value="van">Van</option>
+              <option value="small_truck">Small Truck</option>
+              <option value="medium_truck">Medium Truck</option>
+              <option value="large_truck">Large Truck</option>
+              <option value="heavy_truck">Heavy Truck</option>
+              <option value="trailer">Trailer</option>
+              <option value="refrigerated_truck">Refrigerated Truck</option>
+              <option value="flatbed">Flatbed</option>
+              <option value="container_truck">Container Truck</option>
+            </select>
+            {errors.vehicleType && (
+              <p className="mt-1 text-sm text-red-600">{errors.vehicleType}</p>
+            )}
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Capacity (tonnes) *
+            </label>
+            <input
+              type="number"
+              value={bidData.vehicleDetails.capacity}
+              onChange={(e) => handleVehicleDetailsChange('capacity', parseFloat(e.target.value) || '')}
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.vehicleCapacity ? 'border-red-300' : 'border-gray-300'
+              }`}
+              min="0.1"
+              step="0.1"
+              placeholder="e.g. 5.0"
+            />
+            {errors.vehicleCapacity && (
+              <p className="mt-1 text-sm text-red-600">{errors.vehicleCapacity}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Message */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            <MessageSquare size={16} className="inline mr-1" />
+            Brief Message (Optional)
+          </label>
+          <textarea
+            value={bidData.message}
+            onChange={(e) => handleInputChange('message', e.target.value)}
+            placeholder="Add a brief message about your bid..."
+            rows={2}
+            maxLength={1000}
+            className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              errors.message ? 'border-red-300' : 'border-gray-300'
+            }`}
+          />
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">{bidData.message.length}/1000 characters</p>
+            {errors.message && (
+              <p className="text-xs text-red-600">{errors.message}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Cover Letter */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Cover Letter (Optional)
+          </label>
+          <textarea
+            value={bidData.coverLetter}
+            onChange={(e) => handleInputChange('coverLetter', e.target.value)}
+            placeholder="Tell the cargo owner why you're the best choice for this job..."
+            rows={3}
+            maxLength={2000}
+            className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              errors.coverLetter ? 'border-red-300' : 'border-gray-300'
+            }`}
+          />
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">{bidData.coverLetter.length}/2000 characters</p>
+            {errors.coverLetter && (
+              <p className="text-xs text-red-600">{errors.coverLetter}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Terms */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Payment Method
+            </label>
+            <select
+              value={bidData.terms.paymentMethod}
+              onChange={(e) => handleTermsChange('paymentMethod', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="cash">Cash</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="mobile_money">Mobile Money</option>
+              <option value="cheque">Cheque</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Payment Timing
+            </label>
+            <select
+              value={bidData.terms.paymentTiming}
+              onChange={(e) => handleTermsChange('paymentTiming', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="on_pickup">On Pickup</option>
+              <option value="on_delivery">On Delivery</option>
+              <option value="advance">50% Advance</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Submit Buttons */}
+        <div className="flex space-x-3 pt-2">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {submitting ? (
+              <>
+                <Loader size={16} className="mr-2 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <Plus size={16} className="mr-2" />
+                Submit Bid
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={submitting}
+            className="px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 const LoadSearch = () => {
   const [loads, setLoads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +435,8 @@ const LoadSearch = () => {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [isUserAuthenticated, setIsUserAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
+  const [bidStates, setBidStates] = useState({}); // Track bid form states for each load
+  const [successMessage, setSuccessMessage] = useState('');
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -111,7 +512,6 @@ const LoadSearch = () => {
     try {
       if (isUserAuthenticated) {
         const authHeader = getAuthHeader(false);
-        // Handle both formats: { Authorization: 'Bearer token' } or { 'x-auth-token': 'token' }
         if (authHeader && typeof authHeader === 'object') {
           return authHeader;
         }
@@ -129,93 +529,165 @@ const LoadSearch = () => {
     fetchLoads();
   }, []);
 
+  // Auto-dismiss success message
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => {
+        setSuccessMessage('');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
   const fetchLoads = async (page = 1) => {
+    try {
+      setLoading(true);
+      setError('');
+
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString(),
+      });
+
+      if (searchQuery?.trim()) {
+        params.append('search', searchQuery.trim());
+      }
+
+      Object.entries(filters).forEach(([key, value]) => {
+        if (String(value).trim()) {
+          params.append(key, value.toString());
+        }
+      });
+
+      const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
+      
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()   
+      };
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        credentials: 'include' 
+      });
+
+      if (!response.ok) {
+        let serverError = 'Failed to fetch loads.';
+        try {
+          const resData = await response.json();
+          serverError = resData.message || serverError;
+        } catch (_) {}
+        throw new Error(`${serverError} (HTTP ${response.status})`);
+      }
+
+      const data = await response.json();
+
+      if (data.status !== 'success') {
+        throw new Error(data.message || 'Unexpected server response.');
+      }
+
+      const { loads: loadsArr, pagination } = data.data;
+      setLoads(loadsArr);
+      setCurrentPage(pagination.currentPage);
+      setTotalPages(pagination.totalPages);
+      setTotalLoads(pagination.totalLoads);
+
+    } catch (err) {
+      console.error('Error loading loads:', err);
+      setError(
+        err.message === 'Failed to fetch'
+          ? 'Network error: Could not reach server.'
+          : err.message
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Place bid function (Fixed)
+const handleBidSubmit = async (bidData) => {
   try {
-    setLoading(true);
-    setError('');
-
-    // Build query parameters
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-    });
-
-    if (searchQuery?.trim()) {
-      params.append('search', searchQuery.trim());
+    // Check auth
+    if (!isUserAuthenticated) {
+      setShowLoginPrompt(true);
+      return { success: false, error: 'Please login to place a bid' };
     }
 
-    // Add filters (only truthy values)
-    Object.entries(filters).forEach(([key, value]) => {
-      if (String(value).trim()) {
-        params.append(key, value.toString());
-      }
-    });
-
-    const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-    
+    if (user?.userType !== 'driver') {
+      setError('Only drivers can place bids on loads.');
+      return { success: false, error: 'Only drivers can place bids' };
+    }
 
     // Build headers
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      ...getAuthHeaders()   
+      ...getAuthHeaders()
     };
 
-    const response = await fetch(url, {
-      method: 'GET',
+    // Prepare payload
+    const payload = {
+      load: bidData.loadId || bidData.load,      // fallback
+      bidAmount: bidData.bidAmount,
+      proposedPickupDate: bidData.proposedPickupDate,
+      proposedDeliveryDate: bidData.proposedDeliveryDate,
+      message: bidData.message
+    };
+
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+      method: 'POST',
       headers,
-      credentials: 'include' 
+      credentials: 'include',
+      body: JSON.stringify(payload)
     });
 
-    if (!response.ok) {
-      // try to extract message
-      let serverError = 'Failed to fetch loads.';
-      try {
-        const resData = await response.json();
-        serverError = resData.message || serverError;
-      } catch (_) {}
-      throw new Error(`${serverError} (HTTP ${response.status})`);
+    const result = await response.json();
+
+    if (response.ok && result.status === 'success') {
+      setSuccessMessage('Bid placed successfully!');
+      // Close bid form
+      setBidStates(prev => ({
+        ...prev,
+        [payload.load]: { showBidForm: false, submitting: false }
+      }));
+      // Refresh loads to update bid count
+      await fetchLoads(currentPage);
+      return { success: true };
+    } else {
+      let errorMsg = result.message || 'Failed to place bid';
+
+      // Specific error handling
+      if (response.status === 400 && errorMsg.includes('already')) {
+        errorMsg = 'You already have a bid on this load.';
+      } else if (response.status === 404) {
+        errorMsg = 'Load not found.';
+      } else if (response.status === 403) {
+        errorMsg = 'Only drivers can place bids.';
+      }
+
+      setError(errorMsg);
+      return { success: false, error: errorMsg };
     }
-
-    const data = await response.json();
-
-    console.log('Fetched loads:', data);
-
-    if (data.status !== 'success') {
-      throw new Error(data.message || 'Unexpected server response.');
-    }
-
-    // Success: update state
-    const { loads: loadsArr, pagination } = data.data;
-    setLoads(loadsArr);
-    setCurrentPage(pagination.currentPage);
-    setTotalPages(pagination.totalPages);
-    setTotalLoads(pagination.totalLoads);
-
-  } catch (err) {
-    console.error('Error loading loads:', err);
-    setError(
-      err.message === 'Failed to fetch'
-        ? 'Network error: Could not reach server.'
-        : err.message
-    );
-  } finally {
-    setLoading(false);
+  } catch (error) {
+    console.error('Bid submit error:', error);
+    const errorMsg = 'Network error: Could not place bid.';
+    setError(errorMsg);
+    return { success: false, error: errorMsg };
   }
 };
 
-  // FIXED: Add retry mechanism
+
   const retryFetch = async (retries = 3) => {
     for (let i = 0; i < retries; i++) {
       try {
         await fetchLoads(currentPage);
-        break; // Success, exit retry loop
+        break;
       } catch (error) {
         if (i === retries - 1) {
-          // Last retry failed
           setError('Failed to load after multiple attempts. Please refresh the page.');
         } else {
-          // Wait before retry
           await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
         }
       }
@@ -288,7 +760,6 @@ const LoadSearch = () => {
 
   const handleViewDetails = async (load) => {
     try {
-      // Fetch detailed load information
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -307,19 +778,16 @@ const LoadSearch = () => {
           setSelectedLoad(data.data.load);
           setShowLoadModal(true);
         } else {
-          // Fallback to the basic load data
           setSelectedLoad(load);
           setShowLoadModal(true);
         }
       } else {
-        // Fallback to the basic load data
         console.warn('Failed to fetch detailed load info, using basic data');
         setSelectedLoad(load);
         setShowLoadModal(true);
       }
     } catch (error) {
       console.warn('Error fetching load details:', error);
-      // Fallback to the basic load data
       setSelectedLoad(load);
       setShowLoadModal(true);
     }
@@ -336,21 +804,41 @@ const LoadSearch = () => {
       return;
     }
 
-    // FIXED: Add proper bid handling
-    console.log('Opening bid functionality for load:', load._id);
-    // You can implement bid modal or redirect to bid page here
-    // For now, show an alert
-    alert('Bid functionality will be implemented here. Load ID: ' + load._id);
+    setBidStates(prev => ({
+      ...prev,
+      [load._id]: { showBidForm: true, submitting: false }
+    }));
+  };
+
+  const handleBidCancel = (loadId) => {
+    setBidStates(prev => ({
+      ...prev,
+      [loadId]: { showBidForm: false, submitting: false }
+    }));
+  };
+
+  const handleBidFormSubmit = async (loadId, bidData) => {
+    setBidStates(prev => ({
+      ...prev,
+      [loadId]: { ...prev[loadId], submitting: true }
+    }));
+
+    const result = await handleBidSubmit(bidData);
+    
+    if (!result.success) {
+      setBidStates(prev => ({
+        ...prev,
+        [loadId]: { ...prev[loadId], submitting: false }
+      }));
+    }
   };
 
   const handleLogin = () => {
     setShowLoginPrompt(false);
-    // FIXED: Better routing handling
     try {
-      // Check if we're in a React Router environment
       if (window.history && window.history.pushState) {
         window.history.pushState({}, '', '/login');
-        window.location.reload(); // Force reload to login page
+        window.location.reload();
       } else {
         window.location.href = '/login';
       }
@@ -360,9 +848,12 @@ const LoadSearch = () => {
     }
   };
 
-  // FIXED: Add error boundary style handling
   const handleErrorDismiss = () => {
     setError('');
+  };
+
+  const handleSuccessDismiss = () => {
+    setSuccessMessage('');
   };
 
   if (loading) {
@@ -435,7 +926,25 @@ const LoadSearch = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* FIXED: Enhanced Error State */}
+        {/* Success Message */}
+        {successMessage && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+            <div className="flex items-start">
+              <CheckCircle className="h-5 w-5 text-green-400 mr-3 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm text-green-800 font-medium">{successMessage}</p>
+              </div>
+              <button
+                onClick={handleSuccessDismiss}
+                className="text-green-400 hover:text-green-600 flex-shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Error State */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
             <div className="flex items-start">
@@ -478,6 +987,21 @@ const LoadSearch = () => {
               <div>
                 <p className="text-sm text-blue-800">
                   <strong>Browse loads publicly!</strong> To place bids and access full features, please login as a driver or create an account.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Driver Status Notice */}
+        {isUserAuthenticated && user?.userType !== 'driver' && (
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-8">
+            <div className="flex items-center">
+              <AlertTriangle className="h-5 w-5 text-orange-400 mr-3" />
+              <div>
+                <p className="text-sm text-orange-800">
+                  <strong>Driver account required!</strong> Only registered drivers can place bids on loads. 
+                  Please contact support to upgrade your account to a driver account.
                 </p>
               </div>
             </div>
@@ -617,100 +1141,117 @@ const LoadSearch = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-              {loads.map((load) => (
-                <div key={load._id} className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 ${load.isPriorityListing ? 'ring-2 ring-yellow-400' : ''}`}>
-                  <div className="p-6">
-                    <div className="flex items-start justify-between mb-3">
-                      <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">{load.title || 'Untitled Load'}</h3>
-                      <div className="flex flex-col items-end space-y-1">
-                        {load.isUrgent && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                            <Clock className="w-3 h-3 mr-1" />
-                            Urgent
-                          </span>
-                        )}
-                        {load.isPriorityListing && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                            <TrendingUp className="w-3 h-3 mr-1" />
-                            Featured
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    
-                    <p className="text-gray-600 text-sm mb-4 line-clamp-3">{load.description || 'No description available'}</p>
-
-                    {/* Route */}
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-center text-sm text-gray-600">
-                        <MapPin className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" />
-                        <span className="font-medium">From:</span>
-                        <span className="ml-1 truncate">{load.pickupLocation || 'N/A'}</span>
-                      </div>
-                      <div className="flex items-center text-sm text-gray-600">
-                        <MapPin className="w-4 h-4 mr-2 text-red-500 flex-shrink-0" />
-                        <span className="font-medium">To:</span>
-                        <span className="ml-1 truncate">{load.deliveryLocation || 'N/A'}</span>
-                      </div>
-                    </div>
-
-                    {/* Details */}
-                    <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-                      <div className="flex items-center text-gray-600">
-                        <Weight className="w-4 h-4 mr-2 flex-shrink-0" />
-                        <span>{load.weight || 0} kg</span>
-                      </div>
-                      <div className="flex items-center text-green-600 font-medium">
-                        <DollarSign className="w-4 h-4 mr-1 flex-shrink-0" />
-                        <span>{formatCurrency(load.budget)}</span>
-                      </div>
-                    </div>
-
-                    {/* Cargo and Vehicle Type */}
-                    <div className="grid grid-cols-2 gap-4 mb-4 text-xs">
-                      <div className="flex items-center text-gray-500">
-                        <Package className="w-3 h-3 mr-1 flex-shrink-0" />
-                        <span className="truncate">{getCargoTypeLabel(load.cargoType)}</span>
-                      </div>
-                      <div className="flex items-center text-gray-500">
-                        <Truck className="w-3 h-3 mr-1 flex-shrink-0" />
-                        <span className="truncate">{getVehicleTypeLabel(load.vehicleType)}</span>
-                      </div>
-                    </div>
-
-                    {/* Posted info */}
-                    <div className="text-xs text-gray-500 mb-4">
-                      <div className="flex items-center justify-between">
-                       <span>By {load.cargoOwnerName || load.postedBy?.name || 'Anonymous'}</span>
-
-                        <span>{formatDate(load.createdAt)}</span>
-                      </div>
-                      {load.bidCount > 0 && (
-                        <div className="flex items-center mt-1">
-                          <Eye className="w-3 h-3 mr-1" />
-                          <span>{load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}</span>
+              {loads.map((load) => {
+                const bidState = bidStates[load._id] || { showBidForm: false, submitting: false };
+                
+                return (
+                  <div key={load._id} className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 ${load.isPriorityListing ? 'ring-2 ring-yellow-400' : ''}`}>
+                    <div className="p-6">
+                      <div className="flex items-start justify-between mb-3">
+                        <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">{load.title || 'Untitled Load'}</h3>
+                        <div className="flex flex-col items-end space-y-1">
+                          {load.isUrgent && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              <Clock className="w-3 h-3 mr-1" />
+                              Urgent
+                            </span>
+                          )}
+                          {load.isPriorityListing && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                              <TrendingUp className="w-3 h-3 mr-1" />
+                              Featured
+                            </span>
+                          )}
                         </div>
+                      </div>
+                      
+                      <p className="text-gray-600 text-sm mb-4 line-clamp-3">{load.description || 'No description available'}</p>
+
+                      {/* Route */}
+                      <div className="space-y-2 mb-4">
+                        <div className="flex items-center text-sm text-gray-600">
+                          <MapPin className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" />
+                          <span className="font-medium">From:</span>
+                          <span className="ml-1 truncate">{load.pickupLocation || 'N/A'}</span>
+                        </div>
+                        <div className="flex items-center text-sm text-gray-600">
+                          <MapPin className="w-4 h-4 mr-2 text-red-500 flex-shrink-0" />
+                          <span className="font-medium">To:</span>
+                          <span className="ml-1 truncate">{load.deliveryLocation || 'N/A'}</span>
+                        </div>
+                      </div>
+
+                      {/* Details */}
+                      <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+                        <div className="flex items-center text-gray-600">
+                          <Weight className="w-4 h-4 mr-2 flex-shrink-0" />
+                          <span>{load.weight || 0} kg</span>
+                        </div>
+                        <div className="flex items-center text-green-600 font-medium">
+                          <DollarSign className="w-4 h-4 mr-1 flex-shrink-0" />
+                          <span>{formatCurrency(load.budget)}</span>
+                        </div>
+                      </div>
+
+                      {/* Cargo and Vehicle Type */}
+                      <div className="grid grid-cols-2 gap-4 mb-4 text-xs">
+                        <div className="flex items-center text-gray-500">
+                          <Package className="w-3 h-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{getCargoTypeLabel(load.cargoType)}</span>
+                        </div>
+                        <div className="flex items-center text-gray-500">
+                          <Truck className="w-3 h-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{getVehicleTypeLabel(load.vehicleType)}</span>
+                        </div>
+                      </div>
+
+                      {/* Posted info */}
+                      <div className="text-xs text-gray-500 mb-4">
+                        <div className="flex items-center justify-between">
+                          <span>By {load.cargoOwnerName || load.postedBy?.name || 'Anonymous'}</span>
+                          <span>{formatDate(load.createdAt)}</span>
+                        </div>
+                        {load.bidCount > 0 && (
+                          <div className="flex items-center mt-1">
+                            <Eye className="w-3 h-3 mr-1" />
+                            <span>{load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex space-x-2 mb-4">
+                        <button 
+                          onClick={() => handleViewDetails(load)}
+                          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+                        >
+                          <Eye className="w-4 h-4 mr-1 inline" />
+                          Details
+                        </button>
+                        {!bidState.showBidForm && (
+                          <button 
+                            onClick={() => handleBidClick(load)}
+                            className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                          >
+                            <Plus className="w-4 h-4 mr-1 inline" />
+                            {isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid'}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Bid Form */}
+                      {bidState.showBidForm && (
+                        <BidForm 
+                          load={load}
+                          onBidSubmit={(bidData) => handleBidFormSubmit(load._id, bidData)}
+                          onCancel={() => handleBidCancel(load._id)}
+                          submitting={bidState.submitting}
+                        />
                       )}
                     </div>
-
-                    {/* Actions */}
-                    <div className="flex space-x-2">
-                      <button 
-                        onClick={() => handleViewDetails(load)}
-                        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
-                      >
-                        View Details
-                      </button>
-                      <button 
-                        onClick={() => handleBidClick(load)}
-                        className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                      >
-                        {isUserAuthenticated ? 'Place Bid' : 'Login to Bid'}
-                      </button>
-                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Pagination */}
@@ -918,9 +1459,8 @@ const LoadSearch = () => {
                     <div className="flex items-center">
                       <User className="w-4 h-4 mr-2 text-gray-400" />
                       <span className="text-gray-900">
-  {selectedLoad.cargoOwnerName || selectedLoad.postedBy?.name || 'Anonymous'}
-</span>
-
+                        {selectedLoad.cargoOwnerName || selectedLoad.postedBy?.name || 'Anonymous'}
+                      </span>
                       {selectedLoad.postedBy.isVerified && (
                         <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           Verified
@@ -991,7 +1531,7 @@ const LoadSearch = () => {
                 }}
                 className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
               >
-                {isUserAuthenticated ? 'Place Bid' : 'Login to Bid'}
+                {isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid'}
               </button>
             </div>
           </div>
