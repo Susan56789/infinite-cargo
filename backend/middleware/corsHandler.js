@@ -11,27 +11,27 @@ const allowedOrigins = [
 const corsHandler = (req, res, next) => {
   const origin = req.headers.origin;
 
-  // Only set allow-origin if it matches allowed list
+  // Allow only if matching allowed list
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
 
-  // Required if you want to accept cookies / auth headers
+  // Enable credentials if needed
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-  // Allowed methods
+  // Methods allowed
   res.setHeader(
     'Access-Control-Allow-Methods',
-    'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+    'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS'
   );
 
-  // Allowed headers from client
+  // Important: allow any header your client might send
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-auth-token'
+    'Content-Type, Authorization, X-Auth-Token, x-auth-token, Accept, Origin'
   );
 
-  // If preflight request, respond immediately
+  // Handle OPTIONS preflight
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
