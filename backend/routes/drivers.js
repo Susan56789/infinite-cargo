@@ -8,6 +8,8 @@ const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
 
 
+router.use(corsHandler);
+
 // Rate limiting
 const driverLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -72,7 +74,7 @@ const profileValidation = [
 // @route   GET /api/drivers
 // @desc    Get all drivers with filtering
 // @access  Public
-router.get('/', corsHandler, [
+router.get('/',  [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('location').optional().trim(),
@@ -194,7 +196,7 @@ router.get('/', corsHandler, [
 // @route   GET /api/drivers/nearby
 // @desc    Get nearby drivers based on coordinates
 // @access  Public
-router.get('/nearby/search', corsHandler, [
+router.get('/nearby/search',  [
   query('latitude').isFloat({ min: -90, max: 90 }).withMessage('Valid latitude required'),
   query('longitude').isFloat({ min: -180, max: 180 }).withMessage('Valid longitude required'),
   query('radius').optional().isFloat({ min: 1, max: 1000 }).withMessage('Radius must be between 1 and 1000 km'),
@@ -322,7 +324,7 @@ router.get('/nearby/search', corsHandler, [
 // @route   GET /api/drivers/:id
 // @desc    Get single driver by ID
 // @access  Public
-router.get('/:id', corsHandler, async (req, res) => {
+router.get('/:id',  async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -405,7 +407,7 @@ router.get('/:id', corsHandler, async (req, res) => {
 // @route   POST /api/drivers/contact/:id
 // @desc    Send contact request to driver
 // @access  Private (Cargo owners only)
-router.post('/contact/:id', corsHandler, auth, contactLimiter, [
+router.post('/contact/:id',  auth, contactLimiter, [
   body('message')
     .optional()
     .isLength({ max: 500 })
@@ -548,7 +550,7 @@ router.post('/contact/:id', corsHandler, auth, contactLimiter, [
 // @route   GET /api/drivers/contact-requests/received
 // @desc    Get contact requests received by driver
 // @access  Private (Driver only)
-router.get('/contact-requests/received', corsHandler, auth, [
+router.get('/contact-requests/received',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 50 }),
   query('status').optional().isIn(['sent', 'read', 'responded'])
@@ -618,7 +620,7 @@ router.get('/contact-requests/received', corsHandler, auth, [
 // @route   PUT /api/drivers/profile
 // @desc    Update driver profile
 // @access  Private (Driver only)
-router.put('/profile', corsHandler, auth, driverLimiter, profileValidation, async (req, res) => {
+router.put('/profile',  auth, driverLimiter, profileValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -694,7 +696,7 @@ router.put('/profile', corsHandler, auth, driverLimiter, profileValidation, asyn
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
 // @access  Private (Driver only)
-router.post('/availability', corsHandler, auth, [
+router.post('/availability',  auth, [
   body('isAvailable').isBoolean().withMessage('isAvailable must be a boolean')
 ], async (req, res) => {
   try {
@@ -762,7 +764,7 @@ router.post('/availability', corsHandler, auth, [
 // @route   POST /api/drivers/location
 // @desc    Update driver location
 // @access  Private (Driver only)
-router.post('/location', corsHandler, auth, [
+router.post('/location',  auth, [
   body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Valid latitude required'),
   body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Valid longitude required')
 ], async (req, res) => {
@@ -831,7 +833,7 @@ router.post('/location', corsHandler, auth, [
 // @route   GET /api/drivers/:id/bookings
 // @desc    Get driver's bookings
 // @access  Private (Driver only for own bookings, or cargo owner)
-router.get('/:id/bookings', corsHandler, auth, [
+router.get('/:id/bookings',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['pending', 'accepted', 'in_progress', 'completed', 'cancelled'])
@@ -915,7 +917,7 @@ router.get('/:id/bookings', corsHandler, auth, [
 // @route   GET /api/drivers/stats
 // @desc    Get driver statistics (own stats only)
 // @access  Private (Driver only)
-router.get('/stats', corsHandler, auth, async (req, res) => {
+router.get('/stats',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'driver') {
       return res.status(403).json({
@@ -996,7 +998,7 @@ router.get('/stats', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/drivers/contact-requests/:id/status
 // @desc    Update contact request status (mark as read/responded)
 // @access  Private (Driver only)
-router.put('/contact-requests/:id/status', corsHandler, auth, [
+router.put('/contact-requests/:id/status',  auth, [
   body('status').isIn(['read', 'responded']).withMessage('Status must be read or responded'),
   body('response').optional().isLength({ max: 1000 }).withMessage('Response cannot exceed 1000 characters')
 ], async (req, res) => {
@@ -1079,7 +1081,7 @@ router.put('/contact-requests/:id/status', corsHandler, auth, [
 // @route   GET /api/drivers/search
 // @desc    Search drivers with advanced filters
 // @access  Public
-router.get('/search', corsHandler, [
+router.get('/search',  [
   query('q').optional().trim().isLength({ min: 2, max: 100 }).withMessage('Search query must be 2-100 characters'),
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 50 }),

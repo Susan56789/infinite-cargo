@@ -7,6 +7,8 @@ const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 // Rate limiting
 const truckLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -71,7 +73,7 @@ const vehicleValidation = [
 // @route   POST /api/trucks
 // @desc    Register a new vehicle
 // @access  Private (Driver only)
-router.post('/', corsHandler, auth, truckLimiter, vehicleValidation, async (req, res) => {
+router.post('/',  auth, truckLimiter, vehicleValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -213,7 +215,7 @@ router.post('/', corsHandler, auth, truckLimiter, vehicleValidation, async (req,
 // @route   GET /api/trucks
 // @desc    Get vehicles (driver gets own vehicles, public can search available)
 // @access  Public/Private
-router.get('/', corsHandler, [
+router.get('/',  [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('vehicleType').optional().isIn([
@@ -426,7 +428,7 @@ router.get('/', corsHandler, [
 // @route   GET /api/trucks/:id
 // @desc    Get single vehicle by ID
 // @access  Public/Private
-router.get('/:id', corsHandler, async (req, res) => {
+router.get('/:id',  async (req, res) => {
   try {
     const { id } = req.params;
 

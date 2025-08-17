@@ -8,6 +8,8 @@ const auth = require('../middleware/auth');
 
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 // Notification helper functions
 const createNotification = async (notificationData) => {
   try {
@@ -137,7 +139,7 @@ const getNotificationTemplate = (type, data) => {
 // @route   GET /api/notifications
 // @desc    Get user notifications
 // @access  Private
-router.get('/', corsHandler, auth, [
+router.get('/',  auth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
   query('unread').optional().isBoolean().withMessage('Unread must be boolean')
@@ -250,7 +252,7 @@ router.get('/', corsHandler, auth, [
 // @route   PUT /api/notifications/:id/read
 // @desc    Mark notification as read
 // @access  Private
-router.put('/:id/read', corsHandler, auth, async (req, res) => {
+router.put('/:id/read',  auth, async (req, res) => {
   try {
     // For now, just return success
     // When you implement real notifications, update the notification in database
@@ -276,7 +278,7 @@ router.put('/:id/read', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/notifications/read-all
 // @desc    Mark all notifications as read
 // @access  Private
-router.put('/read-all', corsHandler, auth, async (req, res) => {
+router.put('/read-all',  auth, async (req, res) => {
   try {
     // For now, just return success
     // When you implement real notifications, update all user notifications in database
@@ -301,7 +303,7 @@ router.put('/read-all', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/notifications/mark-all-read
 // @desc    Mark all notifications as read
 // @access  Private
-router.put('/mark-all-read', corsHandler, auth, async (req, res) => {
+router.put('/mark-all-read',  auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
@@ -339,7 +341,7 @@ router.put('/mark-all-read', corsHandler, auth, async (req, res) => {
 // @route   DELETE /api/notifications/:id
 // @desc    Delete a notification
 // @access  Private
-router.delete('/:id', corsHandler, auth, async (req, res) => {
+router.delete('/:id',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -384,7 +386,7 @@ router.delete('/:id', corsHandler, auth, async (req, res) => {
 // @route   POST /api/notifications/send
 // @desc    Send notification to user (admin only)
 // @access  Private (Admin only)
-router.post('/send', corsHandler, auth, [
+router.post('/send',  auth, [
   body('userId').notEmpty().isMongoId().withMessage('Valid user ID is required'),
   body('userType').isIn(['driver', 'cargo_owner', 'admin']).withMessage('Valid user type is required'),
   body('type').notEmpty().withMessage('Notification type is required'),
@@ -466,7 +468,7 @@ router.post('/send', corsHandler, auth, [
 // @route   POST /api/notifications/broadcast
 // @desc    Send notification to multiple users (admin only)
 // @access  Private (Admin only)
-router.post('/broadcast', corsHandler, auth, [
+router.post('/broadcast',  auth, [
   body('userType').optional().isIn(['driver', 'cargo_owner', 'all']).withMessage('Invalid user type'),
   body('userIds').optional().isArray().withMessage('User IDs must be an array'),
   body('type').notEmpty().withMessage('Notification type is required'),
@@ -578,7 +580,7 @@ router.post('/broadcast', corsHandler, auth, [
 // @route   GET /api/notifications/summary
 // @desc    Get notification summary for current user
 // @access  Private
-router.get('/summary', corsHandler, auth, async (req, res) => {
+router.get('/summary',  auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;

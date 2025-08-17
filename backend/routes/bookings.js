@@ -7,6 +7,8 @@ const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 
 // Rate limiting
 const bookingLimiter = rateLimit({
@@ -48,7 +50,7 @@ const bookingValidation = [
 // @route   POST /api/bookings
 // @desc    Create a new booking
 // @access  Private
-router.post('/', corsHandler, auth, bookingLimiter, bookingValidation, async (req, res) => {
+router.post('/',  auth, bookingLimiter, bookingValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -247,7 +249,7 @@ router.post('/', corsHandler, auth, bookingLimiter, bookingValidation, async (re
 // @route   GET /api/bookings
 // @desc    Get bookings for current user
 // @access  Private
-router.get('/', corsHandler, auth, [
+router.get('/',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['pending', 'accepted', 'in_progress', 'completed', 'cancelled', 'rejected'])
@@ -324,7 +326,7 @@ router.get('/', corsHandler, auth, [
 // @route   GET /api/bookings/:id
 // @desc    Get single booking by ID
 // @access  Private (Only participants)
-router.get('/:id', corsHandler, auth, async (req, res) => {
+router.get('/:id',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -381,7 +383,7 @@ router.get('/:id', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/bookings/:id/status
 // @desc    Update booking status
 // @access  Private (Only participants)
-router.put('/:id/status', corsHandler, auth, [
+router.put('/:id/status',  auth, [
   body('status').isIn(['accepted', 'rejected', 'cancelled', 'in_progress', 'completed']).withMessage('Invalid status'),
   body('notes').optional().isLength({ max: 1000 }).withMessage('Notes cannot exceed 1000 characters')
 ], async (req, res) => {
@@ -645,7 +647,7 @@ router.put('/:id/status', corsHandler, auth, [
 // @route   POST /api/bookings/:id/rate
 // @desc    Rate and review a completed booking
 // @access  Private (Only participants of completed booking)
-router.post('/:id/rate', corsHandler, auth, [
+router.post('/:id/rate',  auth, [
   body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
   body('review').optional().isLength({ max: 1000 }).withMessage('Review cannot exceed 1000 characters')
 ], async (req, res) => {
@@ -777,7 +779,7 @@ router.post('/:id/rate', corsHandler, auth, [
 // @route   GET /api/bookings/statistics/summary
 // @desc    Get booking statistics for current user
 // @access  Private
-router.get('/statistics/summary', corsHandler, auth, async (req, res) => {
+router.get('/statistics/summary',  auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;

@@ -9,6 +9,8 @@ const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 // Rate limiting for registration and login
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -141,7 +143,7 @@ const sanitizeForLog = (data) => {
 // @route   POST /api/users/register
 // @desc    Register a new user with enhanced validation and auto Basic subscription for cargo owners
 // @access  Public
-router.post('/register', corsHandler, authLimiter, registrationValidation, async (req, res) => {
+router.post('/register',  authLimiter, registrationValidation, async (req, res) => {
   const startTime = Date.now();
   let session = null;
   
@@ -582,7 +584,7 @@ router.post('/register', corsHandler, authLimiter, registrationValidation, async
 });
 
 // Enhanced login endpoint with better security
-router.post('/login', corsHandler, authLimiter, [
+router.post('/login',  authLimiter, [
   body('email')
     .trim()
     .normalizeEmail()
@@ -795,7 +797,7 @@ router.post('/login', corsHandler, authLimiter, [
 });
 
 // Enhanced current user endpoint with subscription check
-router.get('/me', corsHandler, auth, async (req, res) => {
+router.get('/me',  auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;

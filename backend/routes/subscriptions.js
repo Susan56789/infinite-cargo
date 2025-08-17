@@ -8,6 +8,8 @@ const auth = require('../middleware/auth');
 const {adminAuth} = require('../middleware/adminAuth');
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 
 // Rate limiting
 const subscriptionLimiter = rateLimit({
@@ -46,7 +48,7 @@ const SUBSCRIPTION_PLANS = {
 // @route   GET /api/subscriptions/status
 // @desc    Get current user's subscription status (simplified)
 // @access  Private (Cargo owners only)
-router.get('/status', corsHandler, auth, async (req, res) => {
+router.get('/status',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
@@ -162,7 +164,7 @@ router.get('/status', corsHandler, auth, async (req, res) => {
 // @route   GET /api/subscriptions/plans
 // @desc    Get available subscription plans
 // @access  Private
-router.get('/plans', corsHandler, auth, async (req, res) => {
+router.get('/plans',  auth, async (req, res) => {
   try {
     const plans = {
       basic: {
@@ -238,7 +240,7 @@ router.get('/plans', corsHandler, auth, async (req, res) => {
 // @route   POST /api/subscriptions/subscribe
 // @desc    Create a new subscription request with enhanced payment details
 // @access  Private (Cargo owners only)
-router.post('/subscribe', corsHandler, auth, subscriptionLimiter, [
+router.post('/subscribe',  auth, subscriptionLimiter, [
   body('planId')
     .notEmpty()
     .withMessage('Plan ID is required')
@@ -573,7 +575,7 @@ router.post('/subscribe', corsHandler, auth, subscriptionLimiter, [
 // @route   GET /api/subscriptions/my-subscription
 // @desc    Get current user's subscription with enhanced details
 // @access  Private (Cargo owners only)
-router.get('/my-subscription', corsHandler, auth, async (req, res) => {
+router.get('/my-subscription',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
@@ -703,7 +705,7 @@ router.get('/my-subscription', corsHandler, auth, async (req, res) => {
 // @route   GET /api/subscriptions/admin/pending
 // @desc    Get pending subscription requests with enhanced details (Admin only)
 // @access  Private (Admin only)
-router.get('/admin/pending', corsHandler, adminAuth, [
+router.get('/admin/pending',  adminAuth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['pending', 'active', 'expired', 'cancelled', 'rejected']),
@@ -864,7 +866,7 @@ router.get('/admin/pending', corsHandler, adminAuth, [
 // @route   POST /api/subscriptions/admin/:id/approve
 // @desc    Approve a subscription request with enhanced tracking (Admin only)
 // @access  Private (Admin only)
-router.post('/admin/:id/approve', corsHandler, adminAuth, [
+router.post('/admin/:id/approve',  adminAuth, [
   body('notes').optional().isLength({ max: 500 }),
   body('paymentVerified').isBoolean(),
   body('verificationDetails').optional().isObject()
@@ -1061,7 +1063,7 @@ router.post('/admin/:id/approve', corsHandler, adminAuth, [
 // @route   POST /api/subscriptions/admin/:id/reject
 // @desc    Reject a subscription request with detailed reasons (Admin only)
 // @access  Private (Admin only)
-router.post('/admin/:id/reject', corsHandler, adminAuth, [
+router.post('/admin/:id/reject',  adminAuth, [
   body('reason').notEmpty().withMessage('Rejection reason is required'),
   body('reasonCategory').isIn([
     'payment_failed', 'invalid_details', 'fraud_suspected', 'other'
@@ -1241,7 +1243,7 @@ router.post('/admin/:id/reject', corsHandler, adminAuth, [
 // @route   GET /api/subscriptions/admin/analytics
 // @desc    Get comprehensive subscription analytics (Admin only)
 // @access  Private (Admin only)
-router.get('/admin/analytics', corsHandler, adminAuth, async (req, res) => {
+router.get('/admin/analytics',  adminAuth, async (req, res) => {
   try {
     if (!req.admin.permissions.viewAnalytics) {
       return res.status(403).json({

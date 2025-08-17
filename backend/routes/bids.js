@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const Bid = require('../models/bid');
 const Load = require('../models/load');
 const auth = require('../middleware/auth');
+const corsHandler = require('../middleware/corsHandler');
+
+router.use(corsHandler);
 
 // Rate limiting for bid operations
 const bidLimiter = rateLimit({
@@ -21,30 +24,7 @@ const bidLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Enhanced CORS handler
-const corsHandler = (req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
-  ];
-  
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-auth-token');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-};
+
 
 // Bid validation middleware
 const bidValidation = [
@@ -98,7 +78,7 @@ const bidValidation = [
 // @route   POST /api/bids
 // @desc    Create a new bid on a load
 // @access  Private (Drivers only)
-router.post('/', corsHandler, auth, bidLimiter, bidValidation, async (req, res) => {
+router.post('/',  auth, bidLimiter, bidValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -242,7 +222,7 @@ router.post('/', corsHandler, auth, bidLimiter, bidValidation, async (req, res) 
 // @route   GET /api/bids
 // @desc    Get bids for current user (driver gets their bids, cargo owner gets bids on their loads)
 // @access  Private
-router.get('/', corsHandler, auth, [
+router.get('/',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn([
@@ -334,7 +314,7 @@ router.get('/', corsHandler, auth, [
 // @route   GET /api/bids/:id
 // @desc    Get single bid by ID
 // @access  Private (Bid owner, load owner, or admin)
-router.get('/:id', corsHandler, auth, async (req, res) => {
+router.get('/:id',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -396,7 +376,7 @@ router.get('/:id', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/bids/:id
 // @desc    Update bid (driver can update their own bid if still in submitted/viewed status)
 // @access  Private (Bid owner only)
-router.put('/:id', corsHandler, auth, bidValidation, async (req, res) => {
+router.put('/:id',  auth, bidValidation, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -487,7 +467,7 @@ router.put('/:id', corsHandler, auth, bidValidation, async (req, res) => {
 // @route   POST /api/bids/:id/withdraw
 // @desc    Withdraw bid
 // @access  Private (Bid owner only)
-router.post('/:id/withdraw', corsHandler, auth, async (req, res) => {
+router.post('/:id/withdraw',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -548,7 +528,7 @@ router.post('/:id/withdraw', corsHandler, auth, async (req, res) => {
 // @route   POST /api/bids/:id/accept
 // @desc    Accept bid (cargo owner only)
 // @access  Private (Cargo owner only)
-router.post('/:id/accept', corsHandler, auth, async (req, res) => {
+router.post('/:id/accept',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -651,7 +631,7 @@ router.post('/:id/accept', corsHandler, auth, async (req, res) => {
 // @route   POST /api/bids/:id/reject
 // @desc    Reject bid (cargo owner only)
 // @access  Private (Cargo owner only)
-router.post('/:id/reject', corsHandler, auth, [
+router.post('/:id/reject',  auth, [
   body('reason').optional().isLength({ max: 500 }).withMessage('Reason cannot exceed 500 characters')
 ], async (req, res) => {
   try {
@@ -727,7 +707,7 @@ router.post('/:id/reject', corsHandler, auth, [
 // @route   GET /api/bids/load/:loadId
 // @desc    Get all bids for a specific load
 // @access  Private (Load owner only)
-router.get('/load/:loadId', corsHandler, auth, async (req, res) => {
+router.get('/load/:loadId',  auth, async (req, res) => {
   try {
     const { loadId } = req.params;
 
@@ -787,7 +767,7 @@ router.get('/load/:loadId', corsHandler, auth, async (req, res) => {
 // @route   POST /api/bids/:id/shortlist
 // @desc    Shortlist a bid (cargo owner only)
 // @access  Private (Cargo owner only)
-router.post('/:id/shortlist', corsHandler, auth, async (req, res) => {
+router.post('/:id/shortlist',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -854,7 +834,7 @@ router.post('/:id/shortlist', corsHandler, auth, async (req, res) => {
 // @route   GET /api/bids/statistics/summary
 // @desc    Get bid statistics for current user
 // @access  Private
-router.get('/statistics/summary', corsHandler, auth, async (req, res) => {
+router.get('/statistics/summary',  auth, async (req, res) => {
   try {
     let query = {};
     
@@ -942,7 +922,7 @@ router.get('/statistics/summary', corsHandler, auth, async (req, res) => {
 // @route   POST /api/bids/:id/counter-offer
 // @desc    Make a counter offer on a bid (cargo owner only)
 // @access  Private (Cargo owner only)
-router.post('/:id/counter-offer', corsHandler, auth, [
+router.post('/:id/counter-offer',  auth, [
   body('counterAmount').isFloat({ min: 1 }).withMessage('Counter amount must be at least 1 KES'),
   body('message').optional().isLength({ max: 1000 }).withMessage('Message cannot exceed 1000 characters'),
   body('proposedPickupDate').optional().isISO8601().toDate(),
@@ -1038,7 +1018,7 @@ router.post('/:id/counter-offer', corsHandler, auth, [
 // @route   POST /api/bids/:id/accept-counter
 // @desc    Accept counter offer (driver only)
 // @access  Private (Bid owner only)
-router.post('/:id/accept-counter', corsHandler, auth, async (req, res) => {
+router.post('/:id/accept-counter',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1134,7 +1114,7 @@ router.post('/:id/accept-counter', corsHandler, auth, async (req, res) => {
 // @route   POST /api/bids/:id/decline-counter
 // @desc    Decline counter offer (driver only)
 // @access  Private (Bid owner only)
-router.post('/:id/decline-counter', corsHandler, auth, [
+router.post('/:id/decline-counter',  auth, [
   body('reason').optional().isLength({ max: 500 }).withMessage('Reason cannot exceed 500 characters')
 ], async (req, res) => {
   try {

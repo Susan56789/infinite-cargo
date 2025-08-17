@@ -7,6 +7,8 @@ const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
 
+router.use(corsHandler);
+
 
 // Rate limiting
 const cargoOwnerLimiter = rateLimit({
@@ -68,7 +70,7 @@ const profileValidation = [
 // @route   GET /api/cargo-owners/dashboard
 // @desc    Get cargo owner dashboard data
 // @access  Private (Cargo owners only)
-router.get('/dashboard', corsHandler, auth, async (req, res) => {
+router.get('/dashboard',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
@@ -262,7 +264,7 @@ router.get('/dashboard', corsHandler, auth, async (req, res) => {
 // @route   GET /api/cargo-owners/profile
 // @desc    Get cargo owner profile
 // @access  Private (Cargo owners only)
-router.get('/profile', corsHandler, auth, async (req, res) => {
+router.get('/profile',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
@@ -313,7 +315,7 @@ router.get('/profile', corsHandler, auth, async (req, res) => {
 // @route   PUT /api/cargo-owners/profile
 // @desc    Update cargo owner profile
 // @access  Private (Cargo owners only)
-router.put('/profile', corsHandler, auth, cargoOwnerLimiter, profileValidation, async (req, res) => {
+router.put('/profile',  auth, cargoOwnerLimiter, profileValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -412,7 +414,7 @@ router.put('/profile', corsHandler, auth, cargoOwnerLimiter, profileValidation, 
 // @route   GET /api/cargo-owners/loads/:id/bids
 // @desc    Get bids for a specific load
 // @access  Private (Cargo owner - load owner only)
-router.get('/loads/:id/bids', corsHandler, auth, [
+router.get('/loads/:id/bids',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['submitted', 'viewed', 'under_review', 'accepted', 'rejected', 'withdrawn'])
@@ -578,7 +580,7 @@ router.get('/loads/:id/bids', corsHandler, auth, [
 // @route   POST /api/cargo-owners/loads/:loadId/bids/:bidId/accept
 // @desc    Accept a bid for a load
 // @access  Private (Cargo owner - load owner only)
-router.post('/loads/:loadId/bids/:bidId/accept', corsHandler, auth, cargoOwnerLimiter, [
+router.post('/loads/:loadId/bids/:bidId/accept',  auth, cargoOwnerLimiter, [
   body('notes').optional().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
 ], async (req, res) => {
   try {
@@ -762,7 +764,7 @@ router.post('/loads/:loadId/bids/:bidId/accept', corsHandler, auth, cargoOwnerLi
 // @route   POST /api/cargo-owners/loads/:loadId/bids/:bidId/reject
 // @desc    Reject a bid for a load
 // @access  Private (Cargo owner - load owner only)
-router.post('/loads/:loadId/bids/:bidId/reject', corsHandler, auth, cargoOwnerLimiter, [
+router.post('/loads/:loadId/bids/:bidId/reject',  auth, cargoOwnerLimiter, [
   body('reason').notEmpty().withMessage('Rejection reason is required'),
   body('notes').optional().isLength({ max: 500 }).withMessage('Notes cannot exceed 500 characters')
 ], async (req, res) => {
@@ -869,7 +871,7 @@ router.post('/loads/:loadId/bids/:bidId/reject', corsHandler, auth, cargoOwnerLi
 // @route   GET /api/cargo-owners/analytics
 // @desc    Get detailed analytics for cargo owner
 // @access  Private (Cargo owners only)
-router.get('/analytics', corsHandler, auth, [
+router.get('/analytics',  auth, [
   query('period').optional().isIn(['week', 'month', 'quarter', 'year']),
   query('startDate').optional().isISO8601(),
   query('endDate').optional().isISO8601()
@@ -1145,7 +1147,7 @@ router.get('/analytics', corsHandler, auth, [
 // @route   GET /api/cargo-owners/notifications
 // @desc    Get notifications for cargo owner
 // @access  Private (Cargo owners only)
-router.get('/notifications', corsHandler, auth, [
+router.get('/notifications',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('unreadOnly').optional().isBoolean()
@@ -1218,7 +1220,7 @@ router.get('/notifications', corsHandler, auth, [
 // @route   PUT /api/cargo-owners/notifications/:id/read
 // @desc    Mark notification as read
 // @access  Private (Cargo owners only)
-router.put('/notifications/:id/read', corsHandler, auth, async (req, res) => {
+router.put('/notifications/:id/read',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1279,7 +1281,7 @@ router.put('/notifications/:id/read', corsHandler, auth, async (req, res) => {
 // @route   POST /api/cargo-owners/loads/:id/boost
 // @desc    Boost a load for better visibility
 // @access  Private (Cargo owners only)
-router.post('/loads/:id/boost', corsHandler, auth, cargoOwnerLimiter, [
+router.post('/loads/:id/boost',  auth, cargoOwnerLimiter, [
   body('boostType').isIn(['standard', 'premium', 'urgent']).withMessage('Invalid boost type'),
   body('duration').optional().isInt({ min: 1, max: 30 }).withMessage('Duration must be between 1 and 30 days')
 ], async (req, res) => {

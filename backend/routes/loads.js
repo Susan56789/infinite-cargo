@@ -3,11 +3,12 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
-const rateLimit = require('express-rate-limit');
 const Load = require('../models/load');
 const Bid = require('../models/bid');
 const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
+
+router.use(corsHandler);
 
 
 const optionalAuth = (req, res, next) => {
@@ -102,7 +103,7 @@ function deg2rad(deg) {
 // @route   GET /api/loads/user/my-loads
 // @desc    Get cargo owner's loads with detailed information
 // @access  Private (Cargo owners only)
-router.get('/user/my-loads', corsHandler, auth, [
+router.get('/user/my-loads',  auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['posted', 'receiving_bids', 'driver_assigned', 'in_transit', 'delivered', 'cancelled']),
@@ -282,7 +283,7 @@ router.get('/user/my-loads', corsHandler, auth, [
 // @route   GET /api/loads/subscription-status
 // @desc    Get current user's subscription status
 // @access  Private
-router.get('/subscription-status', corsHandler, auth, async (req, res) => {
+router.get('/subscription-status',  auth, async (req, res) => {
   try {
     // Get user with subscription details
     const User = require('../models/user');
@@ -384,7 +385,7 @@ router.get('/subscription-status', corsHandler, auth, async (req, res) => {
 // @route   GET /api/loads/analytics/dashboard
 // @desc    Get dashboard analytics for current user
 // @access  Private (Cargo Owners only)
-router.get('/analytics/dashboard', corsHandler, auth, async (req, res) => {
+router.get('/analytics/dashboard',  auth, async (req, res) => {
   try {
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
@@ -569,7 +570,7 @@ router.get('/analytics/dashboard', corsHandler, auth, async (req, res) => {
 // @route   POST /api/loads
 // @desc    Create a new load (CARGO OWNER AUTHENTICATION REQUIRED)
 // @access  Private (Cargo Owners only)
-router.post('/', corsHandler, auth, [
+router.post('/',  auth, [
   body('title').trim().notEmpty().withMessage('Title is required').isLength({ min: 5, max: 100 }),
   body('description').trim().notEmpty().withMessage('Description is required').isLength({ min: 10, max: 1000 }),
   body('pickupLocation').trim().notEmpty().withMessage('Pickup location is required'),
@@ -631,7 +632,7 @@ router.post('/', corsHandler, auth, [
 // @route   GET /api/loads
 // @desc    Get loads with search, filter, and pagination (PUBLIC ACCESS)
 // @access  Public (with optional authentication)
-router.get('/', corsHandler, optionalAuth, [
+router.get('/',  optionalAuth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
   query('search').optional().isLength({ max: 100 }).withMessage('Search query too long'),
@@ -922,7 +923,7 @@ router.get('/', corsHandler, optionalAuth, [
 // @route   PUT /api/loads/:id
 // @desc    Update a load (AUTHENTICATION REQUIRED - Load owner only)
 // @access  Private (Load owner or admin)
-router.put('/:id', corsHandler, auth, [
+router.put('/:id',  auth, [
   body('title').optional().trim().isLength({ min: 5, max: 100 }).withMessage('Title must be 5-100 characters'),
   body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
   body('pickupLocation').optional().trim().notEmpty().withMessage('Pickup location cannot be empty'),
@@ -1094,7 +1095,7 @@ router.put('/:id', corsHandler, auth, [
 // @route   DELETE /api/loads/:id
 // @desc    Delete a load (AUTHENTICATION REQUIRED - Load owner only)
 // @access  Private (Load owner or admin)
-router.delete('/:id', corsHandler, auth, async (req, res) => {
+router.delete('/:id',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1165,7 +1166,7 @@ router.delete('/:id', corsHandler, auth, async (req, res) => {
 // @route   GET /api/loads/:id
 // @desc    Get single load by ID (PUBLIC ACCESS with limited info)
 // @access  Public
-router.get('/:id', corsHandler, optionalAuth, async (req, res) => {
+router.get('/:id',  optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1338,7 +1339,7 @@ router.get('/:id', corsHandler, optionalAuth, async (req, res) => {
 // @route   PATCH /api/loads/:id/status
 // @desc    Update load status with business logic and validations
 // @access  Private (Load owner, assigned driver, or admin)
-router.patch('/:id/status', corsHandler, auth, [
+router.patch('/:id/status',  auth, [
   body('status')
     .isIn([
       'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 
@@ -1709,7 +1710,7 @@ router.patch('/:id/status', corsHandler, auth, [
 // @route   GET /api/loads/:userId/my-loads
 // @desc    Get all loads posted by a specific user (AUTHENTICATION REQUIRED)
 // @access  Private (User can only access their own loads, or admin)
-router.get('/:userId/my-loads', corsHandler, auth, [
+router.get('/:userId/my-loads',  auth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
   query('status').optional().isIn([
@@ -1851,7 +1852,7 @@ router.get('/:userId/my-loads', corsHandler, auth, [
 // @route   GET /api/loads/:id/status-history
 // @desc    Get status change history for a load
 // @access  Private (Load owner, assigned driver, or admin)
-router.get('/:id/status-history', corsHandler, auth, async (req, res) => {
+router.get('/:id/status-history',  auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1934,7 +1935,7 @@ router.get('/:id/status-history', corsHandler, auth, async (req, res) => {
 // @route   POST /api/loads/:id/bid
 // @desc    Place a bid on a load (DRIVER AUTHENTICATION REQUIRED)
 // @access  Private (Drivers only)
-router.post('/:id/bid', corsHandler, auth, [
+router.post('/:id/bid',  auth, [
   body('bidAmount')
     .isFloat({ min: 100 })
     .withMessage('Bid amount must be at least KES 100'),
