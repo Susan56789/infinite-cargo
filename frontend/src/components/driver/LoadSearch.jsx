@@ -152,19 +152,19 @@ const LoadSearch = () => {
     });
 
     const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-    console.log('Fetching loads:', url);
+    
 
     // Build headers
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      ...getAuthHeaders()   // Adds Authorization: Bearer token if exists
+      ...getAuthHeaders()   
     };
 
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      credentials: 'include' // only if your API set Allow-Credentials
+      credentials: 'include' 
     });
 
     if (!response.ok) {
@@ -178,6 +178,8 @@ const LoadSearch = () => {
     }
 
     const data = await response.json();
+
+    console.log('Fetched loads:', data);
 
     if (data.status !== 'success') {
       throw new Error(data.message || 'Unexpected server response.');

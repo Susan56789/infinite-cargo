@@ -595,24 +595,40 @@ router.post('/',  auth, [
       });
     }
 
+    // Get user details to extract company name
+    const User = require('../models/user');
+    const user = await User.findById(req.user.id).lean();
+    
+    // Determine cargo owner name with proper fallback logic
+    const cargoOwnerName = user?.cargoOwnerProfile?.companyName 
+      || user?.companyName 
+      || user?.name 
+      || 'Anonymous Cargo Owner';
+
     const loadData = {
-  ...req.body,
-  postedBy: req.user.id,
-  cargoOwnerName: req.user.cargoOwnerProfile?.companyName || req.user.companyName || req.user.name,
-  status: 'posted',
-  isActive: true,
-  biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-};
+      ...req.body,
+      postedBy: req.user.id,
+      cargoOwnerName: cargoOwnerName, // Store the resolved name
+      status: 'posted',
+      isActive: true,
+      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+    };
 
     const load = new Load(loadData);
     await load.save();
 
-    await load.populate('postedBy', 'name email phone location');
+    // Populate the load for response
+    await load.populate('postedBy', 'name email phone location cargoOwnerProfile.companyName companyName');
 
     res.status(201).json({
       status: 'success',
       message: 'Load created successfully',
-      data: { load }
+      data: { 
+        load: {
+          ...load.toObject(),
+          cargoOwnerName: cargoOwnerName // Ensure it's in the response
+        }
+      }
     });
 
   } catch (error) {
@@ -768,21 +784,108 @@ router.get('/',  optionalAuth, [
     if (sortBy !== 'createdAt') {
       sortOptions.createdAt = -1;
     }
+
     try {
-       // Get loads with cargo owner information
-    const loads = await Load.find(query)
-      .populate({
-        path: 'postedBy',
-        select: 'name companyName cargoOwnerProfile.companyName location rating isVerified',
-        options: { 
-          strictPopulate: false 
-        }
-      })
-      .sort(sortOptions)
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean()
-      .exec();
+      // Get loads with cargo owner information using aggregation for better control
+      const loadsPipeline = [
+        { $match: query },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'postedBy',
+            foreignField: '_id',
+            as: 'postedByUser'
+          }
+        },
+        {
+          $addFields: {
+            postedBy: { $arrayElemAt: ['$postedByUser', 0] }
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            cargoType: 1,
+            weight: 1,
+            pickupLocation: 1,
+            deliveryLocation: 1,
+            budget: 1,
+            status: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            isUrgent: 1,
+            isPriorityListing: 1,
+            isBoosted: 1,
+            boostLevel: 1,
+            vehicleType: 1,
+            pickupDate: 1,
+            deliveryDate: 1,
+            // Enhanced cargo owner name extraction
+            cargoOwnerName: {
+              $cond: {
+                if: { $ne: ['$postedBy', null] },
+                then: {
+                  $cond: {
+                    if: { $and: [
+                      { $ne: ['$postedBy.cargoOwnerProfile.companyName', null] },
+                      { $ne: ['$postedBy.cargoOwnerProfile.companyName', ''] }
+                    ]},
+                    then: '$postedBy.cargoOwnerProfile.companyName',
+                    else: {
+                      $cond: {
+                        if: { $and: [
+                          { $ne: ['$postedBy.companyName', null] },
+                          { $ne: ['$postedBy.companyName', ''] }
+                        ]},
+                        then: '$postedBy.companyName',
+                        else: {
+                          $cond: {
+                            if: { $and: [
+                              { $ne: ['$postedBy.name', null] },
+                              { $ne: ['$postedBy.name', ''] }
+                            ]},
+                            then: '$postedBy.name',
+                            else: 'Anonymous'
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                else: 'Anonymous'
+              }
+            },
+            // Clean postedBy object
+            postedBy: {
+              _id: '$postedBy._id',
+              name: '$postedBy.name',
+              companyName: {
+                $cond: {
+                  if: { $ne: ['$postedBy.cargoOwnerProfile.companyName', null] },
+                  then: '$postedBy.cargoOwnerProfile.companyName',
+                  else: {
+                    $cond: {
+                      if: { $ne: ['$postedBy.companyName', null] },
+                      then: '$postedBy.companyName',
+                      else: '$postedBy.name'
+                    }
+                  }
+                }
+              },
+              location: '$postedBy.location',
+              rating: { $ifNull: ['$postedBy.rating', 4.5] },
+              isVerified: { $ifNull: ['$postedBy.isVerified', false] }
+            }
+          }
+        },
+        { $sort: sortOptions },
+        { $skip: skip },
+        { $limit: parseInt(limit) }
+      ];
+
+      const loads = await Load.aggregate(loadsPipeline);
 
       // Get total count for pagination
       const totalLoads = await Load.countDocuments(query);
@@ -808,37 +911,42 @@ router.get('/',  optionalAuth, [
       }
 
       // Transform data for frontend with safe property access
-     // Transform data to include cargo owner name
-    const transformedLoads = loads.map(load => {
-      // Get cargo owner name from different possible sources
-      const cargoOwnerName = load.postedBy?.cargoOwnerProfile?.companyName 
-        || load.postedBy?.companyName 
-        || load.postedBy?.name 
-        || 'Anonymous';
-
-      return {
+      const transformedLoads = loads.map(load => ({
         _id: load._id,
         title: load.title || 'Untitled Load',
         description: load.description || '',
         cargoType: load.cargoType || 'other',
+        vehicleType: load.vehicleType || '',
         weight: load.weight || 0,
         pickupLocation: load.pickupLocation || '',
         deliveryLocation: load.deliveryLocation || '',
         budget: load.budget || 0,
         status: load.status,
         createdAt: load.createdAt,
+        updatedAt: load.updatedAt,
+        isUrgent: load.isUrgent || false,
+        isPriorityListing: load.isPriorityListing || false,
+        isBoosted: load.isBoosted || false,
+        boostLevel: load.boostLevel || 0,
+        pickupDate: load.pickupDate,
+        deliveryDate: load.deliveryDate,
         
-        // Cargo owner information
-        cargoOwnerName, 
-        postedBy: {
-          name: load.postedBy?.name || 'Anonymous',
-          companyName: cargoOwnerName,
-          location: load.postedBy?.location || '',
-          rating: load.postedBy?.rating || 4.5,
-          isVerified: load.postedBy?.isVerified || false
-        },
-         };
-    });
+        // Bid information
+        bidCount: bidCountMap[load._id.toString()] || 0,
+        
+        // Cargo owner information with fallback
+        cargoOwnerName: load.cargoOwnerName || 'Anonymous',
+        postedBy: load.postedBy || {
+          name: 'Anonymous',
+          companyName: 'Anonymous',
+          location: '',
+          rating: 4.5,
+          isVerified: false
+        }
+      }));
+
+      console.log('Sample transformed load:', transformedLoads[0]); // Debug log
+
       // Response
       res.json({
         status: 'success',
@@ -874,23 +982,94 @@ router.get('/',  optionalAuth, [
     } catch (dbError) {
       console.error('Database query error:', dbError);
       
-      // Handle specific database errors
-      if (dbError.name === 'MongoServerError' || dbError.name === 'MongoError') {
-        return res.status(500).json({
-          status: 'error',
-          message: 'Database query failed. Please try again.',
-          error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
-        });
-      }
+      // Fallback to simple query if aggregation fails
+      console.log('Aggregation failed, trying simple populate...');
+      
+      const loads = await Load.find(query)
+        .populate({
+          path: 'postedBy',
+          select: 'name companyName cargoOwnerProfile.companyName location rating isVerified',
+          options: { strictPopulate: false }
+        })
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean()
+        .exec();
 
-      if (dbError.name === 'CastError') {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Invalid query parameters provided'
-        });
-      }
+      const totalLoads = await Load.countDocuments(query);
+      const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-      throw dbError; // Re-throw to be caught by outer catch
+      const transformedLoads = loads.map(load => {
+        // Get cargo owner name from different possible sources
+        const cargoOwnerName = load.postedBy?.cargoOwnerProfile?.companyName 
+          || load.postedBy?.companyName 
+          || load.postedBy?.name 
+          || 'Anonymous';
+
+        return {
+          _id: load._id,
+          title: load.title || 'Untitled Load',
+          description: load.description || '',
+          cargoType: load.cargoType || 'other',
+          vehicleType: load.vehicleType || '',
+          weight: load.weight || 0,
+          pickupLocation: load.pickupLocation || '',
+          deliveryLocation: load.deliveryLocation || '',
+          budget: load.budget || 0,
+          status: load.status,
+          createdAt: load.createdAt,
+          updatedAt: load.updatedAt,
+          isUrgent: load.isUrgent || false,
+          isPriorityListing: load.isPriorityListing || false,
+          isBoosted: load.isBoosted || false,
+          boostLevel: load.boostLevel || 0,
+          pickupDate: load.pickupDate,
+          deliveryDate: load.deliveryDate,
+          bidCount: 0, // Will be updated if bid counting works
+          
+          // Cargo owner information
+          cargoOwnerName, 
+          postedBy: {
+            name: load.postedBy?.name || 'Anonymous',
+            companyName: cargoOwnerName,
+            location: load.postedBy?.location || '',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false
+          }
+        };
+      });
+
+      return res.json({
+        status: 'success',
+        data: {
+          loads: transformedLoads,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages,
+            totalLoads,
+            hasNextPage: parseInt(page) < totalPages,
+            hasPrevPage: parseInt(page) > 1,
+            limit: parseInt(limit)
+          },
+          filters: {
+            applied: {
+              search: search || '',
+              cargoType: cargoType || '',
+              vehicleType: vehicleType || '',
+              pickupLocation: pickupLocation || '',
+              deliveryLocation: deliveryLocation || '',
+              minBudget: minBudget || '',
+              maxBudget: maxBudget || '',
+              minWeight: minWeight || '',
+              maxWeight: maxWeight || '',
+              urgentOnly: urgentOnly || '',
+              sortBy,
+              sortOrder
+            }
+          }
+        }
+      });
     }
 
   } catch (error) {
