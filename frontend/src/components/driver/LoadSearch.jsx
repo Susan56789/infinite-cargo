@@ -130,140 +130,77 @@ const LoadSearch = () => {
   }, []);
 
   const fetchLoads = async (page = 1) => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      // Build query parameters
-      const params = new URLSearchParams();
-      params.append('page', page.toString());
-      params.append('limit', limit.toString());
-      
-      // Add search query
-      if (searchQuery?.trim()) {
-        params.append('search', searchQuery.trim());
-      }
-      
-      // Add filters (only non-empty values)
-      Object.entries(filters).forEach(([key, value]) => {
-        if (value && value.trim() !== '') {
-          params.append(key, value.toString());
-        }
-      });
+  try {
+    setLoading(true);
+    setError('');
 
-      // FIXED: Use the correct endpoint for public load search
-      const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-      console.log('Fetching loads from:', url);
+    // Build query parameters
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+    });
 
-      // FIXED: Improved headers handling
-      const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        // Add CORS headers if needed
-        'Access-Control-Allow-Origin': '*',
-      };
-
-      // Add auth headers if user is authenticated
-      const authHeaders = getAuthHeaders();
-      Object.assign(headers, authHeaders);
-
-      console.log('Request headers:', headers);
-
-      const response = await fetch(url, { 
-        method: 'GET',
-        headers,
-        // FIXED: Add credentials handling
-        credentials: 'include'
-      });
-      
-      console.log('Response status:', response.status);
-      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Response data:', data);
-        
-        if (data.status === 'success' && data.data) {
-          const loadsData = data.data.loads || [];
-          console.log('Loads received:', loadsData.length);
-          
-          setLoads(loadsData);
-          setCurrentPage(data.data.pagination?.currentPage || page);
-          setTotalPages(data.data.pagination?.totalPages || 1);
-          setTotalLoads(data.data.pagination?.totalLoads || 0);
-          
-        } else {
-          const errorMsg = data.message || 'Failed to fetch loads';
-          setError(errorMsg);
-          console.error('API returned error:', data);
-        }
-      } else {
-        let errorMessage = `Failed to load loads (${response.status})`;
-        
-        try {
-          const errorData = await response.json();
-          console.error('Server error response:', errorData);
-          
-          if (errorData.message) {
-            errorMessage = errorData.message;
-          }
-          
-          // FIXED: Handle specific server errors
-          if (response.status === 500) {
-            if (errorData.error && errorData.error.includes('Database')) {
-              errorMessage = 'Database connection error. Please try again later.';
-            } else if (errorData.error && errorData.error.includes('Authentication')) {
-              errorMessage = 'Authentication error. Please login again.';
-            } else {
-              errorMessage = 'Server error. Our team has been notified. Please try again later.';
-            }
-          } else if (response.status === 404) {
-            errorMessage = 'Service not available. Please try again later.';
-          } else if (response.status === 403) {
-            errorMessage = 'Access denied. Please check your permissions.';
-          } else if (response.status === 401) {
-            errorMessage = 'Authentication required. Please login.';
-            // Clear invalid auth
-            if (isUserAuthenticated) {
-              logout();
-              checkAuthStatus();
-            }
-          }
-        } catch (parseError) {
-          console.error('Error parsing error response:', parseError);
-          // Use default error message based on status code
-          if (response.status === 500) {
-            errorMessage = 'Internal server error. Please try again later.';
-          } else if (response.status === 404) {
-            errorMessage = 'Service not found. Please check the URL.';
-          } else if (response.status === 403) {
-            errorMessage = 'Access forbidden. Please check your permissions.';
-          }
-        }
-        
-        setError(errorMessage);
-      }
-    } catch (error) {
-      console.error('Fetch error:', error);
-      let errorMessage = 'Network error. Please check your connection and try again.';
-      
-      if (error.name === 'TypeError') {
-        if (error.message.includes('fetch')) {
-          errorMessage = 'Could not connect to server. Please check your internet connection.';
-        } else if (error.message.includes('NetworkError')) {
-          errorMessage = 'Network error. Please try again.';
-        }
-      } else if (error.name === 'AbortError') {
-        errorMessage = 'Request timeout. Please try again.';
-      } else if (error.message.includes('CORS')) {
-        errorMessage = 'Cross-origin request blocked. Please contact support.';
-      }
-      
-      setError(errorMessage);
-    } finally {
-      setLoading(false);
+    if (searchQuery?.trim()) {
+      params.append('search', searchQuery.trim());
     }
-  };
+
+    // Add filters (only truthy values)
+    Object.entries(filters).forEach(([key, value]) => {
+      if (String(value).trim()) {
+        params.append(key, value.toString());
+      }
+    });
+
+    const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
+    console.log('Fetching loads:', url);
+
+    // Build headers
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders()   // Adds Authorization: Bearer token if exists
+    };
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include' // only if your API set Allow-Credentials
+    });
+
+    if (!response.ok) {
+      // try to extract message
+      let serverError = 'Failed to fetch loads.';
+      try {
+        const resData = await response.json();
+        serverError = resData.message || serverError;
+      } catch (_) {}
+      throw new Error(`${serverError} (HTTP ${response.status})`);
+    }
+
+    const data = await response.json();
+
+    if (data.status !== 'success') {
+      throw new Error(data.message || 'Unexpected server response.');
+    }
+
+    // Success: update state
+    const { loads: loadsArr, pagination } = data.data;
+    setLoads(loadsArr);
+    setCurrentPage(pagination.currentPage);
+    setTotalPages(pagination.totalPages);
+    setTotalLoads(pagination.totalLoads);
+
+  } catch (err) {
+    console.error('Error loading loads:', err);
+    setError(
+      err.message === 'Failed to fetch'
+        ? 'Network error: Could not reach server.'
+        : err.message
+    );
+  } finally {
+    setLoading(false);
+  }
+};
 
   // FIXED: Add retry mechanism
   const retryFetch = async (retries = 3) => {
