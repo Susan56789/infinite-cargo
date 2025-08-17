@@ -62,7 +62,7 @@ const AdminDashboard = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [dateRange, setDateRange] = useState('today');
 
-  // Enhanced API helper with better auth handling
+  
   const apiCall = async (endpoint, options = {}) => {
     try {
       // Check if admin is authenticated before making API call
