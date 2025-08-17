@@ -11,9 +11,12 @@ const corsHandler= require('./middleware/corsHandler');
 const app = express();
 
 // Security middleware
-app.use(helmet());
-app.use(compression());
 app.use(corsHandler);
+app.use(helmet({
+  crossOriginResourcePolicy: false
+}));
+app.use(compression());
+
 
 
 // Serve static files from the 'public' directory

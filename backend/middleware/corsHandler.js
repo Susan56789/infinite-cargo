@@ -3,27 +3,20 @@ const corsHandler = (req, res, next) => {
     'http://localhost:3000',
     'http://localhost:5173',
     'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke',
-    'https://infinite-cargo-api.onrender.com',
+    'https://www.infinitecargo.co.ke'
   ];
-
+  
   const origin = req.headers.origin;
-
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
 
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
 
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET,POST,PUT,PATCH,DELETE,OPTIONS'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Auth-Token, x-auth-token, Accept, Origin'
-  );
+  // Allow all request headers
+  res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || '*');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -31,4 +24,5 @@ const corsHandler = (req, res, next) => {
 
   next();
 };
+
 module.exports = corsHandler;
