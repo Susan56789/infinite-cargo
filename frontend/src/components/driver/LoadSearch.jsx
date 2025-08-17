@@ -681,7 +681,8 @@ const LoadSearch = () => {
                     {/* Posted info */}
                     <div className="text-xs text-gray-500 mb-4">
                       <div className="flex items-center justify-between">
-                        <span>By {load.postedBy?.name || 'Anonymous'}</span>
+                       <span>By {load.cargoOwnerName || load.postedBy?.name || 'Anonymous'}</span>
+
                         <span>{formatDate(load.createdAt)}</span>
                       </div>
                       {load.bidCount > 0 && (
@@ -916,7 +917,10 @@ const LoadSearch = () => {
                   <div className="flex items-center mt-1">
                     <div className="flex items-center">
                       <User className="w-4 h-4 mr-2 text-gray-400" />
-                      <span className="text-gray-900">{selectedLoad.postedBy.name || 'Anonymous'}</span>
+                      <span className="text-gray-900">
+  {selectedLoad.cargoOwnerName || selectedLoad.postedBy?.name || 'Anonymous'}
+</span>
+
                       {selectedLoad.postedBy.isVerified && (
                         <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           Verified

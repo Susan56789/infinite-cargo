@@ -595,48 +595,41 @@ router.post('/',  auth, [
       });
     }
 
-    // Get user details to extract company name
     const User = require('../models/user');
     const user = await User.findById(req.user.id).lean();
-    
-    // Determine cargo owner name with proper fallback logic
-    const cargoOwnerName = user?.cargoOwnerProfile?.companyName 
-      || user?.companyName 
-      || user?.name 
-      || 'Anonymous Cargo Owner';
+
+    const cargoOwnerName =
+      user?.cargoOwnerProfile?.companyName ||
+      user?.companyName ||
+      user?.name ||
+      'Anonymous';
 
     const loadData = {
       ...req.body,
       postedBy: req.user.id,
-      cargoOwnerName: cargoOwnerName, // Store the resolved name
+      cargoOwnerName,        
+      postedByName: cargoOwnerName,  
       status: 'posted',
       isActive: true,
-      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days from now
+      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     };
 
     const load = new Load(loadData);
     await load.save();
 
-    // Populate the load for response
-    await load.populate('postedBy', 'name email phone location cargoOwnerProfile.companyName companyName');
-
-    res.status(201).json({
+    return res.status(201).json({
       status: 'success',
       message: 'Load created successfully',
-      data: { 
-        load: {
-          ...load.toObject(),
-          cargoOwnerName: cargoOwnerName // Ensure it's in the response
-        }
+      data: {
+        load: load
       }
     });
 
   } catch (error) {
     console.error('Create load error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       status: 'error',
-      message: 'Server error creating load',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error creating load'
     });
   }
 });
