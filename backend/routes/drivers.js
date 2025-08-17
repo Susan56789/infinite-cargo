@@ -321,6 +321,679 @@ router.get('/nearby/search',  [
   }
 });
 
+// @route   GET /api/drivers/stats
+// @desc    Get driver statistics (own stats only) - FIXED VERSION
+// @access  Private (Driver only)
+router.get('/stats', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can view driver statistics'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    const bidsCollection = db.collection('bids');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Get current date for monthly calculations
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    // Parallel queries for better performance
+    const [
+      totalBookings,
+      completedBookings,
+      activeBookings,
+      cancelledBookings,
+      ratingStats,
+      monthlyEarnings,
+      lastMonthEarnings,
+      totalEarnings,
+      totalBids,
+      acceptedBids
+    ] = await Promise.all([
+      // Total bookings
+      bookingsCollection.countDocuments({ driverId }),
+      
+      // Completed bookings
+      bookingsCollection.countDocuments({ driverId, status: 'completed' }),
+      
+      // Active bookings (accepted, in_progress, driver_assigned)
+      bookingsCollection.countDocuments({ 
+        driverId, 
+        status: { $in: ['accepted', 'in_progress', 'driver_assigned'] } 
+      }),
+      
+      // Cancelled bookings
+      bookingsCollection.countDocuments({ driverId, status: 'cancelled' }),
+      
+      // Average rating
+      bookingsCollection.aggregate([
+        { $match: { driverId, rating: { $exists: true, $ne: null } } },
+        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+      ]).toArray(),
+      
+      // Current month earnings
+      bookingsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'completed',
+            completedAt: { $gte: startOfMonth },
+            totalAmount: { $exists: true, $ne: null }
+          }
+        },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      ]).toArray(),
+      
+      // Last month earnings
+      bookingsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'completed',
+            completedAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
+            totalAmount: { $exists: true, $ne: null }
+          }
+        },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      ]).toArray(),
+      
+      // Total earnings
+      bookingsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'completed',
+            totalAmount: { $exists: true, $ne: null }
+          }
+        },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      ]).toArray(),
+      
+      // Total bids
+      bidsCollection.countDocuments({ driverId }),
+      
+      // Accepted bids
+      bidsCollection.countDocuments({ driverId, status: 'accepted' })
+    ]);
+
+    // Calculate success rate
+    const successRate = totalBookings > 0 ? 
+      Math.round((completedBookings / totalBookings) * 100) : 0;
+
+    // Get average rating
+    const averageRating = ratingStats.length > 0 ? 
+      Math.round(ratingStats[0].avgRating * 10) / 10 : 0;
+
+    // Extract earnings
+    const currentMonthEarnings = monthlyEarnings.length > 0 ? monthlyEarnings[0].total : 0;
+    const previousMonthEarnings = lastMonthEarnings.length > 0 ? lastMonthEarnings[0].total : 0;
+    const allTimeEarnings = totalEarnings.length > 0 ? totalEarnings[0].total : 0;
+
+    res.json({
+      status: 'success',
+      data: {
+        stats: {
+          totalJobs: totalBookings,
+          activeJobs: activeBookings,
+          completedJobs: completedBookings,
+          cancelledJobs: cancelledBookings,
+          successRate,
+          completionRate: successRate, // Alias for compatibility
+          averageRating,
+          rating: averageRating, // Alias for compatibility
+          totalBids,
+          acceptedBids,
+          monthlyEarnings: currentMonthEarnings,
+          totalEarnings: allTimeEarnings
+        },
+        earnings: {
+          thisMonth: currentMonthEarnings,
+          lastMonth: previousMonthEarnings,
+          total: allTimeEarnings
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver stats error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/dashboard
+// @desc    Get comprehensive driver dashboard data
+// @access  Private (Driver only)
+router.get('/dashboard', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can access driver dashboard'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    const loadsCollection = db.collection('loads');
+    const bidsCollection = db.collection('bids');
+    const driversCollection = db.collection('drivers');
+    const notificationsCollection = db.collection('notifications');
+    
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Get driver profile
+    const driver = await driversCollection.findOne(
+      { _id: driverId },
+      { 
+        projection: { 
+          password: 0, 
+          loginHistory: 0, 
+          registrationIp: 0, 
+          failedLoginAttempts: 0 
+        } 
+      }
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver profile not found'
+      });
+    }
+
+    // Parallel queries for dashboard data
+    const [
+      activeBookings,
+      completedBookings,
+      availableLoads,
+      myBids,
+      stats,
+      notifications
+    ] = await Promise.all([
+      // Active bookings
+      bookingsCollection.find({
+        driverId,
+        status: { $in: ['accepted', 'in_progress', 'driver_assigned'] }
+      }).sort({ createdAt: -1 }).limit(10).toArray(),
+
+      // Recent completed bookings
+      bookingsCollection.find({
+        driverId,
+        status: 'completed'
+      }).sort({ completedAt: -1 }).limit(5).toArray(),
+
+      // Available loads (based on driver location and vehicle type)
+      loadsCollection.find({
+        status: 'active',
+        $or: [
+          { vehicleTypeRequired: driver.vehicleType },
+          { vehicleTypeRequired: { $exists: false } },
+          { vehicleTypeRequired: null }
+        ],
+        // Add location-based filtering if coordinates exist
+        ...(driver.coordinates ? {
+          $expr: {
+            $lte: [
+              {
+                $multiply: [
+                  {
+                    $acos: {
+                      $add: [
+                        {
+                          $multiply: [
+                            { $sin: { $degreesToRadians: driver.coordinates.latitude } },
+                            { $sin: { $degreesToRadians: "$pickupLocation.coordinates.latitude" } }
+                          ]
+                        },
+                        {
+                          $multiply: [
+                            { $cos: { $degreesToRadians: driver.coordinates.latitude } },
+                            { $cos: { $degreesToRadians: "$pickupLocation.coordinates.latitude" } },
+                            { $cos: { $degreesToRadians: { $subtract: [driver.coordinates.longitude, "$pickupLocation.coordinates.longitude"] } } }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  6371
+                ]
+              },
+              100 // Within 100km
+            ]
+          }
+        } : {})
+      }).sort({ createdAt: -1 }).limit(20).toArray(),
+
+      // Driver's bids
+      bidsCollection.find({ driverId })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .toArray(),
+
+      // Driver statistics (reuse the logic from stats endpoint)
+      (async () => {
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        
+        const [total, completed, active, earnings, ratingData, bidsCount] = await Promise.all([
+          bookingsCollection.countDocuments({ driverId }),
+          bookingsCollection.countDocuments({ driverId, status: 'completed' }),
+          bookingsCollection.countDocuments({ driverId, status: { $in: ['accepted', 'in_progress', 'driver_assigned'] } }),
+          bookingsCollection.aggregate([
+            { $match: { driverId, status: 'completed', completedAt: { $gte: startOfMonth }, totalAmount: { $exists: true } } },
+            { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+          ]).toArray(),
+          bookingsCollection.aggregate([
+            { $match: { driverId, rating: { $exists: true, $ne: null } } },
+            { $group: { _id: null, avg: { $avg: '$rating' } } }
+          ]).toArray(),
+          bidsCollection.countDocuments({ driverId })
+        ]);
+
+        return {
+          totalJobs: total,
+          activeJobs: active,
+          completedJobs: completed,
+          successRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+          rating: ratingData.length > 0 ? Math.round(ratingData[0].avg * 10) / 10 : 0,
+          monthlyEarnings: earnings.length > 0 ? earnings[0].total : 0,
+          totalBids: bidsCount
+        };
+      })(),
+
+      // Recent notifications
+      notificationsCollection.find({ 
+        userId: driverId,
+        $or: [{ isRead: false }, { isRead: { $exists: false } }]
+      })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .toArray()
+    ]);
+
+    res.json({
+      status: 'success',
+      data: {
+        driver,
+        activeBookings,
+        completedBookings,
+        availableLoads,
+        myBids,
+        stats,
+        notifications,
+        summary: {
+          activeJobs: activeBookings.length,
+          availableLoads: availableLoads.length,
+          pendingBids: myBids.filter(bid => bid.status === 'submitted').length,
+          unreadNotifications: notifications.length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver dashboard error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching dashboard data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/drivers/bid
+// @desc    Place a bid on a load (alternative to /api/bids)
+// @access  Private (Driver only)
+router.post('/bid', auth, [
+  body('loadId').isMongoId().withMessage('Valid load ID required'),
+  body('bidAmount').isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
+  body('proposedPickupDate').optional().isISO8601().withMessage('Valid pickup date required'),
+  body('proposedDeliveryDate').optional().isISO8601().withMessage('Valid delivery date required'),
+  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can place bids'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { loadId, bidAmount, proposedPickupDate, proposedDeliveryDate, message } = req.body;
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
+    const bidsCollection = db.collection('bids');
+    const driversCollection = db.collection('drivers');
+
+    // Check if load exists and is active
+    const load = await loadsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(loadId),
+      status: 'active'
+    });
+
+    if (!load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found or not available for bidding'
+      });
+    }
+
+    // Check if driver already has a bid on this load
+    const existingBid = await bidsCollection.findOne({
+      loadId: new mongoose.Types.ObjectId(loadId),
+      driverId
+    });
+
+    if (existingBid) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'You have already placed a bid on this load'
+      });
+    }
+
+    // Get driver info
+    const driver = await driversCollection.findOne(
+      { _id: driverId },
+      { 
+        projection: { 
+          name: 1, 
+          vehicleType: 1, 
+          vehicleCapacity: 1,
+          'driverProfile.rating': 1,
+          'driverProfile.completedJobs': 1
+        } 
+      }
+    );
+
+    // Create new bid
+    const newBid = {
+      loadId: new mongoose.Types.ObjectId(loadId),
+      driverId,
+      cargoOwnerId: new mongoose.Types.ObjectId(load.cargoOwnerId),
+      bidAmount: parseFloat(bidAmount),
+      proposedPickupDate: proposedPickupDate ? new Date(proposedPickupDate) : null,
+      proposedDeliveryDate: proposedDeliveryDate ? new Date(proposedDeliveryDate) : null,
+      message: message || '',
+      status: 'submitted',
+      driverInfo: {
+        name: driver.name,
+        vehicleType: driver.vehicleType,
+        vehicleCapacity: driver.vehicleCapacity,
+        rating: driver.driverProfile?.rating || 0,
+        completedJobs: driver.driverProfile?.completedJobs || 0
+      },
+      loadInfo: {
+        title: load.title,
+        pickupLocation: load.pickupLocation,
+        deliveryLocation: load.deliveryLocation,
+        estimatedAmount: load.estimatedAmount
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await bidsCollection.insertOne(newBid);
+
+    // Update load with new bid count
+    await loadsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(loadId) },
+      { 
+        $inc: { bidCount: 1 },
+        $set: { updatedAt: new Date() }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: 'Bid placed successfully',
+      data: {
+        bid: {
+          _id: result.insertedId,
+          ...newBid
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Place bid error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error placing bid',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/drivers/bid/:id
+// @desc    Update/withdraw a bid
+// @access  Private (Driver only)
+router.put('/bid/:id', auth, [
+  body('action').isIn(['update', 'withdraw']).withMessage('Action must be update or withdraw'),
+  body('bidAmount').optional().isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
+  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can update bids'
+      });
+    }
+
+    const { id: bidId } = req.params;
+    const { action, bidAmount, message } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(bidId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid bid ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bidsCollection = db.collection('bids');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Find the bid
+    const bid = await bidsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(bidId),
+      driverId
+    });
+
+    if (!bid) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bid not found or not authorized'
+      });
+    }
+
+    // Check if bid can be modified
+    if (bid.status !== 'submitted') {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot ${action} bid with status: ${bid.status}`
+      });
+    }
+
+    let updateData = { updatedAt: new Date() };
+
+    if (action === 'withdraw') {
+      updateData.status = 'withdrawn';
+      updateData.withdrawnAt = new Date();
+    } else if (action === 'update') {
+      if (bidAmount) updateData.bidAmount = parseFloat(bidAmount);
+      if (message !== undefined) updateData.message = message;
+    }
+
+    const result = await bidsCollection.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(bidId) },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    res.json({
+      status: 'success',
+      message: `Bid ${action}d successfully`,
+      data: {
+        bid: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Update bid error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating bid',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/earnings
+// @desc    Get detailed earnings data for driver
+// @access  Private (Driver only)
+router.get('/earnings', auth, [
+  query('period').optional().isIn(['week', 'month', 'quarter', 'year']).withMessage('Invalid period'),
+  query('year').optional().isInt({ min: 2020, max: 2030 }).withMessage('Invalid year'),
+  query('month').optional().isInt({ min: 1, max: 12 }).withMessage('Invalid month')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can view earnings'
+      });
+    }
+
+    const { period = 'month', year, month } = req.query;
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    const now = new Date();
+    let startDate, endDate;
+
+    // Set date ranges based on period
+    switch (period) {
+      case 'week':
+        startDate = new Date(now);
+        startDate.setDate(now.getDate() - 7);
+        endDate = now;
+        break;
+      case 'month':
+        if (year && month) {
+          startDate = new Date(year, month - 1, 1);
+          endDate = new Date(year, month, 0);
+        } else {
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        }
+        break;
+      case 'quarter':
+        const quarter = Math.floor(now.getMonth() / 3);
+        startDate = new Date(now.getFullYear(), quarter * 3, 1);
+        endDate = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
+        break;
+      case 'year':
+        const targetYear = year || now.getFullYear();
+        startDate = new Date(targetYear, 0, 1);
+        endDate = new Date(targetYear, 11, 31);
+        break;
+    }
+
+    // Get earnings data
+    const earnings = await bookingsCollection.aggregate([
+      {
+        $match: {
+          driverId,
+          status: 'completed',
+          completedAt: { $gte: startDate, $lte: endDate },
+          totalAmount: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$completedAt' },
+            month: { $month: '$completedAt' },
+            day: { $dayOfMonth: '$completedAt' }
+          },
+          dailyEarnings: { $sum: '$totalAmount' },
+          jobCount: { $sum: 1 },
+          avgAmount: { $avg: '$totalAmount' }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ]).toArray();
+
+    // Calculate totals
+    const totalEarnings = earnings.reduce((sum, day) => sum + day.dailyEarnings, 0);
+    const totalJobs = earnings.reduce((sum, day) => sum + day.jobCount, 0);
+    const avgEarningsPerJob = totalJobs > 0 ? totalEarnings / totalJobs : 0;
+
+    res.json({
+      status: 'success',
+      data: {
+        period,
+        dateRange: { startDate, endDate },
+        summary: {
+          totalEarnings: Math.round(totalEarnings * 100) / 100,
+          totalJobs,
+          avgEarningsPerJob: Math.round(avgEarningsPerJob * 100) / 100,
+          avgEarningsPerDay: earnings.length > 0 ? Math.round((totalEarnings / earnings.length) * 100) / 100 : 0
+        },
+        dailyBreakdown: earnings.map(day => ({
+          date: `${day._id.year}-${String(day._id.month).padStart(2, '0')}-${String(day._id.day).padStart(2, '0')}`,
+          earnings: Math.round(day.dailyEarnings * 100) / 100,
+          jobCount: day.jobCount,
+          avgAmount: Math.round(day.avgAmount * 100) / 100
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Get earnings error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching earnings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   GET /api/drivers/:id
 // @desc    Get single driver by ID
 // @access  Public

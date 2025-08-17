@@ -1,35 +1,33 @@
-import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { 
-  Truck, 
-  Package, 
-  DollarSign, 
-  MapPin, 
-  Clock, 
-  TrendingUp, 
-  AlertCircle,  
-  Eye,
-  Calendar,
-  Phone,
-  Mail,
-  Settings,
-  Bell,
-  Search,
-  Plus,
-  Star,
-  ArrowRight,
-  Loader,
-  RefreshCw,
-  User,
-} from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle, Loader, RefreshCw } from 'lucide-react';
 
-// Import your auth utilities
+// Import child components
+import DashboardHeader from './DashboardHeader';
+import StatsGrid from './StatsGrid';
+import ActiveJobsSection from './ActiveJobsSection';
+import AvailableLoadsSection from './AvailableLoadsSection';
+import MyBidsSection from './MyBidsSection';
+import SidebarSection from './SidebarSection';
+
+// Import auth utilities
 import { authManager, getUser, isAuthenticated, getAuthHeader, getUserType, logout } from '../../utils/auth';
 
 const DriverDashboard = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Separate loading states for different sections
+  const [loadingStates, setLoadingStates] = useState({
+    profile: false,
+    bookings: false,
+    loads: false,
+    bids: false,
+    stats: false
+  });
+
   const [dashboardData, setDashboardData] = useState({
     activeBookings: [],
     availableLoads: [],
@@ -43,38 +41,347 @@ const DriverDashboard = () => {
     stats: {
       totalJobs: 0,
       activeJobs: 0,
-      completionRate: 95,
-      rating: 4.8,
+      completedJobs: 0,
+      completionRate: 0,
+      successRate: 0,
+      rating: 0,
       totalBids: 0,
-      acceptedBids: 0
+      acceptedBids: 0,
+      monthlyEarnings: 0
     }
   });
+  
   const [notifications, setNotifications] = useState([]);
-  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [availabilityUpdating, setAvailabilityUpdating] = useState(false);
 
   const navigate = useNavigate();
 
   // Get auth headers using AuthManager
-  const getAuthHeaders = () => {
+  const getAuthHeaders = useCallback(() => {
     return {
       ...getAuthHeader(),
       'Content-Type': 'application/json'
     };
-  };
+  }, []);
 
-  useEffect(() => {
-    // Check authentication using AuthManager
+  // Handle authentication check
+  const checkAuth = useCallback(() => {
     if (!isAuthenticated() || getUserType() !== 'driver') {
-      // Redirect to login if not authenticated or not a driver
       window.location.href = '/login';
-      return;
+      return false;
     }
+    return true;
+  }, []);
+
+  // Handle API errors
+  const handleApiError = useCallback(async (response, context = '') => {
+    if (response.status === 401) {
+      console.log(`Authentication failed in ${context}`);
+      handleLogout();
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Fetch user profile
+  const fetchUserProfile = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, profile: true }));
+    
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/users/me', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(response, 'fetchUserProfile')) return;
+
+      if (response.ok) {
+        const userData = await response.json();
+        const userInfo = userData.user || userData.data || userData;
+        
+        setUser(userInfo);
+        authManager.setAuth(
+          authManager.getToken(), 
+          userInfo, 
+          localStorage.getItem('infiniteCargoRememberMe') === 'true'
+        );
+      } else {
+        console.error('Failed to fetch user profile:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, profile: false }));
+    }
+  }, [getAuthHeaders, handleApiError]);
+
+  // Fetch driver statistics
+  const fetchDriverStats = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, stats: true }));
+    
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/stats', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(response, 'fetchDriverStats')) return;
+
+      if (response.ok) {
+        const statsData = await response.json();
+        const stats = statsData.data?.stats || {};
+        const earnings = statsData.data?.earnings || {};
+        
+        setDashboardData(prev => ({
+          ...prev,
+          stats: {
+            totalJobs: stats.totalJobs || 0,
+            activeJobs: stats.activeJobs || 0,
+            completedJobs: stats.completedJobs || 0,
+            completionRate: stats.completionRate || stats.successRate || 0,
+            successRate: stats.successRate || 0,
+            rating: stats.rating || stats.averageRating || 0,
+            totalBids: stats.totalBids || 0,
+            acceptedBids: stats.acceptedBids || 0,
+            monthlyEarnings: stats.monthlyEarnings || 0
+          },
+          earnings: {
+            thisMonth: earnings.thisMonth || stats.monthlyEarnings || 0,
+            lastMonth: earnings.lastMonth || 0,
+            total: earnings.total || stats.totalEarnings || 0
+          }
+        }));
+      } else {
+        console.error('Failed to fetch driver stats:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching driver stats:', error);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, stats: false }));
+    }
+  }, [getAuthHeaders, handleApiError]);
+
+  // Fetch driver bookings
+  const fetchDriverBookings = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, bookings: true }));
+    
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bookings/driver', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(response, 'fetchDriverBookings')) return;
+
+      if (response.ok) {
+        const bookingsData = await response.json();
+        const bookings = bookingsData.data?.bookings || bookingsData.bookings || [];
+        
+        setDashboardData(prev => ({
+          ...prev,
+          activeBookings: bookings.filter(booking => 
+            ['accepted', 'in_progress', 'driver_assigned'].includes(booking.status)
+          ).slice(0, 10),
+          completedBookings: bookings.filter(booking => 
+            booking.status === 'completed'
+          ).slice(0, 5)
+        }));
+      } else {
+        console.error('Failed to fetch driver bookings:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching driver bookings:', error);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, bookings: false }));
+    }
+  }, [getAuthHeaders, handleApiError]);
+
+  // Fetch available loads
+  const fetchAvailableLoads = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, loads: true }));
+    
+    try {
+      const userLocation = user?.location || user?.coordinates || '';
+      const locationParam = typeof userLocation === 'string' 
+        ? userLocation 
+        : user?.location || '';
+
+      const response = await fetch(
+        `https://infinite-cargo-api.onrender.com/api/loads?limit=20&status=active&location=${encodeURIComponent(locationParam)}`, 
+        { headers: getAuthHeaders() }
+      );
+
+      if (await handleApiError(response, 'fetchAvailableLoads')) return;
+
+      if (response.ok) {
+        const loadsData = await response.json();
+        const loads = loadsData.data?.loads || loadsData.loads || [];
+        
+        setDashboardData(prev => ({
+          ...prev,
+          availableLoads: loads.slice(0, 10)
+        }));
+      } else {
+        console.error('Failed to fetch available loads:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching available loads:', error);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, loads: false }));
+    }
+  }, [getAuthHeaders, handleApiError, user?.location, user?.coordinates]);
+
+  // Fetch driver bids
+  const fetchDriverBids = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, bids: true }));
+    
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(response, 'fetchDriverBids')) return;
+
+      if (response.ok) {
+        const bidsData = await response.json();
+        const bids = bidsData.data?.bids || bidsData.bids || [];
+        
+        setDashboardData(prev => ({
+          ...prev,
+          myBids: bids.slice(0, 10)
+        }));
+      } else {
+        console.error('Failed to fetch driver bids:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching driver bids:', error);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, bids: false }));
+    }
+  }, [getAuthHeaders, handleApiError]);
+
+  // Fetch notifications
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/notifications', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(response, 'fetchNotifications')) return;
+
+      if (response.ok) {
+        const notifData = await response.json();
+        setNotifications(notifData.data?.notifications || notifData.notifications || []);
+      } else if (response.status !== 404) {
+        console.error('Failed to fetch notifications:', response.status);
+      }
+    } catch (error) {
+      console.log('Notifications not available:', error);
+      setNotifications([]);
+    }
+  }, [getAuthHeaders, handleApiError]);
+
+  // Comprehensive dashboard data fetch using the new dashboard endpoint
+  const fetchDashboardData = useCallback(async (showLoader = true) => {
+    if (showLoader) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+    
+    setError('');
+    
+    try {
+      // Try to use the comprehensive dashboard endpoint first
+      const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
+        headers: getAuthHeaders()
+      });
+
+      if (await handleApiError(dashboardResponse, 'fetchDashboardData')) return;
+
+      if (dashboardResponse.ok) {
+        const dashboardData = await dashboardResponse.json();
+        const data = dashboardData.data;
+        
+        // Update user info
+        if (data.driver) {
+          setUser(data.driver);
+          authManager.setAuth(
+            authManager.getToken(), 
+            data.driver, 
+            localStorage.getItem('infiniteCargoRememberMe') === 'true'
+          );
+        }
+
+        // Update dashboard data
+        setDashboardData(prev => ({
+          ...prev,
+          activeBookings: data.activeBookings || [],
+          availableLoads: data.availableLoads || [],
+          completedBookings: data.completedBookings || [],
+          myBids: data.myBids || [],
+          stats: {
+            ...prev.stats,
+            ...data.stats
+          }
+        }));
+
+        setNotifications(data.notifications || []);
+
+      } else {
+        // Fallback to individual API calls if dashboard endpoint doesn't exist
+        console.log('Dashboard endpoint not available, using individual calls');
+        await Promise.all([
+          fetchUserProfile(),
+          fetchDriverStats(),
+          fetchDriverBookings(),
+          fetchAvailableLoads(),
+          fetchDriverBids(),
+          fetchNotifications()
+        ]);
+      }
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+      setError('Failed to load dashboard data');
+      
+      // Try individual calls as fallback
+      try {
+        await Promise.all([
+          fetchUserProfile(),
+          fetchDriverStats(),
+          fetchDriverBookings(),
+          fetchAvailableLoads(),
+          fetchDriverBids(),
+          fetchNotifications()
+        ]);
+      } catch (fallbackError) {
+        console.error('Fallback fetch also failed:', fallbackError);
+        setError('Failed to load dashboard data');
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [
+    getAuthHeaders, 
+    handleApiError,
+    fetchUserProfile,
+    fetchDriverStats,
+    fetchDriverBookings,
+    fetchAvailableLoads,
+    fetchDriverBids,
+    fetchNotifications
+  ]);
+
+  // Initial load and auth setup
+  useEffect(() => {
+    if (!checkAuth()) return;
 
     const userData = getUser();
-    setUser(userData);
+    if (userData) {
+      setUser(userData);
+    }
+    
     fetchDashboardData();
-  }, [navigate]);
+  }, [checkAuth, fetchDashboardData]);
 
   // Listen for auth state changes
   useEffect(() => {
@@ -96,135 +403,30 @@ const DriverDashboard = () => {
   useEffect(() => {
     const checkTokenExpiration = () => {
       if (authManager.isTokenExpiringSoon()) {
-        // Try to refresh token
         authManager.refreshToken().catch(() => {
-          // If refresh fails, logout
           handleLogout();
         });
       }
     };
 
-    // Check immediately and then every 5 minutes
     checkTokenExpiration();
     const interval = setInterval(checkTokenExpiration, 5 * 60 * 1000);
     
     return () => clearInterval(interval);
   }, []);
 
-  const fetchDashboardData = async () => {
-    setLoading(true);
-    setError('');
-    
-    try {
-      const headers = getAuthHeaders();
+  // Auto-refresh dashboard data every 5 minutes
+  useEffect(() => {
+    const autoRefreshInterval = setInterval(() => {
+      if (isAuthenticated()) {
+        fetchDashboardData(false); // Refresh without showing loader
+      }
+    }, 5 * 60 * 1000); // 5 minutes
 
-      // Fetch user profile
-      const userResponse = await fetch('https://infinite-cargo-api.onrender.com/api/users/me', { headers });
-      if (userResponse.status === 401) {
-        // Token expired or invalid
-        handleLogout();
-        return;
-      }
-      if (userResponse.ok) {
-        const userData = await userResponse.json();
-        const userInfo = userData.user || userData;
-        setUser(userInfo);
-        // Update auth manager with fresh user data
-        authManager.setAuth(authManager.getToken(), userInfo, localStorage.getItem('infiniteCargoRememberMe') === 'true');
-      }
+    return () => clearInterval(autoRefreshInterval);
+  }, [fetchDashboardData]);
 
-      // Fetch available loads
-      const loadsResponse = await fetch('https://infinite-cargo-api.onrender.com/api/loads?limit=10', { headers });
-      if (loadsResponse.status === 401) {
-        handleLogout();
-        return;
-      }
-      if (loadsResponse.ok) {
-        const loadsData = await loadsResponse.json();
-        const loads = loadsData.data?.loads || loadsData.loads || [];
-        
-        setDashboardData(prev => ({
-          ...prev,
-          availableLoads: loads.slice(0, 5)
-        }));
-      }
-
-      // Fetch driver bookings
-      const bookingsResponse = await fetch('https://infinite-cargo-api.onrender.com/api/bookings/driver', { headers });
-      if (bookingsResponse.status === 401) {
-        handleLogout();
-        return;
-      }
-      if (bookingsResponse.ok) {
-        const bookingsData = await bookingsResponse.json();
-        const bookings = bookingsData.data?.bookings || bookingsData.bookings || [];
-        
-        setDashboardData(prev => ({
-          ...prev,
-          activeBookings: bookings.filter(booking => 
-            ['accepted', 'in_progress', 'driver_assigned'].includes(booking.status)
-          ),
-          completedBookings: bookings.filter(booking => 
-            booking.status === 'completed'
-          )
-        }));
-      }
-
-      // Fetch driver bids
-      const bidsResponse = await fetch('https://infinite-cargo-api.onrender.com/api/bids/my-bids', { headers });
-      if (bidsResponse.status === 401) {
-        handleLogout();
-        return;
-      }
-      if (bidsResponse.ok) {
-        const bidsData = await bidsResponse.json();
-        const bids = bidsData.data?.bids || bidsData.bids || [];
-        
-        setDashboardData(prev => ({
-          ...prev,
-          myBids: bids.slice(0, 5),
-          stats: {
-            ...prev.stats,
-            totalBids: bids.length,
-            acceptedBids: bids.filter(bid => bid.status === 'accepted').length
-          }
-        }));
-      }
-
-      // Fetch driver statistics
-      const statsResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/stats', { headers });
-      if (statsResponse.status === 401) {
-        handleLogout();
-        return;
-      }
-      if (statsResponse.ok) {
-        const statsData = await statsResponse.json();
-        const stats = statsData.data?.stats || {};
-        
-        setDashboardData(prev => ({
-          ...prev,
-          stats: {
-            ...prev.stats,
-            ...stats,
-            completionRate: stats.successRate || 95,
-            rating: stats.averageRating || 4.8
-          },
-          earnings: {
-            thisMonth: stats.monthlyEarnings || 0,
-            lastMonth: 0,
-            total: stats.totalEarnings || 0
-          }
-        }));
-      }
-
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      setError('Failed to load dashboard data');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Toggle driver availability
   const toggleAvailability = async () => {
     if (!user) return;
     
@@ -238,11 +440,7 @@ const DriverDashboard = () => {
         })
       });
 
-      if (response.status === 401) {
-        // Token expired or invalid
-        handleLogout();
-        return;
-      }
+      if (await handleApiError(response, 'toggleAvailability')) return;
 
       if (response.ok) {
         const data = await response.json();
@@ -255,44 +453,60 @@ const DriverDashboard = () => {
         };
         
         setUser(updatedUser);
-        
-        // Update auth manager with updated user data
-        authManager.setAuth(authManager.getToken(), updatedUser, localStorage.getItem('infiniteCargoRememberMe') === 'true');
+        authManager.setAuth(
+          authManager.getToken(), 
+          updatedUser, 
+          localStorage.getItem('infiniteCargoRememberMe') === 'true'
+        );
+      } else {
+        const errorData = await response.json();
+        setError(`Failed to update availability: ${errorData.message}`);
       }
     } catch (error) {
       console.error('Error updating availability:', error);
+      setError('Failed to update availability');
     } finally {
       setAvailabilityUpdating(false);
     }
   };
 
-  const placeBid = async (loadId, bidAmount, proposedDeliveryDate, bidMessage) => {
+  // Place a bid on a load
+  const placeBid = async (bidData) => {
     try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+      // Use the driver-specific bid endpoint if available, otherwise use general bids endpoint
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/bid', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          loadId,
-          bidAmount: parseFloat(bidAmount),
-          proposedDeliveryDate,
-          message: bidMessage,
-          estimatedDuration: '2-3 days'
-        })
+        body: JSON.stringify(bidData)
       });
 
-      if (response.status === 401) {
-        // Token expired or invalid
-        handleLogout();
+      // If driver-specific endpoint doesn't exist, try general endpoint
+      let finalResponse = response;
+      if (response.status === 404) {
+        finalResponse = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(bidData)
+        });
+      }
+
+      if (await handleApiError(finalResponse, 'placeBid')) {
         return { success: false, error: 'Authentication failed' };
       }
 
-      if (response.ok) {
-        // Refresh dashboard data
-        fetchDashboardData();
-        return { success: true };
+      if (finalResponse.ok) {
+        const result = await finalResponse.json();
+        
+        // Refresh bids and available loads
+        await Promise.all([
+          fetchDriverBids(),
+          fetchAvailableLoads()
+        ]);
+        
+        return { success: true, data: result.data };
       } else {
-        const errorData = await response.json();
-        return { success: false, error: errorData.message };
+        const errorData = await finalResponse.json();
+        return { success: false, error: errorData.message || 'Failed to place bid' };
       }
     } catch (error) {
       console.error('Error placing bid:', error);
@@ -300,18 +514,61 @@ const DriverDashboard = () => {
     }
   };
 
+  // Update driver location
+  const updateDriverLocation = async (latitude, longitude) => {
+    try {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/location', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ latitude, longitude })
+      });
+
+      if (await handleApiError(response, 'updateDriverLocation')) {
+        return { success: false, error: 'Authentication failed' };
+      }
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Update user location in state
+        const updatedUser = {
+          ...user,
+          coordinates: result.data.coordinates
+        };
+        
+        setUser(updatedUser);
+        authManager.setAuth(
+          authManager.getToken(), 
+          updatedUser, 
+          localStorage.getItem('infiniteCargoRememberMe') === 'true'
+        );
+        
+        // Refresh available loads based on new location
+        await fetchAvailableLoads();
+        return { success: true };
+        
+      } else {
+        const errorData = await response.json();
+        return { success: false, error: errorData.message || 'Failed to update location' };
+      }
+    } catch (error) {
+      console.error('Error updating location:', error);
+      return { success: false, error: 'Failed to update location' };
+    }
+  };
+
+  // Handle logout
   const handleLogout = async () => {
     try {
-      // Use AuthManager's logout method
       await logout();
     } catch (error) {
       console.error('Logout error:', error);
-      // Fallback: clear auth and redirect manually
       authManager.clearAuth();
       window.location.href = '/login';
     }
   };
 
+  // Utility functions
   const getStatusColor = (status) => {
     const statusColors = {
       active: 'bg-green-100 text-green-800',
@@ -336,6 +593,7 @@ const DriverDashboard = () => {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'Not specified';
     return new Date(dateString).toLocaleDateString('en-KE', {
       day: 'numeric',
       month: 'short',
@@ -343,11 +601,31 @@ const DriverDashboard = () => {
     });
   };
 
-  const calculateSuccessRate = () => {
-    if (dashboardData.stats.totalBids === 0) return 0;
-    return Math.round((dashboardData.stats.acceptedBids / dashboardData.stats.totalBids) * 100);
+  // Auto-update location if geolocation is available
+  useEffect(() => {
+    if (user && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          if (!user.coordinates || 
+              Math.abs(user.coordinates.latitude - latitude) > 0.01 || 
+              Math.abs(user.coordinates.longitude - longitude) > 0.01) {
+            updateDriverLocation(latitude, longitude);
+          }
+        },
+        (error) => {
+          console.log('Geolocation error:', error);
+        }
+      );
+    }
+  }, [user]);
+
+  // Manual refresh function
+  const handleRefresh = () => {
+    fetchDashboardData(false);
   };
 
+  // Loading screen
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -359,7 +637,8 @@ const DriverDashboard = () => {
     );
   }
 
-  if (error) {
+  // Error screen
+  if (error && !user) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center max-w-md mx-auto">
@@ -367,7 +646,7 @@ const DriverDashboard = () => {
           <h3 className="mt-4 text-lg font-semibold text-gray-900">Something went wrong</h3>
           <p className="mt-2 text-gray-600">{error}</p>
           <button 
-            onClick={fetchDashboardData}
+            onClick={() => fetchDashboardData()}
             className="mt-4 inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             <RefreshCw size={16} className="mr-2" />
@@ -378,501 +657,87 @@ const DriverDashboard = () => {
     );
   }
 
-  // Rest of your component JSX would go here...
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                Welcome back, {user?.name}! 👋
-              </h1>
-              <p className="text-gray-600">
-                Here's what's happening with your transport business today.
-              </p>
-            </div>
-            <div className="flex items-center space-x-4">
-              {/* Availability Toggle */}
-              <div className="flex items-center space-x-3">
-                <span className={`text-sm font-medium ${user?.driverProfile?.isAvailable ? 'text-green-600' : 'text-gray-500'}`}>
-                  {user?.driverProfile?.isAvailable ? 'Available' : 'Offline'}
-                </span>
-                <button
-                  onClick={toggleAvailability}
-                  disabled={availabilityUpdating}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                    user?.driverProfile?.isAvailable ? 'bg-green-600' : 'bg-gray-200'
-                  }`}
-                >
-                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
-                    user?.driverProfile?.isAvailable ? 'translate-x-6' : 'translate-x-1'
-                  }`} />
-                  {availabilityUpdating && (
-                    <Loader className="absolute inset-0 h-4 w-4 m-auto animate-spin text-gray-400" />
-                  )}
-                </button>
-              </div>
-              
-              <button className="relative p-2 text-gray-600 hover:text-gray-900 transition-colors">
-                <Bell size={20} />
-                <span className="absolute top-0 right-0 h-5 w-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                  3
-                </span>
-              </button>
-              
-              <Link
-                to="/driver/profile"
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Settings size={16} className="mr-2" />
-                Settings
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
+      <DashboardHeader 
+        user={user}
+        toggleAvailability={toggleAvailability}
+        availabilityUpdating={availabilityUpdating}
+        notifications={notifications}
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
+      />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Error banner */}
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex">
+              <AlertCircle className="h-5 w-5 text-red-400" />
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800">Error</h3>
+                <p className="mt-1 text-sm text-red-700">{error}</p>
+              </div>
+              <button
+                onClick={() => setError('')}
+                className="ml-auto text-red-400 hover:text-red-600"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="p-3 bg-blue-100 rounded-lg">
-                  <Truck className="h-6 w-6 text-blue-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-2xl font-bold text-gray-900">
-                    {dashboardData.activeBookings.length}
-                  </h3>
-                  <p className="text-sm text-gray-600">Active Jobs</p>
-                </div>
-              </div>
-              <div className="flex items-center text-green-600 text-sm">
-                <TrendingUp size={16} className="mr-1" />
-                <span>+2 this week</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="p-3 bg-green-100 rounded-lg">
-                  <DollarSign className="h-6 w-6 text-green-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-2xl font-bold text-gray-900">
-                    {formatCurrency(dashboardData.earnings.thisMonth)}
-                  </h3>
-                  <p className="text-sm text-gray-600">This Month</p>
-                </div>
-              </div>
-              <div className="flex items-center text-green-600 text-sm">
-                <TrendingUp size={16} className="mr-1" />
-                <span>+15%</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="p-3 bg-purple-100 rounded-lg">
-                  <Package className="h-6 w-6 text-purple-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-2xl font-bold text-gray-900">
-                    {dashboardData.completedBookings.length}
-                  </h3>
-                  <p className="text-sm text-gray-600">Completed Jobs</p>
-                </div>
-              </div>
-              <div className="flex items-center text-gray-500 text-sm">
-                <Clock size={16} className="mr-1" />
-                <span>This month</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="p-3 bg-yellow-100 rounded-lg">
-                  <Star className="h-6 w-6 text-yellow-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-2xl font-bold text-gray-900">
-                    {dashboardData.stats.rating}/5
-                  </h3>
-                  <p className="text-sm text-gray-600">Rating</p>
-                </div>
-              </div>
-              <div className="flex items-center text-green-600 text-sm">
-                <TrendingUp size={16} className="mr-1" />
-                <span>Excellent</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <StatsGrid 
+          dashboardData={dashboardData} 
+          formatCurrency={formatCurrency}
+          loading={loadingStates.stats}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-8">
             {/* Active Jobs */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Active Jobs</h2>
-                <Link
-                  to="/driver/active-jobs"
-                  className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center"
-                >
-                  View All <ArrowRight size={16} className="ml-1" />
-                </Link>
-              </div>
-              <div className="p-6">
-                {dashboardData.activeBookings.length > 0 ? (
-                  <div className="space-y-4">
-                    {dashboardData.activeBookings.slice(0, 3).map((booking) => (
-                      <div key={booking._id} className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2 mb-2">
-                              <MapPin size={16} className="text-gray-400" />
-                              <span className="text-sm text-gray-600">
-                                {booking.pickupLocation || 'Pickup Location'} → {booking.deliveryLocation || 'Delivery Location'}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-4 mb-3">
-                              <div className="flex items-center space-x-1">
-                                <Package size={16} className="text-gray-400" />
-                                <span className="text-sm text-gray-600">{booking.cargoType || 'General Cargo'}</span>
-                              </div>
-                              <div className="flex items-center space-x-1">
-                                <DollarSign size={16} className="text-gray-400" />
-                                <span className="text-sm font-medium text-green-600">
-                                  {formatCurrency(booking.budget || booking.price)}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(booking.status)}`}>
-                                {booking.status.replace('_', ' ').toUpperCase()}
-                              </span>
-                              <span className="text-xs text-gray-500">
-                                {formatDate(booking.pickupDate || booking.createdAt)}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="ml-4 flex space-x-2">
-                            <Link
-                              to={`/driver/job/${booking._id}`}
-                              className="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-                            >
-                              <Eye size={14} className="mr-1" />
-                              View
-                            </Link>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <Truck size={48} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600">No active jobs at the moment</p>
-                    <Link
-                      to="/search-loads"
-                      className="inline-flex items-center mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      <Search size={16} className="mr-2" />
-                      Find Available Loads
-                    </Link>
-                  </div>
-                )}
-              </div>
-            </div>
+            <ActiveJobsSection 
+              activeBookings={dashboardData.activeBookings}
+              formatCurrency={formatCurrency}
+              formatDate={formatDate}
+              getStatusColor={getStatusColor}
+              loading={loadingStates.bookings}
+            />
 
             {/* Available Loads */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Available Loads</h2>
-                <Link
-                  to="/search-loads"
-                  className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center"
-                >
-                  <Search size={16} className="mr-1" />
-                  Browse More
-                </Link>
-              </div>
-              <div className="p-6">
-                {dashboardData.availableLoads.length > 0 ? (
-                  <div className="space-y-4">
-                    {dashboardData.availableLoads.slice(0, 3).map((load) => (
-                      <LoadCard 
-                        key={load._id} 
-                        load={load} 
-                        onBidPlace={placeBid}
-                        formatCurrency={formatCurrency}
-                        formatDate={formatDate}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <Package size={48} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600">No available loads in your area</p>
-                    <Link
-                      to="/search-loads"
-                      className="inline-flex items-center mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      Expand Search Area
-                    </Link>
-                  </div>
-                )}
-              </div>
-            </div>
+            <AvailableLoadsSection 
+              availableLoads={dashboardData.availableLoads}
+              onBidPlace={placeBid}
+              formatCurrency={formatCurrency}
+              formatDate={formatDate}
+              loading={loadingStates.loads}
+            />
+
+            {/* My Bids */}
+            <MyBidsSection 
+              myBids={dashboardData.myBids}
+              formatCurrency={formatCurrency}
+              formatDate={formatDate}
+              getStatusColor={getStatusColor}
+              loading={loadingStates.bids}
+            />
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Quick Actions */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <Link
-                  to="/search-loads"
-                  className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
-                >
-                  <Search className="h-8 w-8 text-gray-600 group-hover:text-blue-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600">Search Loads</span>
-                </Link>
-                
-                <Link
-                  to="/driver/profile"
-                  className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
-                >
-                  <User className="h-8 w-8 text-gray-600 group-hover:text-blue-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600">Update Profile</span>
-                </Link>
-                
-                <Link
-                  to="/driver/earnings"
-                  className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
-                >
-                  <DollarSign className="h-8 w-8 text-gray-600 group-hover:text-blue-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600">View Earnings</span>
-                </Link>
-                
-                <Link
-                  to="/driver/vehicles"
-                  className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors group"
-                >
-                  <Truck className="h-8 w-8 text-gray-600 group-hover:text-blue-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-700 group-hover:text-blue-600">My Vehicles</span>
-                </Link>
-              </div>
-            </div>
-
-            {/* Performance Summary */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance</h3>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Success Rate</span>
-                  <span className="text-sm font-medium text-green-600">{calculateSuccessRate()}%</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Total Bids</span>
-                  <span className="text-sm font-medium">{dashboardData.stats.totalBids}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Accepted Bids</span>
-                  <span className="text-sm font-medium text-green-600">{dashboardData.stats.acceptedBids}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Average Rating</span>
-                  <div className="flex items-center">
-                    <Star className="h-4 w-4 text-yellow-400 mr-1" />
-                    <span className="text-sm font-medium">{dashboardData.stats.rating}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Profile Summary */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Profile Summary</h3>
-              <div className="space-y-3">
-                <div className="flex items-center text-sm">
-                  <Mail className="h-4 w-4 text-gray-400 mr-3" />
-                  <span className="text-gray-600">{user?.email}</span>
-                </div>
-                <div className="flex items-center text-sm">
-                  <Phone className="h-4 w-4 text-gray-400 mr-3" />
-                  <span className="text-gray-600">{user?.phone}</span>
-                </div>
-                <div className="flex items-center text-sm">
-                  <MapPin className="h-4 w-4 text-gray-400 mr-3" />
-                  <span className="text-gray-600">{user?.location}</span>
-                </div>
-                <div className="flex items-center text-sm">
-                  <Calendar className="h-4 w-4 text-gray-400 mr-3" />
-                  <span className="text-gray-600">Joined {formatDate(user?.createdAt)}</span>
-                </div>
-              </div>
-              <Link
-                to="/driver/profile"
-                className="w-full mt-4 inline-flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-              >
-                Edit Profile
-              </Link>
-            </div>
+          <div className="lg:col-span-1">
+            <SidebarSection 
+              user={user}
+              dashboardData={dashboardData}
+              formatDate={formatDate}
+              formatCurrency={formatCurrency}
+            />
           </div>
         </div>
       </div>
-    </div>
-  );
-};
-
-// LoadCard Component for displaying available loads
-const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate }) => {
-  const [showBidForm, setShowBidForm] = useState(false);
-  const [bidAmount, setBidAmount] = useState('');
-  const [bidMessage, setBidMessage] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleBidSubmit = async (e) => {
-    e.preventDefault();
-    if (!bidAmount || parseFloat(bidAmount) <= 0) return;
-
-    setSubmitting(true);
-    const proposedDate = new Date();
-    proposedDate.setDate(proposedDate.getDate() + 2); // 2 days from now
-
-    const result = await onBidPlace(load._id, bidAmount, proposedDate.toISOString(), bidMessage);
-    
-    if (result.success) {
-      setShowBidForm(false);
-      setBidAmount('');
-      setBidMessage('');
-    } else {
-      alert(result.error || 'Failed to place bid');
-    }
-    
-    setSubmitting(false);
-    };
-
-  return (
-    <div className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors">
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1">
-          <div className="flex items-center space-x-2 mb-2">
-            <MapPin size={16} className="text-gray-400" />
-            <span className="text-sm text-gray-600">
-              {load.origin || load.pickupLocation} → {load.destination || load.deliveryLocation}
-            </span>
-          </div>
-          <div className="flex items-center space-x-4 mb-2">
-            <div className="flex items-center space-x-1">
-              <Package size={16} className="text-gray-400" />
-              <span className="text-sm text-gray-600">{load.cargoType || 'General Cargo'}</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <DollarSign size={16} className="text-gray-400" />
-              <span className="text-sm font-medium text-green-600">
-                {formatCurrency(load.budget || load.maxBudget)}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500">
-              Pickup: {formatDate(load.pickupDate || load.createdAt)}
-            </span>
-            <span className="text-xs text-gray-500">
-              {load.weight ? `${load.weight} kg` : 'Weight not specified'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {!showBidForm ? (
-        <div className="flex space-x-2">
-          <button
-            onClick={() => setShowBidForm(true)}
-            className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <Plus size={14} className="mr-1" />
-            Place Bid
-          </button>
-          <Link
-            to={`/driver/load/${load._id}`}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            <Eye size={14} className="mr-1" />
-            Details
-          </Link>
-        </div>
-      ) : (
-        <form onSubmit={handleBidSubmit} className="space-y-3 mt-3 p-3 bg-gray-50 rounded-lg">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Your Bid Amount (KES)
-            </label>
-            <input
-              type="number"
-              value={bidAmount}
-              onChange={(e) => setBidAmount(e.target.value)}
-              placeholder="Enter your bid"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              required
-              min="1"
-              step="0.01"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Message (Optional)
-            </label>
-            <textarea
-              value={bidMessage}
-              onChange={(e) => setBidMessage(e.target.value)}
-              placeholder="Add a message to your bid..."
-              rows={2}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-          <div className="flex space-x-2">
-            <button
-              type="submit"
-              disabled={submitting || !bidAmount}
-              className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {submitting ? (
-                <>
-                  <Loader size={14} className="mr-1 animate-spin" />
-                  Submitting...
-                </>
-              ) : (
-                'Submit Bid'
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowBidForm(false);
-                setBidAmount('');
-                setBidMessage('');
-              }}
-              className="px-3 py-2 border border-gray-300 text-gray-700 text-sm rounded-md hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
     </div>
   );
 };
