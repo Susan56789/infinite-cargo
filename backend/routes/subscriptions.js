@@ -23,6 +23,7 @@ const subscriptionLimiter = rateLimit({
 // Subscription plans configuration
 const SUBSCRIPTION_PLANS = {
   basic: {
+    id: 'basic', 
     name: 'Basic Plan',
     maxLoads: 3,
     features: ['Basic support', 'Load posting', 'Basic analytics'],
@@ -30,6 +31,7 @@ const SUBSCRIPTION_PLANS = {
     duration: 30 // days
   },
   pro: {
+    id: 'pro', 
     name: 'Pro Plan', 
     maxLoads: 25,
     features: ['Priority support', 'Advanced analytics', 'Priority listings'],
@@ -37,6 +39,7 @@ const SUBSCRIPTION_PLANS = {
     duration: 30 // days
   },
   business: {
+    id: 'business', 
     name: 'Business Plan',
     maxLoads: 100, 
     features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
@@ -68,7 +71,7 @@ const ensureBasicSubscription = async (userId, db) => {
     // Create new basic subscription
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(userId),
-      planId: SUBSCRIPTION_PLANS.basic.id,
+      planId: 'basic', // Fixed: use planId instead of SUBSCRIPTION_PLANS.basic.id
       planName: SUBSCRIPTION_PLANS.basic.name,
       price: SUBSCRIPTION_PLANS.basic.price,
       currency: 'KES',
@@ -80,7 +83,8 @@ const ensureBasicSubscription = async (userId, db) => {
       paymentDetails: { type: 'free_plan' },
       paymentStatus: 'completed',
       activatedAt: new Date(),
-      expiresAt: new Date(Date.now() + SUBSCRIPTION_PLANS.basic.duration * 24 * 60 * 60 * 1000),
+      // Basic plan should not expire
+      // expiresAt: new Date(Date.now() + SUBSCRIPTION_PLANS.basic.duration * 24 * 60 * 60 * 1000),
       requestedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -99,7 +103,8 @@ const ensureBasicSubscription = async (userId, db) => {
           currentSubscription: result.insertedId,
           subscriptionPlan: 'basic',
           subscriptionStatus: 'active',
-          subscriptionExpiresAt: subscriptionData.expiresAt,
+          // Don't set expiry for basic plan
+          // subscriptionExpiresAt: subscriptionData.expiresAt,
           updatedAt: new Date()
         }
       }
@@ -164,6 +169,13 @@ router.get('/status', auth, async (req, res) => {
       });
     }
 
+    // Check for pending subscriptions
+    const subscriptionsCollection = db.collection('subscriptions');
+    const pendingSubscription = await subscriptionsCollection.findOne({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      status: 'pending'
+    }, { sort: { createdAt: -1 } });
+
     // Check if subscription is expired (for non-basic plans)
     let isExpired = false;
     let daysUntilExpiry = null;
@@ -195,6 +207,7 @@ router.get('/status', auth, async (req, res) => {
         return res.json({
           status: 'success',
           data: {
+            ...basicSubscription,
             hasActiveSubscription: true,
             planId: basicSubscription.planId,
             planName: basicSubscription.planName,
@@ -203,6 +216,9 @@ router.get('/status', auth, async (req, res) => {
             price: basicSubscription.price,
             isExpired: false,
             daysUntilExpiry: null,
+            hasPendingUpgrade: !!pendingSubscription,
+            pendingSubscription: pendingSubscription,
+            usage: await getUsageData(req.user.id, db, basicSubscription),
             message: 'Your premium subscription has expired. You have been automatically downgraded to the Basic plan.'
           }
         });
@@ -210,38 +226,18 @@ router.get('/status', auth, async (req, res) => {
     }
 
     // Get current month's load count for usage tracking
-    const loadsCollection = db.collection('loads');
-    const currentMonthStart = new Date();
-    currentMonthStart.setDate(1);
-    currentMonthStart.setHours(0, 0, 0, 0);
-
-    const monthlyUsage = await loadsCollection.countDocuments({
-      postedBy: new mongoose.Types.ObjectId(req.user.id),
-      createdAt: { $gte: currentMonthStart }
-    });
-
-    const maxLoads = subscription.features?.maxLoads || SUBSCRIPTION_PLANS[subscription.planId]?.maxLoads || 3;
-    const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - monthlyUsage);
+    const usageData = await getUsageData(req.user.id, db, subscription);
 
     res.json({
       status: 'success',
       data: {
+        ...subscription,
         hasActiveSubscription: subscription.status === 'active' && !isExpired,
-        planId: subscription.planId,
-        planName: subscription.planName,
-        status: isExpired ? 'expired' : subscription.status,
-        features: subscription.features || SUBSCRIPTION_PLANS[subscription.planId]?.features || [],
-        price: subscription.price,
-        currency: subscription.currency || 'KES',
         isExpired,
         daysUntilExpiry,
-        expiresAt: subscription.expiresAt,
-        usage: {
-          loadsThisMonth: monthlyUsage,
-          maxLoads: maxLoads,
-          remainingLoads: remainingLoads,
-          usagePercentage: maxLoads === -1 ? 0 : Math.min(100, (monthlyUsage / maxLoads) * 100)
-        }
+        hasPendingUpgrade: !!pendingSubscription,
+        pendingSubscription: pendingSubscription,
+        usage: usageData
       }
     });
 
@@ -254,6 +250,29 @@ router.get('/status', auth, async (req, res) => {
     });
   }
 });
+
+// Helper function to get usage data
+const getUsageData = async (userId, db, subscription) => {
+  const loadsCollection = db.collection('loads');
+  const currentMonthStart = new Date();
+  currentMonthStart.setDate(1);
+  currentMonthStart.setHours(0, 0, 0, 0);
+
+  const monthlyUsage = await loadsCollection.countDocuments({
+    postedBy: new mongoose.Types.ObjectId(userId),
+    createdAt: { $gte: currentMonthStart }
+  });
+
+  const maxLoads = subscription.features?.maxLoads || SUBSCRIPTION_PLANS[subscription.planId]?.maxLoads || 3;
+  const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - monthlyUsage);
+
+  return {
+    loadsThisMonth: monthlyUsage,
+    maxLoads: maxLoads,
+    remainingLoads: remainingLoads,
+    usagePercentage: maxLoads === -1 ? 0 : Math.min(100, (monthlyUsage / maxLoads) * 100)
+  };
+};
 
 // @route   GET /api/subscriptions/plans
 // @desc    Get available subscription plans
