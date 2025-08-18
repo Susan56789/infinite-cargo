@@ -570,7 +570,7 @@ router.get('/analytics/dashboard',  auth, async (req, res) => {
 // @route   POST /api/loads
 // @desc    Create a new load (CARGO OWNER AUTHENTICATION REQUIRED)
 // @access  Private (Cargo Owners only)
-router.post('/',  auth, [
+router.post('/', auth, [
   body('title').trim().notEmpty().withMessage('Title is required').isLength({ min: 5, max: 100 }),
   body('description').trim().notEmpty().withMessage('Description is required').isLength({ min: 10, max: 1000 }),
   body('pickupLocation').trim().notEmpty().withMessage('Pickup location is required'),
@@ -595,41 +595,113 @@ router.post('/',  auth, [
       });
     }
 
+    // Get the user with full profile information
     const User = require('../models/user');
     const user = await User.findById(req.user.id).lean();
 
-    const cargoOwnerName =
-      user?.cargoOwnerProfile?.companyName ||
-      user?.companyName ||
-      user?.name ||
-      'Anonymous';
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
 
+    // Enhanced cargo owner name extraction - FIXED VERSION
+    const getCargoOwnerName = (userData) => {
+      const possibleNames = [
+        userData?.cargoOwnerProfile?.companyName,
+        userData?.companyName,
+        userData?.profile?.companyName,
+        userData?.businessProfile?.companyName,
+        userData?.name,
+        userData?.fullName,
+        userData?.firstName && userData?.lastName ? `${userData.firstName} ${userData.lastName}` : null,
+        userData?.email?.split('@')[0]
+      ];
+
+      for (const name of possibleNames) {
+        if (name && typeof name === 'string' && name.trim().length > 0) {
+          return name.trim();
+        }
+      }
+      
+      return 'Anonymous Cargo Owner';
+    };
+
+    // Get cargo owner name from multiple sources
+    const cargoOwnerName = req.body.cargoOwnerName || 
+                          req.body.postedByName || 
+                          getCargoOwnerName(user);
+
+    console.log('Creating load with cargo owner name:', cargoOwnerName);
+
+    // Prepare load data with explicit cargo owner information
     const loadData = {
       ...req.body,
       postedBy: req.user.id,
-      cargoOwnerName,        
-      postedByName: cargoOwnerName,  
+      
+      // CRITICAL: Set multiple name fields for consistency
+      cargoOwnerName: cargoOwnerName,
+      postedByName: cargoOwnerName,
+      
       status: 'posted',
       isActive: true,
-      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      
+      // Enhanced contact information
+      contactPerson: {
+        name: req.body.contactPerson?.name || cargoOwnerName,
+        phone: req.body.contactPerson?.phone || user.phone || '',
+        email: req.body.contactPerson?.email || user.email || ''
+      },
+
+      // Additional metadata for better tracking
+      createdBy: {
+        userId: req.user.id,
+        userType: req.user.userType,
+        name: cargoOwnerName
+      }
     };
 
+    // Create and save the load
     const load = new Load(loadData);
     await load.save();
+
+    // Return with cargo owner name guaranteed
+    const responseLoad = {
+      ...load.toObject(),
+      cargoOwnerName: cargoOwnerName,
+      postedByName: cargoOwnerName
+    };
 
     return res.status(201).json({
       status: 'success',
       message: 'Load created successfully',
       data: {
-        load: load
+        load: responseLoad
       }
     });
 
   } catch (error) {
     console.error('Create load error:', error);
+    
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }));
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Load validation failed',
+        errors: validationErrors
+      });
+    }
+
     return res.status(500).json({
       status: 'error',
-      message: 'Server error creating load'
+      message: 'Server error creating load',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

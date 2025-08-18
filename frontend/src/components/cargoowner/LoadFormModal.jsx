@@ -9,9 +9,84 @@ const LoadFormModal = ({
   loading,
   onSubmit,
   onClose,
-  resetForm
+  resetForm,
+  user // Add user prop to access user data
 }) => {
   if (!showLoadForm) return null;
+
+  // Enhanced function to get display name
+  const getDisplayName = () => {
+    console.log('User data in LoadFormModal:', user); // Debug log
+    
+    // Try multiple sources for the display name
+    const sources = [
+      user?.cargoOwnerProfile?.companyName,
+      user?.companyName,
+      user?.profile?.companyName,
+      user?.businessProfile?.companyName,
+      user?.name,
+      user?.fullName,
+      user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : null,
+      user?.email?.split('@')[0]
+    ];
+
+    for (const name of sources) {
+      if (name && typeof name === 'string' && name.trim().length > 0) {
+        console.log('Selected display name:', name.trim()); // Debug log
+        return name.trim();
+      }
+    }
+
+    console.log('Falling back to Anonymous Cargo Owner'); // Debug log
+    return 'Anonymous Cargo Owner';
+  };
+
+  // Enhanced form submission handler
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    
+    // Get cargo owner name from multiple sources
+    const getCargoOwnerName = () => {
+      const sources = [
+        user?.cargoOwnerProfile?.companyName,
+        user?.companyName,
+        user?.profile?.companyName,
+        user?.businessProfile?.companyName,
+        user?.name,
+        user?.fullName,
+        user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : null,
+        user?.email?.split('@')[0]
+      ];
+
+      for (const name of sources) {
+        if (name && typeof name === 'string' && name.trim().length > 0) {
+          return name.trim();
+        }
+      }
+      
+      return 'Anonymous Cargo Owner';
+    };
+
+    const cargoOwnerName = getCargoOwnerName();
+    console.log('Form submitting with cargo owner name:', cargoOwnerName);
+
+    // Create form data with explicit cargo owner information
+    const formDataWithOwner = {
+      ...loadForm,
+      cargoOwnerName: cargoOwnerName,
+      postedByName: cargoOwnerName,
+      contactPerson: {
+        name: user?.name || cargoOwnerName,
+        phone: user?.phone || '',
+        email: user?.email || ''
+      }
+    };
+
+    // Call the parent submit handler with enhanced data
+    onSubmit(e, formDataWithOwner);
+  };
+
+  const displayName = getDisplayName();
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -29,7 +104,20 @@ const LoadFormModal = ({
             </button>
           </div>
 
-          <form onSubmit={onSubmit} className="space-y-6">
+          {/* Display cargo owner info with improved logic */}
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-sm text-blue-800">
+              <span className="font-medium">Posting as:</span> {displayName}
+            </p>
+            {user?.email && (
+              <p className="text-xs text-blue-600 mt-1">
+                Contact: {user.email}
+                {user?.phone && ` • ${user.phone}`}
+              </p>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Title */}
               <div className="md:col-span-2">
@@ -37,11 +125,14 @@ const LoadFormModal = ({
                 <input
                   type="text"
                   required
+                  minLength={5}
+                  maxLength={100}
                   value={loadForm.title}
                   onChange={(e) => setLoadForm({ ...loadForm, title: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., Electronics shipment"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="e.g., Electronics shipment from Nairobi to Mombasa"
                 />
+                <p className="text-xs text-gray-500 mt-1">Minimum 5 characters, maximum 100 characters</p>
               </div>
 
               {/* Pickup + Delivery */}
@@ -52,7 +143,8 @@ const LoadFormModal = ({
                   required
                   value={loadForm.pickupLocation}
                   onChange={(e) => setLoadForm({ ...loadForm, pickupLocation: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="e.g., Nairobi CBD"
                 />
               </div>
               <div>
@@ -62,7 +154,8 @@ const LoadFormModal = ({
                   required
                   value={loadForm.deliveryLocation}
                   onChange={(e) => setLoadForm({ ...loadForm, deliveryLocation: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="e.g., Mombasa Port"
                 />
               </div>
 
@@ -73,7 +166,8 @@ const LoadFormModal = ({
                   type="text"
                   value={loadForm.pickupAddress}
                   onChange={(e) => setLoadForm({ ...loadForm, pickupAddress: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Specific pickup address"
                 />
               </div>
               <div>
@@ -82,7 +176,8 @@ const LoadFormModal = ({
                   type="text"
                   value={loadForm.deliveryAddress}
                   onChange={(e) => setLoadForm({ ...loadForm, deliveryAddress: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Specific delivery address"
                 />
               </div>
 
@@ -91,12 +186,13 @@ const LoadFormModal = ({
                 <label className="block text-sm font-medium text-gray-700 mb-2">Weight (kg) *</label>
                 <input
                   type="number"
-                  min="0"
+                  min="0.1"
                   step="0.1"
                   required
                   value={loadForm.weight}
                   onChange={(e) => setLoadForm({ ...loadForm, weight: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="0.0"
                 />
               </div>
 
@@ -107,7 +203,7 @@ const LoadFormModal = ({
                   required
                   value={loadForm.cargoType}
                   onChange={(e) => setLoadForm({ ...loadForm, cargoType: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="electronics">Electronics</option>
                   <option value="furniture">Furniture</option>
@@ -117,7 +213,12 @@ const LoadFormModal = ({
                   <option value="textiles">Textiles</option>
                   <option value="chemicals">Chemicals</option>
                   <option value="machinery">Machinery</option>
+                  <option value="medical_supplies">Medical Supplies</option>
+                  <option value="agricultural_products">Agricultural Products</option>
                   <option value="fragile_items">Fragile Items</option>
+                  <option value="hazardous_materials">Hazardous Materials</option>
+                  <option value="livestock">Livestock</option>
+                  <option value="containers">Containers</option>
                   <option value="other">Other</option>
                 </select>
               </div>
@@ -129,13 +230,14 @@ const LoadFormModal = ({
                   required
                   value={loadForm.vehicleType}
                   onChange={(e) => setLoadForm({ ...loadForm, vehicleType: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="pickup">Pickup</option>
                   <option value="van">Van</option>
                   <option value="small_truck">Small Truck</option>
                   <option value="medium_truck">Medium Truck</option>
                   <option value="large_truck">Large Truck</option>
+                  <option value="heavy_truck">Heavy Truck</option>
                   <option value="trailer">Trailer</option>
                   <option value="refrigerated_truck">Refrigerated Truck</option>
                   <option value="flatbed">Flatbed</option>
@@ -152,7 +254,8 @@ const LoadFormModal = ({
                   required
                   value={loadForm.vehicleCapacityRequired}
                   onChange={(e) => setLoadForm({ ...loadForm, vehicleCapacityRequired: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="0.0"
                 />
               </div>
 
@@ -161,12 +264,14 @@ const LoadFormModal = ({
                 <label className="block text-sm font-medium text-gray-700 mb-2">Budget (KES) *</label>
                 <input
                   type="number"
-                  min="0"
+                  min="100"
                   required
                   value={loadForm.budget}
                   onChange={(e) => setLoadForm({ ...loadForm, budget: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="10000"
                 />
+                <p className="text-xs text-gray-500 mt-1">Minimum KES 100</p>
               </div>
 
               {/* Dates */}
@@ -177,7 +282,8 @@ const LoadFormModal = ({
                   required
                   value={loadForm.pickupDate}
                   onChange={(e) => setLoadForm({ ...loadForm, pickupDate: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  min={new Date().toISOString().slice(0, 16)} // Prevent past dates
                 />
               </div>
               <div>
@@ -187,7 +293,8 @@ const LoadFormModal = ({
                   required
                   value={loadForm.deliveryDate}
                   onChange={(e) => setLoadForm({ ...loadForm, deliveryDate: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  min={loadForm.pickupDate || new Date().toISOString().slice(0, 16)}
                 />
               </div>
 
@@ -195,23 +302,30 @@ const LoadFormModal = ({
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Description *</label>
                 <textarea
-                  rows="3"
+                  rows="4"
                   required
+                  minLength={10}
+                  maxLength={1000}
                   value={loadForm.description}
                   onChange={(e) => setLoadForm({ ...loadForm, description: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
-                  placeholder="Details about cargo and special requirements"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Provide detailed information about the cargo, packaging, handling requirements, and any special considerations. Minimum 10 characters."
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  {loadForm.description.length}/1000 characters (minimum 10 required)
+                </p>
               </div>
 
               {/* Special Instructions */}
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Special Instructions</label>
                 <textarea
-                  rows="2"
+                  rows="3"
+                  maxLength={1000}
                   value={loadForm.specialInstructions}
                   onChange={(e) => setLoadForm({ ...loadForm, specialInstructions: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Any special handling requirements, delivery instructions, or additional notes for drivers"
                 />
               </div>
 
@@ -225,6 +339,7 @@ const LoadFormModal = ({
                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="text-sm font-medium text-gray-700">Mark as Urgent</span>
+                  <span className="text-xs text-gray-500 ml-2">(Higher visibility in search results)</span>
                 </label>
               </div>
             </div>
@@ -237,14 +352,14 @@ const LoadFormModal = ({
                   onClose();
                   resetForm();
                 }}
-                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
               >
                 {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {editingLoad ? 'Update Load' : 'Post Load'}

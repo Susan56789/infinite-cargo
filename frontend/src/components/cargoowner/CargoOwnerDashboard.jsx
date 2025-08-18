@@ -55,7 +55,8 @@ const CargoOwnerDashboard = () => {
     pickupDate: '',
     deliveryDate: '',
     specialInstructions: '',
-    isUrgent: false
+    isUrgent: false,
+     user: getUser(),
   });
 
   // Profile form state
@@ -241,7 +242,7 @@ const CargoOwnerDashboard = () => {
         });
         
         if (loadsResponse.status === 403) {
-          console.log('Using fallback loads endpoint due to subscription limits');
+          
           try {
             const fallbackResponse = await fetch(`${API_BASE_URL}/loads?postedBy=${user?.id}&limit=50`, {
               headers: authHeaders,
@@ -329,87 +330,263 @@ const CargoOwnerDashboard = () => {
     }
   };
 
-  const handleCreateLoad = async (e) => {
-    e.preventDefault();
+  const handleCreateLoad = async (e, formDataWithOwner = null) => {
+  e.preventDefault();
 
-    if (!loadForm.title || loadForm.title.trim().length < 5) {
+  // Use the enhanced form data if provided, otherwise use the current form state
+  const currentLoadForm = formDataWithOwner || loadForm;
+
+  try {
+    // Basic validation
+    if (!currentLoadForm.title || currentLoadForm.title.trim().length < 5) {
       setError('Title must be at least 5 characters long');
       return;
     }
 
-    if (!loadForm.description || loadForm.description.trim().length < 10) {
+    if (!currentLoadForm.description || currentLoadForm.description.trim().length < 10) {
       setError('Description must be at least 10 characters long');
       return;
     }
 
+    if (!currentLoadForm.pickupLocation || !currentLoadForm.deliveryLocation) {
+      setError('Both pickup and delivery locations are required');
+      return;
+    }
+
+    if (!currentLoadForm.weight || parseFloat(currentLoadForm.weight) <= 0) {
+      setError('Weight must be greater than 0');
+      return;
+    }
+
+    if (!currentLoadForm.vehicleCapacityRequired || parseFloat(currentLoadForm.vehicleCapacityRequired) <= 0) {
+      setError('Vehicle capacity must be greater than 0');
+      return;
+    }
+
+    if (!currentLoadForm.budget || parseFloat(currentLoadForm.budget) < 100) {
+      setError('Budget must be at least KES 100');
+      return;
+    }
+
+    if (!currentLoadForm.pickupDate || !currentLoadForm.deliveryDate) {
+      setError('Both pickup and delivery dates are required');
+      return;
+    }
+
+    // Validate dates
+    const pickupDate = new Date(currentLoadForm.pickupDate);
+    const deliveryDate = new Date(currentLoadForm.deliveryDate);
+    const now = new Date();
+    
+    if (pickupDate >= deliveryDate) {
+      setError('Delivery date must be after pickup date');
+      return;
+    }
+
+    if (pickupDate < now) {
+      setError('Pickup date cannot be in the past');
+      return;
+    }
+
+    // Check subscription limits for new loads only
     if (subscription && subscription.features?.maxLoads !== -1 && !editingLoad) {
-      const now = new Date();
       const thisMonthLoads = loads.filter(l => {
-        const d = new Date(l.createdAt);
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        const loadDate = new Date(l.createdAt);
+        return loadDate.getMonth() === now.getMonth() && 
+               loadDate.getFullYear() === now.getFullYear();
       }).length;
 
       if (thisMonthLoads >= subscription.features.maxLoads) {
-        setError(`You've reached your monthly limit of ${subscription.features.maxLoads} loads.`);
+        setError(`You've reached your monthly limit of ${subscription.features.maxLoads} loads. Please upgrade your plan to post more loads.`);
         return;
       }
     }
 
-    const payload = {
-      ...loadForm,
-      weight: parseFloat(loadForm.weight),
-      vehicleCapacityRequired: parseFloat(loadForm.vehicleCapacityRequired),
-      budget: parseFloat(loadForm.budget),
-      pickupDate: new Date(loadForm.pickupDate).toISOString(),
-      deliveryDate: new Date(loadForm.deliveryDate).toISOString(),
-    };
+    // Enhanced cargo owner name determination
+    const getCargoOwnerName = () => {
+      // Try multiple sources in order of preference
+      const sources = [
+        currentLoadForm.cargoOwnerName, // From form if already set
+        user?.cargoOwnerProfile?.companyName,
+        user?.companyName,
+        user?.profile?.companyName,
+        user?.businessProfile?.companyName,
+        user?.name,
+        user?.fullName,
+        user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : null,
+        user?.email?.split('@')[0]
+      ];
 
-    try {
-      setLoading(true);
-      setError('');
-
-      const method = editingLoad ? 'PUT' : 'POST';
-      const url = editingLoad
-        ? `${API_BASE_URL}/loads/${editingLoad}`
-        : `${API_BASE_URL}/loads`;
-
-      const response = await fetch(url, {
-        method,
-        headers: getAuthHeaders(),
-        body: JSON.stringify(payload),
-      });
-
-      if (response.status === 401) {
-        handleLogout();
-        return;
-      }
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setSuccess(`Load ${editingLoad ? 'updated' : 'created'} successfully!`);
-        setShowLoadForm(false);
-        setEditingLoad(null);
-        resetForm();
-        await fetchDashboardData();
-        window.dispatchEvent(new Event('authStateChanged'));
-      } else {
-        if (data.errors && Array.isArray(data.errors)) {
-          const firstError = data.errors[0]?.message || '';
-          setError(firstError);
-        } else {
-          setError(data.message || `Failed to ${editingLoad ? 'update' : 'create'} load`);
+      for (const name of sources) {
+        if (name && typeof name === 'string' && name.trim().length > 0 && name.trim() !== 'Anonymous') {
+          return name.trim();
         }
       }
 
-    } catch (error) {
-      console.error('Error submitting load:', error);
-      setError(`Failed to ${editingLoad ? 'update' : 'create'} load: ${error.message}`);
+      return 'Anonymous Cargo Owner';
+    };
 
-    } finally {
-      setLoading(false);
+    const cargoOwnerName = getCargoOwnerName();
+    
+    // Enhanced contact person information
+    const contactPerson = {
+      name: currentLoadForm.contactPerson?.name || user?.name || cargoOwnerName,
+      phone: currentLoadForm.contactPerson?.phone || user?.phone || '',
+      email: currentLoadForm.contactPerson?.email || user?.email || ''
+    };
+
+    // Prepare the complete payload
+    const payload = {
+      // Basic load information
+      title: currentLoadForm.title.trim(),
+      description: currentLoadForm.description.trim(),
+      pickupLocation: currentLoadForm.pickupLocation.trim(),
+      deliveryLocation: currentLoadForm.deliveryLocation.trim(),
+      pickupAddress: currentLoadForm.pickupAddress?.trim() || '',
+      deliveryAddress: currentLoadForm.deliveryAddress?.trim() || '',
+      
+      // Cargo details
+      weight: parseFloat(currentLoadForm.weight),
+      cargoType: currentLoadForm.cargoType || 'other',
+      vehicleType: currentLoadForm.vehicleType || 'small_truck',
+      vehicleCapacityRequired: parseFloat(currentLoadForm.vehicleCapacityRequired),
+      budget: parseFloat(currentLoadForm.budget),
+      
+      // Dates
+      pickupDate: pickupDate.toISOString(),
+      deliveryDate: deliveryDate.toISOString(),
+      
+      // Special requirements
+      specialInstructions: currentLoadForm.specialInstructions?.trim() || '',
+      isUrgent: Boolean(currentLoadForm.isUrgent),
+      
+      // Owner and contact information
+      cargoOwnerName: cargoOwnerName,
+      postedByName: cargoOwnerName,
+      contactPerson: contactPerson,
+      
+      // User reference
+      postedBy: user?.id || user?._id,
+      
+      // Metadata for tracking
+      createdBy: {
+        userId: user?.id || user?._id,
+        userType: 'cargo_owner',
+        name: cargoOwnerName
+      },
+      
+      // Status and lifecycle
+      status: 'posted',
+      isActive: true,
+      
+      // Payment terms
+      paymentTerms: currentLoadForm.paymentTerms || 'on_delivery',
+      insuranceRequired: Boolean(currentLoadForm.insuranceRequired),
+      
+      // System metadata
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    const method = editingLoad ? 'PUT' : 'POST';
+    const url = editingLoad
+      ? `${API_BASE_URL}/loads/${editingLoad}`
+      : `${API_BASE_URL}/loads`;
+
+    const response = await fetch(url, {
+      method,
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    });
+
+    // Handle authentication errors
+    if (response.status === 401) {
+      console.error('Authentication failed');
+      handleLogout();
+      return;
     }
-  };
+
+    const data = await response.json();
+
+    if (response.ok) {
+      const actionText = editingLoad ? 'updated' : 'created';
+      setSuccess(`Load ${actionText} successfully!`);
+      
+      // Close modal and reset form
+      setShowLoadForm(false);
+      setEditingLoad(null);
+      resetForm();
+      
+      // Refresh dashboard data
+      await fetchDashboardData();
+      
+      // Trigger auth state change event
+      window.dispatchEvent(new Event('authStateChanged'));
+      
+
+    } else {
+      // Handle specific error cases
+      let errorMessage = 'An unexpected error occurred';
+      
+      if (response.status === 400) {
+        if (data.errors && Array.isArray(data.errors)) {
+          errorMessage = data.errors.map(err => err.message || err.msg).join(', ');
+        } else if (data.message) {
+          errorMessage = data.message;
+        } else {
+          errorMessage = 'Invalid data provided. Please check all fields.';
+        }
+      } else if (response.status === 403) {
+        errorMessage = 'Access denied. You may not have permission to perform this action.';
+      } else if (response.status === 404) {
+        errorMessage = editingLoad ? 'Load not found. It may have been deleted.' : 'Service not found.';
+      } else if (response.status === 409) {
+        errorMessage = 'A conflict occurred. The load may have been modified by another user.';
+      } else if (response.status === 422) {
+        errorMessage = 'Validation failed. Please check your input data.';
+        if (data.errors) {
+          const validationErrors = Array.isArray(data.errors) 
+            ? data.errors.map(err => err.message || err.msg).join(', ')
+            : JSON.stringify(data.errors);
+          errorMessage += ` Details: ${validationErrors}`;
+        }
+      } else if (response.status === 429) {
+        errorMessage = 'Too many requests. Please wait a moment and try again.';
+      } else if (response.status >= 500) {
+        errorMessage = 'Server error occurred. Please try again later.';
+      } else {
+        errorMessage = data.message || `Failed to ${editingLoad ? 'update' : 'create'} load`;
+      }
+      
+      setError(errorMessage);
+      console.error('Load submission error:', {
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        payload
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in handleCreateLoad:', error);
+    
+    // Handle network errors
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error. Please check your internet connection and try again.');
+    } else if (error.name === 'AbortError') {
+      setError('Request timed out. Please try again.');
+    } else {
+      setError(`Failed to ${editingLoad ? 'update' : 'create'} load: ${error.message}`);
+    }
+  } finally {
+    setLoading(false);
+  }
+};
 
   const resetForm = () => {
     setLoadForm({
@@ -972,6 +1149,7 @@ const CargoOwnerDashboard = () => {
           setEditingLoad(null);
         }}
         resetForm={resetForm}
+        user={user}
       />
 
       <ProfileModal 

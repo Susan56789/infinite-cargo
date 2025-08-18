@@ -148,15 +148,76 @@ const LoadSchema = new mongoose.Schema({
     trim: true
   },
 
-  // References - FIXED: Use consistent collection names
-  postedBy: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', // Changed from 'cargo-owners' to 'User'
-    required: true
+  
+  postedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  // Multiple ways to store cargo owner name for reliability
+  cargoOwnerName: {
+    type: String,
+    required: true,
+    default: 'Anonymous',
+    trim: true,
+    maxlength: 100
+  },
+  
+  postedByName: {
+    type: String,
+    required: true,
+    default: 'Anonymous',
+    trim: true,
+    maxlength: 100
+  },
+  
+  // Enhanced contact information
+  contactPerson: {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 100,
+      default: function() {
+        return this.cargoOwnerName || 'Anonymous';
+      }
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 20
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: 100
+    }
+  },
+  
+  // Metadata for tracking
+  createdBy: {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    userType: {
+      type: String,
+      enum: ['cargo_owner', 'driver', 'admin'],
+      default: 'cargo_owner'
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      default: 'Anonymous'
+    }
   },
   assignedDriver: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User' // Changed from 'drivers' to 'User'
+    ref: 'User' 
   },
   acceptedBid: {
     type: mongoose.Schema.Types.ObjectId,
@@ -264,7 +325,7 @@ const LoadSchema = new mongoose.Schema({
   }
 }, {
   // Schema options
-  timestamps: true, // This will automatically handle createdAt and updatedAt
+  timestamps: true, 
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
@@ -296,32 +357,296 @@ LoadSchema.virtual('isExpiringSoon').get(function() {
   return daysUntilPickup !== null && daysUntilPickup <= 2 && daysUntilPickup >= 0;
 });
 
-// Pre-save middleware
-LoadSchema.pre('save', function(next) {
-  // Update the updatedAt field
-  this.updatedAt = new Date();
-  
-  // Generate load number if not exists
-  if (!this.loadNumber && this.isNew) {
-    const date = new Date();
-    const year = date.getFullYear().toString().substr(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    this.loadNumber = `LD${year}${month}${day}${random}`;
+// Complete Pre-save middleware for Load model
+LoadSchema.pre('save', async function(next) {
+  try {
+    // Update the updatedAt field
+    this.updatedAt = new Date();
+    
+    // Generate load number if not exists
+    if (!this.loadNumber && this.isNew) {
+      const date = new Date();
+      const year = date.getFullYear().toString().substr(-2);
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const day = date.getDate().toString().padStart(2, '0');
+      const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+      this.loadNumber = `LD${year}${month}${day}${random}`;
+      
+      // Ensure load number is unique
+      let counter = 0;
+      while (counter < 10) { // Prevent infinite loop
+        const existingLoad = await this.constructor.findOne({ loadNumber: this.loadNumber });
+        if (!existingLoad) break;
+        
+        // Generate new random number if collision
+        const newRandom = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        this.loadNumber = `LD${year}${month}${day}${newRandom}`;
+        counter++;
+      }
+    }
+    
+    // Validate pickup date is before delivery date
+    if (this.pickupDate && this.deliveryDate && this.pickupDate >= this.deliveryDate) {
+      return next(new Error('Pickup date must be before delivery date'));
+    }
+    
+    // Ensure cargo owner name is set
+    if (!this.cargoOwnerName || this.cargoOwnerName.trim() === '' || this.cargoOwnerName === 'Anonymous') {
+      try {
+        const User = this.constructor.db.model('User');
+        const user = await User.findById(this.postedBy).lean();
+        
+        if (user) {
+          const possibleNames = [
+            user.cargoOwnerProfile?.companyName,
+            user.companyName,
+            user.profile?.companyName,
+            user.businessProfile?.companyName,
+            user.name,
+            user.fullName,
+            user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : null,
+            user.email?.split('@')[0]
+          ];
+
+          for (const name of possibleNames) {
+            if (name && typeof name === 'string' && name.trim().length > 0) {
+              this.cargoOwnerName = name.trim();
+              this.postedByName = name.trim();
+              break;
+            }
+          }
+        }
+      } catch (userFetchError) {
+        console.warn('Could not fetch user for cargo owner name:', userFetchError.message);
+      }
+    }
+
+    // Ensure postedByName matches cargoOwnerName
+    if (!this.postedByName || this.postedByName.trim() === '') {
+      this.postedByName = this.cargoOwnerName || 'Anonymous';
+    }
+
+    // Ensure contactPerson is properly set
+    if (!this.contactPerson || !this.contactPerson.name) {
+      if (!this.contactPerson) this.contactPerson = {};
+      this.contactPerson.name = this.cargoOwnerName || 'Anonymous';
+    }
+
+    // Ensure createdBy metadata is properly set
+    if (!this.createdBy || !this.createdBy.name) {
+      if (!this.createdBy) this.createdBy = {};
+      this.createdBy.userId = this.postedBy;
+      this.createdBy.userType = 'cargo_owner';
+      this.createdBy.name = this.cargoOwnerName || 'Anonymous';
+    }
+    
+    // Validate budget against accepted bid amount if bid is accepted
+    if (this.acceptedBid && this.status === 'assigned') {
+      try {
+        const Bid = this.constructor.db.model('Bid');
+        const acceptedBid = await Bid.findById(this.acceptedBid).lean();
+        
+        if (acceptedBid) {
+          // Store the accepted bid amount for reference
+          this.acceptedBidAmount = acceptedBid.bidAmount;
+          
+          // Validate that bid amount is reasonable compared to budget
+          if (acceptedBid.bidAmount > this.budget * 1.5) {
+            console.warn(`Accepted bid amount (${acceptedBid.bidAmount}) is significantly higher than budget (${this.budget})`);
+          }
+          
+          // Store driver information from the accepted bid
+          if (acceptedBid.driver && !this.assignedDriver) {
+            this.assignedDriver = acceptedBid.driver;
+          }
+        }
+      } catch (bidFetchError) {
+        console.warn('Could not validate accepted bid:', bidFetchError.message);
+      }
+    }
+    
+    // Set bidding end date if not already set (for new loads)
+    if (this.isNew && !this.biddingEndDate && ['posted', 'receiving_bids'].includes(this.status)) {
+      // Default to 7 days from creation, or 1 day before pickup date (whichever is sooner)
+      const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const oneDayBeforePickup = this.pickupDate ? 
+        new Date(this.pickupDate.getTime() - 24 * 60 * 60 * 1000) : 
+        null;
+      
+      if (oneDayBeforePickup && oneDayBeforePickup < sevenDaysFromNow) {
+        this.biddingEndDate = oneDayBeforePickup;
+      } else {
+        this.biddingEndDate = sevenDaysFromNow;
+      }
+    }
+    
+    // Calculate and store distance if coordinates are available
+    if (this.pickupCoordinates && this.deliveryCoordinates && 
+        this.pickupCoordinates.lat && this.pickupCoordinates.lng &&
+        this.deliveryCoordinates.lat && this.deliveryCoordinates.lng) {
+      
+      this.distance = this.calculateDistance(
+        this.pickupCoordinates.lat, 
+        this.pickupCoordinates.lng,
+        this.deliveryCoordinates.lat, 
+        this.deliveryCoordinates.lng
+      );
+    }
+    
+    // Set appropriate status flags based on status
+    switch (this.status) {
+      case 'posted':
+      case 'receiving_bids':
+        this.isActive = true;
+        this.canReceiveBids = true;
+        break;
+        
+      case 'assigned':
+        this.isActive = true;
+        this.canReceiveBids = false;
+        if (!this.assignedAt) {
+          this.assignedAt = new Date();
+        }
+        break;
+        
+      case 'in_transit':
+        this.isActive = true;
+        this.canReceiveBids = false;
+        if (!this.startedAt) {
+          this.startedAt = new Date();
+        }
+        break;
+        
+      case 'delivered':
+        this.isActive = false;
+        this.canReceiveBids = false;
+        if (!this.deliveredAt) {
+          this.deliveredAt = new Date();
+        }
+        break;
+        
+      case 'cancelled':
+      case 'expired':
+        this.isActive = false;
+        this.canReceiveBids = false;
+        if (!this.cancelledAt && this.status === 'cancelled') {
+          this.cancelledAt = new Date();
+        }
+        if (!this.expiredAt && this.status === 'expired') {
+          this.expiredAt = new Date();
+        }
+        break;
+        
+      case 'on_hold':
+        this.isActive = false;
+        this.canReceiveBids = false;
+        if (!this.onHoldAt) {
+          this.onHoldAt = new Date();
+        }
+        break;
+    }
+    
+    // Validate required fields based on status
+    if (this.status === 'assigned' && !this.assignedDriver) {
+      return next(new Error('Assigned driver is required when status is assigned'));
+    }
+    
+    // Validate urgency and priority settings
+    if (this.isUrgent && !this.urgencyReason) {
+      this.urgencyReason = 'Marked as urgent by cargo owner';
+    }
+    
+    // Ensure pickup date is not in the past (for new loads)
+    if (this.isNew && this.pickupDate && this.pickupDate < new Date()) {
+      return next(new Error('Pickup date cannot be in the past'));
+    }
+    
+    // Validate weight and vehicle capacity requirements
+    if (this.weight && this.vehicleCapacityRequired && this.weight > this.vehicleCapacityRequired) {
+      console.warn(`Load weight (${this.weight}kg) exceeds required vehicle capacity (${this.vehicleCapacityRequired}kg)`);
+    }
+    
+    // Set search-friendly text for better indexing
+    this.searchText = [
+      this.title,
+      this.description,
+      this.pickupLocation,
+      this.deliveryLocation,
+      this.cargoType,
+      this.vehicleType,
+      this.cargoOwnerName
+    ].filter(Boolean).join(' ').toLowerCase();
+    
+    // Add to status history if status changed
+    if (this.isModified('status') && !this.isNew) {
+      if (!this.statusHistory) {
+        this.statusHistory = [];
+      }
+      
+      this.statusHistory.push({
+        status: this.status,
+        changedAt: new Date(),
+        changedBy: this.modifiedBy || this.postedBy, // Set by the route handler
+        reason: this.statusChangeReason || `Status changed to ${this.status}`
+      });
+    }
+    
+    next();
+    
+  } catch (error) {
+    console.error('Error in load pre-save middleware:', error);
+    next(error);
   }
+});
+
+// Helper method for distance calculation
+LoadSchema.methods.calculateDistance = function(lat1, lon1, lat2, lon2) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+  if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return null;
   
-  // Validate pickup date is before delivery date
-  if (this.pickupDate && this.deliveryDate && this.pickupDate >= this.deliveryDate) {
-    return next(new Error('Pickup date must be before delivery date'));
+  const R = 6371; // Radius of the Earth in km
+  const dLat = this.deg2rad(lat2 - lat1);
+  const dLon = this.deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(this.deg2rad(lat1)) * Math.cos(this.deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return Math.round(d * 100) / 100; // Round to 2 decimal places
+};
+
+LoadSchema.methods.deg2rad = function(deg) {
+  return deg * (Math.PI / 180);
+};
+
+// Pre-update middleware to handle updates
+LoadSchema.pre('findOneAndUpdate', async function(next) {
+  try {
+    const update = this.getUpdate();
+    
+    // Update the updatedAt field
+    if (!update.$set) update.$set = {};
+    update.$set.updatedAt = new Date();
+    
+    // If status is being updated, add to status history
+    if (update.status || update.$set.status) {
+      const newStatus = update.status || update.$set.status;
+      const statusHistoryEntry = {
+        status: newStatus,
+        changedAt: new Date(),
+        changedBy: update.modifiedBy || update.$set.modifiedBy,
+        reason: update.statusChangeReason || update.$set.statusChangeReason || `Status changed to ${newStatus}`
+      };
+      
+      if (!update.$push) update.$push = {};
+      update.$push.statusHistory = statusHistoryEntry;
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
   }
-  
-  // Validate budget against bid amount if bid is accepted
-  if (this.acceptedBid && this.status === 'assigned') {
-    // This validation would need to be done with the bid data
-  }
-  
-  next();
 });
 
 // Pre-update middleware
