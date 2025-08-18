@@ -147,91 +147,69 @@ const CargoOwnerDashboard = () => {
       const authHeaders = getAuthHeaders();
       
       const handleResponse = async (response, fallbackData = null) => {
-        if (response.ok) {
-          const data = await response.json();
-          return data.data || data;
-        } else if (response.status === 401) {
-          handleLogout();
-          throw new Error('Authentication failed');
-        } else if (response.status === 403) {
-          console.warn('Subscription limits reached for this endpoint');
-          return fallbackData;
-        } else if (response.status === 500) {
-          console.error('Server error occurred');
-          return fallbackData;
-        } else if (response.status === 503) {
-          console.error('Service temporarily unavailable');
-          return fallbackData;
-        } else {
-          try {
-            const errorData = await response.json();
-            console.warn(`API Error ${response.status}:`, errorData.message || 'Unknown error');
-          } catch (jsonError) {
-            console.warn(`API Error ${response.status}: Unable to parse error response`);
-          }
-          return fallbackData;
-        }
-      };
+  if (response.ok) {
+    const data = await response.json();
+    return data.data || data;  // normal success
+  }
 
-      // Fetch subscription status first
-      let subscriptionData = null;
-      try {
+  // Unauthorized
+  if (response.status === 401) {
+    handleLogout();
+    throw new Error('Authentication failed');
+  }
+
+  // Forbidden / subscription limit
+  if (response.status === 403) {
+    console.warn('Access forbidden or subscription limit reached.');
+    return fallbackData; // can be null
+  }
+
+  // For all server errors – throw
+  if (response.status >= 500) {
+    const errorText = await response.text();
+    throw new Error(`Server error: ${response.status} - ${errorText}`);
+  }
+
+  // Other non-OK
+  try {
+    const errorData = await response.json();
+    throw new Error(errorData.message || 'Unknown error');
+  } catch {
+    throw new Error('Unknown error occurred');
+  }
+};
+
+
+     // Fetch subscription status first
+let subscriptionData = null;
+try {
   const subscriptionResponse = await fetch(`${API_BASE_URL}/subscriptions/status`, {
     headers: authHeaders,
     timeout: 10000
   });
+
+  // Don't pass default fallback here — we only want real data or null
+  subscriptionData = await handleResponse(subscriptionResponse, null);
+
   
-  subscriptionData = await handleResponse(subscriptionResponse, {
-    plan: 'basic',
+
+  setSubscription(subscriptionData);
+
+} catch (error) {
+  console.warn('Could not fetch subscription status:', error.message);
+
+  // Hard fallback if request fails entirely
+  setSubscription({
+    planId: 'basic',
     planName: 'Basic Plan',
-    remainingLoads: 3,
+    status: 'inactive',
     features: { maxLoads: 3 },
     usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
     billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-    status: 'inactive',
     isActive: false
   });
-  
-  if (subscriptionData) {
-    setSubscription(subscriptionData);
-  }
-} catch (error) {
-  console.warn('Could not fetch subscription status:', error.message);
-  // Try alternative endpoint
-  try {
-    const altResponse = await fetch(`${API_BASE_URL}/cargo-owners/subscription`, {
-      headers: authHeaders,
-      timeout: 10000
-    });
-    
-    subscriptionData = await handleResponse(altResponse, {
-      plan: 'basic',
-      planName: 'Basic Plan',
-      remainingLoads: 3,
-      features: { maxLoads: 3 },
-      usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
-      billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-      status: 'inactive',
-      isActive: false
-    });
-    
-    if (subscriptionData) {
-      setSubscription(subscriptionData);
-    }
-  } catch (altError) {
-    console.warn('Alternative subscription endpoint also failed:', altError.message);
-    setSubscription({
-      plan: 'basic',
-      planName: 'Basic Plan',
-      remainingLoads: 3,
-      features: { maxLoads: 3 },
-      usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
-      billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-      status: 'inactive',
-      isActive: false
-    });
-  }
 }
+
 
       // Fetch loads data
       let loadsData = [];
@@ -727,6 +705,12 @@ const CargoOwnerDashboard = () => {
   };
 
   const handleSubscribe = async (planId, paymentMethod) => {
+    const selectedPlan = subscriptionPlans?.[planId];
+
+  if (!selectedPlan) {
+    setError('Selected plan not found.');
+    return;
+  }
     try {
       setLoading(true);
       setError('');
@@ -760,15 +744,12 @@ const CargoOwnerDashboard = () => {
       const data = await response.json();
 
       if (response.ok) {
-        setSuccess(data.message || 'Subscription request created successfully!');
-        setShowSubscriptionModal(false);
-        await fetchDashboardData();
-        
-        if (data.data?.paymentInstructions) {
-          console.log('Payment instructions:', data.data.paymentInstructions);
-        }
-        
-      } else {
+  setSubscription({
+    planId: planId,
+    planName: selectedPlan.name,
+    status: 'pending'
+  })
+} else {
         if (response.status === 400) {
           setError(data.message || 'Invalid subscription request. Please check your details.');
           if (data.errors) {

@@ -149,7 +149,7 @@ const SubscriptionModal = ({
                   <div className="space-y-3 mb-6">
                     <div className="flex items-center gap-2 text-sm">
                       <CheckCircle size={16} className="text-green-500" />
-                      <span>{plan?.features?.maxLoads === -1 ? 'Unlimited loads' : `${plan?.features?.maxLoads || 0} loads/month`}</span>
+                      <span>{plan?.maxLoads === -1 ? 'Unlimited loads' : `${plan?.maxLoads || 0} loads/month`}</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm">
                       <CheckCircle size={16} className={plan?.features?.prioritySupport ? 'text-green-500' : 'text-gray-300'} />

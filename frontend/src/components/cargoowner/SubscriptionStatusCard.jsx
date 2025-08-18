@@ -22,7 +22,7 @@ const SubscriptionStatusCard = ({ subscription, formatDate }) => {
         </div>
         <div className="text-right">
           <p className="text-sm text-gray-600">
-            {subscription.usage?.loadsThisMonth || 0} / {subscription.features?.maxLoads === -1 ? '∞' : subscription.features?.maxLoads || 0} loads used
+            {subscription?.usage?.loadsThisMonth || 0} / {subscription?.maxLoads === -1 ? '∞' : subscription?.maxLoads || 0} loads used
           </p>
           {subscription.expiresAt && (
             <p className="text-xs text-gray-500">
@@ -38,7 +38,7 @@ const SubscriptionStatusCard = ({ subscription, formatDate }) => {
             <div 
               className="bg-blue-600 h-2 rounded-full" 
               style={{ 
-                width: `${Math.min(100, (subscription.usage.loadsThisMonth / subscription.features.maxLoads) * 100)}%` 
+                width: `${Math.min(100, (subscription.usage.loadsThisMonth / subscription.maxLoads) * 100)}%` 
               }}
             ></div>
           </div>
