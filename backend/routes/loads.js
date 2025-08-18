@@ -449,7 +449,7 @@ router.get('/user/my-loads', auth, [
   }
 });
 
-// @route   GET /api/lads/subscription-status
+// @route   GET /api/loads/subscription-status
 // @desc    Get current user's subscription status
 // @access  Private
 router.get('/subscription-status',  auth, async (req, res) => {
@@ -738,7 +738,7 @@ router.get('/analytics/dashboard',  auth, async (req, res) => {
 
 // @route   POST /api/loads
 // @desc    Create a new load (CARGO OWNER AUTHENTICATION REQUIRED)
-// @access  Private (Cargo Owners only)
+// @access  Private
 router.post('/', auth, [
   body('title').trim().notEmpty().withMessage('Title is required').isLength({ min: 5, max: 100 }),
   body('description').trim().notEmpty().withMessage('Description is required').isLength({ min: 10, max: 1000 }),
