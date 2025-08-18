@@ -1347,7 +1347,7 @@ router.post('/subscriptions/:id/approve', adminAuth, [
     const notificationsCollection = db.collection('notifications');
     const auditLogsCollection = db.collection('audit_logs');
 
-    // FIXED: Find subscription by ID, not undefined variable
+    //Find subscription by ID
     const subscription = await subscriptionsCollection.findOne({
       _id: new mongoose.Types.ObjectId(subscriptionId)
     });
@@ -1366,7 +1366,7 @@ router.post('/subscriptions/:id/approve', adminAuth, [
       });
     }
 
-    // FIXED: Calculate expiry from approval time, not original request time
+    // Calculate expiry from approval time, not original request time
     const activatedAt = new Date();
     const expiresAt = new Date(activatedAt.getTime() + subscription.duration * 24 * 60 * 60 * 1000);
 

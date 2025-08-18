@@ -182,20 +182,7 @@ const SubscriptionStatusCard = ({ subscription, formatDate }) => {
         </div>
       )}
 
-      {/* Features List for Premium Plans */}
-      {subscription.features && Array.isArray(subscription.features) && subscription.planId !== 'basic' && (
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <h4 className="text-sm font-medium text-gray-700 mb-2">Plan Features:</h4>
-          <div className="grid grid-cols-2 gap-2">
-            {subscription.features.slice(0, 4).map((feature, index) => (
-              <div key={index} className="flex items-center gap-1 text-xs text-gray-600">
-                <div className="w-1 h-1 bg-purple-500 rounded-full" />
-                <span>{feature}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      
     </div>
   );
 };

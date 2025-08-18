@@ -1,4 +1,4 @@
-// routes/subscriptions.js - FIXED VERSION
+// routes/subscriptions.js 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -140,7 +140,7 @@ const getCurrentActiveSubscription = async (userId, db) => {
 };
 
 // @route   GET /api/subscriptions/status
-// @desc    Get current user's subscription status (FIXED)
+// @desc    Get current user's subscription status 
 // @access  Private (Cargo owners only)
 router.get('/status', auth, async (req, res) => {
   try {
@@ -329,11 +329,9 @@ router.get('/plans', auth, async (req, res) => {
   }
 });
 
+
 // @route   POST /api/subscriptions/subscribe
-// @desc    Create a new subscription request (FIXED)
-// @access  Private (Cargo owners only)
-// @route   POST /api/subscriptions/subscribe
-// @desc    Create a new subscription request (FIXED)
+// @desc    Create a new subscription request 
 // @access  Private (Cargo owners only)
 router.post('/subscribe', auth, subscriptionLimiter, [
   body('planId')
@@ -580,7 +578,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
 });
 
 // @route   POST /api/subscriptions/admin/:id/reject
-// @desc    Reject a subscription request (FIXED)
+// @desc    Reject a subscription request 
 // @access  Private (Admin only)
 router.post('/admin/:id/reject', adminAuth, [
   body('reason').notEmpty().withMessage('Rejection reason is required'),
@@ -713,10 +711,10 @@ router.post('/admin/:id/reject', adminAuth, [
     await auditLogsCollection.insertOne({
       action: 'subscription_rejected',
       entityType: 'subscription',
-      entityId: new mongoose.Types.ObjectId(subscriptionId),
+      entityId: new mongoose.Types.ObjectId(id),
       adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
       adminName,
-      userId: subscriptionId,
+      userId: subscription.userId,
       details: {
         planId: subscription.planId,
         planName: subscription.planName,
@@ -754,7 +752,7 @@ router.post('/admin/:id/reject', adminAuth, [
 });
 
 // @route   GET /api/subscriptions/admin/pending
-// @desc    Get pending subscription requests (FIXED)
+// @desc    Get pending subscription requests 
 // @access  Private (Admin only)
 router.get('/admin/pending', adminAuth, [
   query('page').optional().isInt({ min: 1 }),
@@ -1214,7 +1212,7 @@ router.get('/check-limits', auth, async (req, res) => {
 });
 
 // @route   GET /api/subscriptions/my-subscription
-// @desc    Get current user's subscription with enhanced details (FIXED)
+// @desc    Get current user's subscription with enhanced details 
 // @access  Private (Cargo owners only)
 router.get('/my-subscription', auth, async (req, res) => {
   try {
@@ -1341,6 +1339,383 @@ router.get('/my-subscription', auth, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Add this APPROVE endpoint after the reject endpoint and before the pending endpoint
+
+// @route   POST /api/subscriptions/admin/:id/approve
+// @desc    Approve a subscription request
+// @access  Private (Admin only)
+router.post('/admin/:id/approve', adminAuth, [
+  body('activationDate').optional().isISO8601().withMessage('Invalid activation date'),
+  body('notes').optional().isLength({ max: 500 }),
+  body('customDuration').optional().isInt({ min: 1, max: 365 }).withMessage('Duration must be between 1-365 days')
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to approve subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const {
+      activationDate,
+      notes = '',
+      customDuration
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only pending subscriptions can be approved'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+    const adminEmail = req.admin.email || '';
+
+    // Calculate activation and expiry dates
+    const activateAt = activationDate ? new Date(activationDate) : new Date();
+    const duration = customDuration || subscription.duration || SUBSCRIPTION_PLANS[subscription.planId]?.duration || 30;
+    const expiresAt = new Date(activateAt.getTime() + duration * 24 * 60 * 60 * 1000);
+
+    // Deactivate any existing active subscriptions for this user (except basic)
+    await subscriptionsCollection.updateMany(
+      { 
+        userId: subscription.userId,
+        status: 'active',
+        planId: { $ne: 'basic' }
+      },
+      { 
+        $set: { 
+          status: 'expired',
+          updatedAt: new Date(),
+          deactivatedReason: 'Replaced by new subscription'
+        }
+      }
+    );
+
+    // Update subscription to active
+    const updateResult = await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: {
+          status: 'active',
+          paymentStatus: 'completed',
+          approvedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+          approvedAt: new Date(),
+          activatedAt: activateAt,
+          expiresAt: expiresAt,
+          adminNotes: notes,
+          approvalDetails: {
+            approvedByName: adminName,
+            approvedByEmail: adminEmail,
+            approvalTimestamp: new Date(),
+            customDuration: customDuration || null
+          },
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    if (updateResult.matchedCount === 0) {
+      throw new Error('Failed to update subscription status');
+    }
+
+    // Update user record
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      {
+        $set: {
+          currentSubscription: new mongoose.Types.ObjectId(id),
+          subscriptionPlan: subscription.planId,
+          subscriptionStatus: 'active',
+          subscriptionExpiresAt: expiresAt,
+          updatedAt: new Date()
+        },
+        $unset: {
+          pendingSubscription: ''
+        }
+      }
+    );
+
+    // Send notification to user
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_approved',
+      title: 'Subscription Approved!',
+      message: `Your ${subscription.planName} subscription has been approved and is now active. You can now enjoy all premium features.`,
+      data: {
+        subscriptionId: id,
+        planId: subscription.planId,
+        planName: subscription.planName,
+        price: subscription.price,
+        expiresAt: expiresAt,
+        activatedAt: activateAt
+      },
+      isRead: false,
+      priority: 'high',
+      createdAt: new Date()
+    });
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_approved',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        amount: subscription.price,
+        paymentMethod: subscription.paymentMethod,
+        duration: duration,
+        customDuration: customDuration || null,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    console.log('Subscription approved:', {
+      subscriptionId: id,
+      userId: subscription.userId.toString(),
+      planId: subscription.planId,
+      approvedBy: adminName
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Subscription approved successfully',
+      data: {
+        subscriptionId: id,
+        approvedAt: new Date(),
+        activatedAt: activateAt,
+        expiresAt: expiresAt,
+        planName: subscription.planName
+      }
+    });
+
+  } catch (error) {
+    console.error('Approve subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error approving subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ALSO FIX THE REJECT ENDPOINT - replace the existing reject endpoint with this:
+router.post('/admin/:id/reject', adminAuth, [
+  body('reason').notEmpty().withMessage('Rejection reason is required'),
+  body('reasonCategory').isIn([
+    'payment_failed', 'invalid_details', 'fraud_suspected', 'other'
+  ]).withMessage('Valid reason category is required'),
+  body('notes').optional().isLength({ max: 500 }),
+  body('refundRequired').optional().isBoolean()
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to reject subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const {
+      reason,
+      reasonCategory,
+      notes = '',
+      refundRequired = false
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only pending subscriptions can be rejected'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+    const adminEmail = req.admin.email || '';
+
+    // Update subscription to rejected
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: {
+          status: 'rejected',
+          paymentStatus: 'failed',
+          rejectedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+          rejectedAt: new Date(),
+          rejectionReason: reason,
+          rejectionCategory: reasonCategory,
+          adminNotes: notes,
+          refundRequired,
+          rejectionDetails: {
+            rejectedByName: adminName,
+            rejectedByEmail: adminEmail,
+            rejectionTimestamp: new Date()
+          },
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Remove pendingSubscription from user
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      { $unset: { pendingSubscription: '' }, $set: { updatedAt: new Date() } }
+    );
+
+    // Ensure user has basic subscription
+    await ensureBasicSubscription(subscription.userId, db);
+
+    // Send notification to user
+    const reasonMessages = {
+      payment_failed: 'Payment could not be verified',
+      invalid_details: 'Payment details were invalid',
+      fraud_suspected: 'Suspicious activity detected',
+      other: reason
+    };
+
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_rejected',
+      title: 'Subscription Request Rejected',
+      message: `Your ${subscription.planName} request was declined. Reason: ${reasonMessages[reasonCategory]}. You remain on the Basic plan.`,
+      data: {
+        subscriptionId: id,
+        planName: subscription.planName,
+        reason,
+        reasonCategory,
+        refundRequired,
+        rejectedAt: new Date()
+      },
+      isRead: false,
+      priority: 'high',
+      createdAt: new Date()
+    });
+
+    
+    await auditLogsCollection.insertOne({
+      action: 'subscription_rejected',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id), 
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId, 
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        amount: subscription.price,
+        paymentMethod: subscription.paymentMethod,
+        reason,
+        reasonCategory,
+        refundRequired,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Subscription rejected successfully',
+      data: {
+        subscriptionId: id,
+        rejectedAt: new Date(),
+        reason,
+        reasonCategory
+      }
+    });
+
+  } catch (error) {
+    console.error('Reject subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error rejecting subscription',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

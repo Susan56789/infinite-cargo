@@ -58,14 +58,18 @@ const LoadsTab = () => {
 
   // API Configuration
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
+  
   const getAuthHeaders = () => {
+    const authHeader = getAuthHeader();
+    
+    
     return {
-      ...getAuthHeader(),
+      ...authHeader,
       'Content-Type': 'application/json'
     };
   };
 
-  // API Functions
+  // Enhanced API Functions with better error handling
   const fetchLoads = useCallback(async (page = 1, customFilters = null) => {
     try {
       setLoading(true);
@@ -78,34 +82,80 @@ const LoadsTab = () => {
         page: page.toString(),
         limit: pagination.limit.toString(),
         sortBy: sortConfig.key,
-        sortOrder: sortConfig.direction,
-        ...(currentFilters.search && { search: currentFilters.search }),
-        ...(currentFilters.status && { status: currentFilters.status }),
-        ...(currentFilters.minBudget && { minBudget: currentFilters.minBudget }),
-        ...(currentFilters.maxBudget && { maxBudget: currentFilters.maxBudget }),
-        ...(currentFilters.pickupDate && { pickupDate: currentFilters.pickupDate }),
-        ...(currentFilters.deliveryDate && { deliveryDate: currentFilters.deliveryDate }),
-        ...(currentFilters.urgent && { urgentOnly: 'true' })
+        sortOrder: sortConfig.direction
       });
 
+      // Add filters only if they have values
+      if (currentFilters.search && currentFilters.search.trim()) {
+        queryParams.append('search', currentFilters.search.trim());
+      }
+      if (currentFilters.status) {
+        queryParams.append('status', currentFilters.status);
+      }
+      if (currentFilters.minBudget) {
+        queryParams.append('minBudget', currentFilters.minBudget);
+      }
+      if (currentFilters.maxBudget) {
+        queryParams.append('maxBudget', currentFilters.maxBudget);
+      }
+      if (currentFilters.pickupDate) {
+        queryParams.append('pickupDate', currentFilters.pickupDate);
+      }
+      if (currentFilters.deliveryDate) {
+        queryParams.append('deliveryDate', currentFilters.deliveryDate);
+      }
+      if (currentFilters.urgent) {
+        queryParams.append('urgentOnly', 'true');
+      }
+
       const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams}`;
+     
+
+      const headers = getAuthHeaders();
+      
 
       const response = await fetch(endpoint, {
         method: 'GET',
-        headers: getAuthHeaders()
+        headers
       });
 
+   
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API Error Response:', errorText);
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        let errorMessage = `HTTP ${response.status}`;
+        
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+          console.error('API Error Data:', errorData);
+        } catch (parseError) {
+          const errorText = await response.text();
+          errorMessage = errorText || errorMessage;
+          console.error('API Error Text:', errorText);
+        }
+
+        // Handle specific error cases
+        if (response.status === 401) {
+          setError('Authentication failed. Please log in again.');
+          authManager.logout();
+          return;
+        } else if (response.status === 403) {
+          setError('Access denied. Make sure you are logged in as a cargo owner.');
+          return;
+        } else if (response.status === 500) {
+          setError('Server error occurred. Please try again in a few moments.');
+          return;
+        }
+
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
-      console.log('API Response:', data);
+     
       
       if (data.status === 'success') {
-        setLoads(data.data.loads || []);
+        const loadsData = data.data.loads || [];
+        setLoads(loadsData);
+        
         if (data.data.pagination) {
           setPagination({
             page: data.data.pagination.currentPage,
@@ -119,70 +169,99 @@ const LoadsTab = () => {
       }
     } catch (err) {
       console.error('Error fetching loads:', err);
-      setError(err.message || 'Failed to load data. Please try again.');
+      
+      // Set user-friendly error messages
+      if (err.message.includes('fetch')) {
+        setError('Network error. Please check your connection and try again.');
+      } else if (err.message.includes('Authentication')) {
+        setError('Please log in to view your loads.');
+      } else {
+        setError(err.message || 'Failed to load data. Please try again.');
+      }
+      
       setLoads([]);
     } finally {
       setLoading(false);
     }
   }, [filters, sortConfig, pagination.limit, API_BASE_URL]);
 
-const updateLoadStatus = async (loadId, newStatus) => {
-  try {
-    setLoading(true);
+  const updateLoadStatus = async (loadId, newStatus) => {
+    try {
+      setLoading(true);
+      setError('');
 
-    const headers = {
-      ...getAuthHeaders(),               // includes Authorization Bearer
-      'Content-Type': 'application/json'
-    };
+      const headers = getAuthHeaders();
+      
 
-    const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ status: newStatus })
-    });
+      const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ status: newStatus })
+      });
 
-    if (!response.ok) {
-      // If 401, prompt re-login
-      if (response.status === 401 || response.status === 403) {
-        setError('Session expired or not authorized. Please log in again.');
-        authManager.logout();
-        return;
+      if (!response.ok) {
+        // Handle authentication errors
+        if (response.status === 401 || response.status === 403) {
+          setError('Session expired or not authorized. Please log in again.');
+          authManager.logout();
+          return;
+        }
+
+        let errorMessage = 'Failed to update load status';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (parseError) {
+          const errorText = await response.text();
+          errorMessage = errorText || errorMessage;
+        }
+
+        throw new Error(errorMessage);
       }
 
-      const errorText = await response.text();
-      throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+      const data = await response.json();
+      
+
+      if (data.status === 'success') {
+        // Update the load in the local state
+        setLoads(prevLoads => 
+          prevLoads.map(load =>
+            load._id === loadId ? { ...load, status: newStatus } : load
+          )
+        );
+        
+        
+      } else {
+        throw new Error(data.message || 'Failed to update load status');
+      }
+
+    } catch (err) {
+      console.error('Error updating load status:', err);
+      setError(err.message || 'Failed to update load status');
+    } finally {
+      setLoading(false);
     }
-
-    const data = await response.json();
-    console.log("PATCH result: ", data);
-
-    if (data.status === 'success') {
-      setLoads(loads.map(load =>
-        load._id === loadId ? { ...load, status: newStatus } : load
-      ));
-    } else {
-      throw new Error(data.message || 'Failed to update load status');
-    }
-
-  } catch (err) {
-    console.error('Error updating load status:', err);
-    setError(err.message || 'Failed to update load status');
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   const deleteLoad = async (loadId) => {
     try {
+      setError('');
+      
       const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        let errorMessage = 'Failed to delete load';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (parseError) {
+          const errorText = await response.text();
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -211,8 +290,8 @@ const updateLoadStatus = async (loadId, newStatus) => {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        console.warn('Failed to check user limits');
+        return { canCreateLoads: true, remainingLoads: 0 };
       }
 
       const data = await response.json();
@@ -223,15 +302,51 @@ const updateLoadStatus = async (loadId, newStatus) => {
     }
   };
 
-  // Initial data fetch
+  // Test API connection on component mount
   useEffect(() => {
-    fetchLoads();
+    const testConnection = async () => {
+      try {
+        
+        const headers = getAuthHeaders();
+        
+        
+        // First test if we can reach the API at all
+        const testResponse = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
+          method: 'GET',
+          headers
+        });
+        
+        
+        
+        if (testResponse.status === 401) {
+          setError('Authentication required. Please log in.');
+          return;
+        }
+        
+        if (testResponse.status === 403) {
+          setError('Access denied. Please ensure you are logged in as a cargo owner.');
+          return;
+        }
+        
+        // If connection test passes, fetch loads
+        fetchLoads();
+        
+      } catch (connectionError) {
+        console.error('Connection test failed:', connectionError);
+        setError('Unable to connect to server. Please check your internet connection.');
+        setLoading(false);
+      }
+    };
+
+    testConnection();
   }, []);
 
   // Refetch when filters or sort changes with debounce
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      fetchLoads(1);
+      if (!loading) { // Don't trigger if already loading
+        fetchLoads(1);
+      }
     }, 500);
 
     return () => clearTimeout(timeoutId);
@@ -277,13 +392,17 @@ const updateLoadStatus = async (loadId, newStatus) => {
 
   const formatDate = (date) => {
     if (!date) return 'N/A';
-    return new Date(date).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      return new Date(date).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (err) {
+      return 'Invalid Date';
+    }
   };
 
   // Event handlers
@@ -317,6 +436,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
   };
 
   const onRefresh = () => {
+    
     fetchLoads(pagination.page);
   };
 
@@ -328,6 +448,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
 
     try {
       setLoading(true);
+      setError('');
       const loadIds = Array.from(selectedLoads);
 
       if (action === 'export') {
@@ -395,13 +516,13 @@ const updateLoadStatus = async (loadId, newStatus) => {
   };
 
   const handleViewDetails = (loadId) => {
-    // In a real app, you'd use React Router
     console.log('Navigate to load details:', loadId);
+    // TODO: Implement navigation to load details
   };
 
   const handleEditLoad = (loadId) => {
-    // In a real app, you'd use React Router or open edit form
-    console.log('Edit load:', loadId);
+    
+    // TODO: Implement edit functionality
   };
 
   const handleUpdateLoadStatus = async (loadId, newStatus) => {
@@ -416,21 +537,9 @@ const updateLoadStatus = async (loadId, newStatus) => {
     }
   };
 
+  
   return (
     <div className="space-y-6">
-      {/* Error Display */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
-          <AlertCircle className="h-5 w-5 text-red-500" />
-          <p className="text-red-700">{error}</p>
-          <button
-            onClick={() => setError('')}
-            className="ml-auto text-red-500 hover:text-red-700"
-          >
-            <XCircle className="h-4 w-4" />
-          </button>
-        </div>
-      )}
 
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -472,6 +581,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
             <option value="posted">Posted</option>
             <option value="receiving_bids">Receiving Bids</option>
             <option value="driver_assigned">Driver Assigned</option>
+            <option value="assigned">Assigned</option>
             <option value="in_transit">In Transit</option>
             <option value="delivered">Delivered</option>
             <option value="not_available">Not Available</option>
@@ -595,17 +705,19 @@ const updateLoadStatus = async (loadId, newStatus) => {
       {/* Results Summary */}
       <div className="flex items-center justify-between">
         <p className="text-gray-600">
-          Showing {((pagination.page - 1) * pagination.limit) + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} loads
+          Showing {loads.length > 0 ? ((pagination.page - 1) * pagination.limit) + 1 : 0} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} loads
         </p>
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={selectedLoads.size === loads.length && loads.length > 0}
-            onChange={selectAllLoads}
-            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-          />
-          <label className="text-sm text-gray-700">Select all</label>
-        </div>
+        {loads.length > 0 && (
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selectedLoads.size === loads.length && loads.length > 0}
+              onChange={selectAllLoads}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+            <label className="text-sm text-gray-700">Select all</label>
+          </div>
+        )}
       </div>
 
       {/* Loads Table/Grid */}
@@ -620,14 +732,24 @@ const updateLoadStatus = async (loadId, newStatus) => {
             <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
             <p className="text-gray-600 mb-4">
-              {filters.search || filters.status ? 'No loads match your current filters.' : 'You haven\'t posted any loads yet.'}
+              {error ? 'Unable to load your data.' : 
+               filters.search || filters.status ? 'No loads match your current filters.' : 'You haven\'t posted any loads yet.'}
             </p>
-            {!filters.search && !filters.status && (
+            {!error && !filters.search && !filters.status && (
               <button
                 onClick={handlePostLoadClick}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium"
               >
                 Post Your First Load
+              </button>
+            )}
+            {error && (
+              <button
+                onClick={onRefresh}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 mx-auto"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Try Again
               </button>
             )}
           </div>
@@ -684,8 +806,8 @@ const updateLoadStatus = async (loadId, newStatus) => {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900 truncate">
-                            {load.title}
-                            {load.urgent && (
+                            {load.title || 'Untitled Load'}
+                            {(load.urgent || load.isUrgent) && (
                               <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                                 <Zap className="h-3 w-3 mr-1" />
                                 Urgent
@@ -693,7 +815,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
                             )}
                           </p>
                           <p className="text-sm text-gray-500">
-                            {load.cargoType} • {load.weight} kg
+                            {load.cargoType || 'other'} • {load.weight || 0} kg
                           </p>
                           <p className="text-xs text-gray-400">
                             Posted {formatDate(load.createdAt)}
@@ -706,14 +828,14 @@ const updateLoadStatus = async (loadId, newStatus) => {
                         <div className="flex items-center text-sm">
                           <MapPin className="h-4 w-4 text-green-500 mr-1" />
                           <span className="text-gray-900 truncate max-w-32">
-                            {load.pickupLocation?.address || load.pickupAddress}
+                            {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation || 'N/A'}
                           </span>
                         </div>
                         <ArrowRight className="h-4 w-4 text-gray-400 mx-1" />
                         <div className="flex items-center text-sm">
                           <MapPin className="h-4 w-4 text-red-500 mr-1" />
                           <span className="text-gray-900 truncate max-w-32">
-                            {load.deliveryLocation?.address || load.deliveryAddress}
+                            {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation || 'N/A'}
                           </span>
                         </div>
                       </div>
@@ -722,7 +844,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
                       <div className="flex items-center">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
                           {getStatusIcon(load.status)}
-                          <span className="ml-1 capitalize">{load.status.replace('_', ' ')}</span>
+                          <span className="ml-1 capitalize">{(load.status || 'unknown').replace('_', ' ')}</span>
                         </span>
                       </div>
                     </td>
@@ -733,15 +855,15 @@ const updateLoadStatus = async (loadId, newStatus) => {
                           {formatCurrency(load.budget)}
                         </span>
                       </div>
-                      {load.bidsCount > 0 && (
+                      {(load.bidsCount > 0 || load.bidCount > 0) && (
                         <p className="text-xs text-gray-500">
-                          {load.bidsCount} bid{load.bidsCount !== 1 ? 's' : ''}
+                          {load.bidsCount || load.bidCount || 0} bid{(load.bidsCount || load.bidCount || 0) !== 1 ? 's' : ''}
                         </p>
                       )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="space-y-1 text-sm">
-                      <div className="flex items-center">
+                        <div className="flex items-center">
                           <Calendar className="h-4 w-4 text-gray-400 mr-1" />
                           <span className="text-gray-900">
                             {formatDate(load.pickupDate)}
@@ -781,6 +903,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
                             <option value="posted">Posted</option>
                             <option value="receiving_bids">Receiving Bids</option>
                             <option value="driver_assigned">Driver Assigned</option>
+                            <option value="assigned">Assigned</option>
                             <option value="in_transit">In Transit</option>
                             <option value="delivered">Delivered</option>
                             <option value="not_available">Not Available</option>
@@ -854,7 +977,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
         </div>
       )}
 
-      {/* Load Form Modal would go here */}
+      {/* Load Form Modal */}
       {showLoadForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-screen overflow-y-auto">
@@ -871,7 +994,6 @@ const updateLoadStatus = async (loadId, newStatus) => {
                 </button>
               </div>
               
-              {/* Form content would be implemented here */}
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -953,7 +1075,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
                       <option value="other">Other</option>
                       <option value="electronics">Electronics</option>
                       <option value="furniture">Furniture</option>
-                      <option value="food">Food & Beverages</option>
+                      <option value="food_beverages">Food & Beverages</option>
                       <option value="clothing">Clothing</option>
                       <option value="machinery">Machinery</option>
                       <option value="documents">Documents</option>
@@ -1022,8 +1144,7 @@ const updateLoadStatus = async (loadId, newStatus) => {
                   </button>
                   <button
                     onClick={() => {
-                      // Handle form submission here
-                      console.log('Form submitted:', loadForm);
+                      
                       setShowLoadForm(false);
                     }}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
