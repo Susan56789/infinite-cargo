@@ -12,7 +12,7 @@ const DashboardHeader = ({
   
   // Enhanced function to get user display name
   const getUserDisplayName = () => {
-    console.log('User data in header:', user); // Debug log
+    
     
     if (!user) return 'Guest User';
     

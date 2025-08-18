@@ -16,7 +16,7 @@ const LoadFormModal = ({
 
   // Enhanced function to get display name
   const getDisplayName = () => {
-    console.log('User data in LoadFormModal:', user); // Debug log
+    
     
     // Try multiple sources for the display name
     const sources = [
@@ -32,12 +32,12 @@ const LoadFormModal = ({
 
     for (const name of sources) {
       if (name && typeof name === 'string' && name.trim().length > 0) {
-        console.log('Selected display name:', name.trim()); // Debug log
+      
         return name.trim();
       }
     }
 
-    console.log('Falling back to Anonymous Cargo Owner'); // Debug log
+   
     return 'Anonymous Cargo Owner';
   };
 

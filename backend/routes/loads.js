@@ -103,7 +103,7 @@ function deg2rad(deg) {
 // @route   GET /api/loads/user/my-loads
 // @desc    Get cargo owner's loads with detailed information
 // @access  Private (Cargo owners only)
-router.get('/user/my-loads',  auth, [
+router.get('/user/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['posted', 'receiving_bids', 'driver_assigned', 'in_transit', 'delivered', 'cancelled']),
@@ -111,7 +111,7 @@ router.get('/user/my-loads',  auth, [
   query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   try {
-    // Check token
+    // Check authentication
     if (!req.user || !req.user.id) {
       return res.status(401).json({
         status: 'error',
@@ -156,52 +156,210 @@ router.get('/user/my-loads',  auth, [
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Fetch with aggregation (same as before)
-    const loads = await Load.aggregate([
+    // Enhanced aggregation pipeline with proper cargo owner name handling
+    const aggregationPipeline = [
       { $match: query },
-      // ... your lookups, projections remain the same here ...
-      { $sort: { [sortBy]: sortDirection } },
+      
+      // Lookup user information
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'postedBy',
+          foreignField: '_id',
+          as: 'postedByUser'
+        }
+      },
+      
+      // Lookup bid statistics
+      {
+        $lookup: {
+          from: 'bids',
+          let: { loadId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$load', '$$loadId'] },
+                    { $nin: ['$status', ['withdrawn', 'expired']] }
+                  ]
+                }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                pending: {
+                  $sum: {
+                    $cond: [{ $in: ['$status', ['submitted', 'viewed', 'under_review']] }, 1, 0]
+                  }
+                },
+                accepted: {
+                  $sum: {
+                    $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0]
+                  }
+                },
+                avgBidAmount: { $avg: '$bidAmount' },
+                lowestBid: { $min: '$bidAmount' },
+                highestBid: { $max: '$bidAmount' }
+              }
+            }
+          ],
+          as: 'bidStats'
+        }
+      },
+      
+      // Lookup assigned driver if any
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedDriver',
+          foreignField: '_id',
+          as: 'assignedDriverInfo'
+        }
+      },
+      
+      // Add computed fields
+      {
+        $addFields: {
+          postedByUser: { $arrayElemAt: ['$postedByUser', 0] },
+          bidStats: { $arrayElemAt: ['$bidStats', 0] },
+          assignedDriverInfo: { $arrayElemAt: ['$assignedDriverInfo', 0] },
+          
+          // Enhanced cargo owner name resolution
+          resolvedCargoOwnerName: {
+            $cond: {
+              if: { $and: [{ $ne: ['$cargoOwnerName', null] }, { $ne: ['$cargoOwnerName', ''] }] },
+              then: '$cargoOwnerName',
+              else: {
+                $cond: {
+                  if: { $and: [{ $ne: ['$postedByName', null] }, { $ne: ['$postedByName', ''] }] },
+                  then: '$postedByName',
+                  else: {
+                    $let: {
+                      vars: { user: { $arrayElemAt: ['$postedByUser', 0] } },
+                      in: {
+                        $cond: {
+                          if: { $and: [{ $ne: ['$$user.cargoOwnerProfile.companyName', null] }, { $ne: ['$$user.cargoOwnerProfile.companyName', ''] }] },
+                          then: '$$user.cargoOwnerProfile.companyName',
+                          else: {
+                            $cond: {
+                              if: { $and: [{ $ne: ['$$user.companyName', null] }, { $ne: ['$$user.companyName', ''] }] },
+                              then: '$$user.companyName',
+                              else: {
+                                $cond: {
+                                  if: { $and: [{ $ne: ['$$user.name', null] }, { $ne: ['$$user.name', ''] }] },
+                                  then: '$$user.name',
+                                  else: 'Anonymous Cargo Owner'
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      
+      // Project final structure
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          description: 1,
+          cargoType: 1,
+          weight: 1,
+          dimensions: 1,
+          pickupLocation: 1,
+          deliveryLocation: 1,
+          pickupAddress: 1,
+          deliveryAddress: 1,
+          pickupDate: 1,
+          deliveryDate: 1,
+          budget: 1,
+          vehicleType: 1,
+          vehicleCapacityRequired: 1,
+          specialRequirements: 1,
+          specialInstructions: 1,
+          status: 1,
+          isUrgent: 1,
+          isActive: 1,
+          boostLevel: { $ifNull: ['$boostLevel', 0] },
+          isBoosted: { $ifNull: ['$isBoosted', false] },
+          isPriorityListing: { $ifNull: ['$isPriorityListing', false] },
+          createdAt: 1,
+          updatedAt: 1,
+          assignedAt: 1,
+          deliveredAt: 1,
+          viewCount: { $ifNull: ['$viewCount', 0] },
+          distance: 1,
+          
+          // Cargo owner information - GUARANTEED TO BE PRESENT
+          cargoOwnerName: '$resolvedCargoOwnerName',
+          postedByName: '$resolvedCargoOwnerName',
+          
+          // Contact information
+          contactPerson: 1,
+          
+          // Bid statistics
+          bidCount: { $ifNull: ['$bidStats.total', 0] },
+          pendingBids: { $ifNull: ['$bidStats.pending', 0] },
+          acceptedBids: { $ifNull: ['$bidStats.accepted', 0] },
+          averageBidAmount: '$bidStats.avgBidAmount',
+          lowestBid: '$bidStats.lowestBid',
+          highestBid: '$bidStats.highestBid',
+          
+          // Assigned driver information (if any)
+          assignedDriver: {
+            $cond: {
+              if: { $ne: ['$assignedDriverInfo', null] },
+              then: {
+                _id: '$assignedDriverInfo._id',
+                name: '$assignedDriverInfo.name',
+                phone: '$assignedDriverInfo.phone',
+                email: '$assignedDriverInfo.email',
+                location: '$assignedDriverInfo.location',
+                vehicleType: '$assignedDriverInfo.vehicleType',
+                rating: { $ifNull: ['$assignedDriverInfo.rating', 4.5] },
+                isVerified: { $ifNull: ['$assignedDriverInfo.isVerified', false] }
+              },
+              else: null
+            }
+          },
+          
+          // Accepted bid amount if applicable
+          acceptedBidAmount: {
+            $cond: {
+              if: { $eq: ['$status', 'assigned'] },
+              then: '$bidStats.acceptedBidAmount',
+              else: null
+            }
+          }
+        }
+      },
+      
+      // Sort
+      { $sort: { [sortBy]: sortDirection, createdAt: -1 } },
+      
+      // Pagination
       { $skip: skip },
       { $limit: parseInt(limit) }
-    ]);
+    ];
 
+    // Execute aggregation
+    const loads = await Load.aggregate(aggregationPipeline);
     const totalLoads = await Load.countDocuments(query);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Transform the data for frontend
+    // Transform the data for frontend with additional computed fields
     const transformedLoads = loads.map(load => ({
-      _id: load._id,
-      title: load.title,
-      description: load.description,
-      cargoType: load.cargoType,
-      weight: load.weight,
-      dimensions: load.dimensions,
-      pickupLocation: load.pickupLocation,
-      deliveryLocation: load.deliveryLocation,
-      pickupDate: load.pickupDate,
-      deliveryDate: load.deliveryDate,
-      budget: load.budget,
-      vehicleType: load.vehicleType,
-      specialRequirements: load.specialRequirements,
-      status: load.status,
-      isUrgent: load.isUrgent,
-      boostLevel: load.boostLevel || 0,
-      isBoosted: load.isBoosted || false,
-      createdAt: load.createdAt,
-      updatedAt: load.updatedAt,
-      assignedAt: load.assignedAt,
-      
-      // Bid information
-      bidCount: load.bidStats?.total || 0,
-      pendingBids: load.bidStats?.pending || 0,
-      acceptedBids: load.bidStats?.accepted || 0,
-      averageBidAmount: load.bidStats?.avgBidAmount || null,
-      lowestBid: load.bidStats?.lowestBid || null,
-      highestBid: load.bidStats?.highestBid || null,
-      
-      // Driver and accepted bid info
-      assignedDriver: load.assignedDriver,
-      acceptedBidAmount: load.acceptedBidAmount,
+      ...load,
       
       // Calculate savings if bid was accepted
       savings: load.acceptedBidAmount && load.budget 
@@ -215,7 +373,16 @@ router.get('/user/my-loads',  auth, [
       canReceiveBids: ['posted', 'receiving_bids'].includes(load.status),
       isActive: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'].includes(load.status),
       isCompleted: load.status === 'delivered',
-      isCancelled: load.status === 'cancelled'
+      isCancelled: load.status === 'cancelled',
+      
+      // Urgency and priority indicators
+      isExpired: load.biddingEndDate && new Date() > new Date(load.biddingEndDate),
+      isExpiringSoon: load.biddingEndDate && 
+        new Date(load.biddingEndDate) - new Date() < 24 * 60 * 60 * 1000, // Less than 24 hours
+        
+      // Ensure cargo owner name is always present
+      cargoOwnerName: load.cargoOwnerName || 'Anonymous Cargo Owner',
+      postedByName: load.cargoOwnerName || 'Anonymous Cargo Owner'
     }));
 
     // Get summary statistics
@@ -239,7 +406,8 @@ router.get('/user/my-loads',  auth, [
               $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0]
             }
           },
-          totalBudget: { $sum: '$budget' }
+          totalBudget: { $sum: '$budget' },
+          avgBudget: { $avg: '$budget' }
         }
       }
     ]);
@@ -260,7 +428,8 @@ router.get('/user/my-loads',  auth, [
           totalLoads: 0,
           activeLoads: 0,
           completedLoads: 0,
-          totalBudget: 0
+          totalBudget: 0,
+          avgBudget: 0
         },
         filters: {
           status: status || 'all',
@@ -280,7 +449,7 @@ router.get('/user/my-loads',  auth, [
   }
 });
 
-// @route   GET /api/loads/subscription-status
+// @route   GET /api/lads/subscription-status
 // @desc    Get current user's subscription status
 // @access  Private
 router.get('/subscription-status',  auth, async (req, res) => {
@@ -577,6 +746,19 @@ router.post('/', auth, [
   body('deliveryLocation').trim().notEmpty().withMessage('Delivery location is required'),
   body('weight').isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
   body('budget').isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
+  body('vehicleCapacityRequired').isFloat({ min: 0.1 }).withMessage('Vehicle capacity must be at least 0.1 tons'),
+  body('pickupDate').isISO8601().withMessage('Invalid pickup date format'),
+  body('deliveryDate').isISO8601().withMessage('Invalid delivery date format'),
+  body('cargoType').isIn([
+    'electronics', 'furniture', 'construction_materials', 'food_beverages',
+    'automotive_parts', 'textiles', 'chemicals', 'machinery', 'medical_supplies',
+    'agricultural_products', 'fragile_items', 'hazardous_materials', 'livestock',
+    'containers', 'other'
+  ]).withMessage('Invalid cargo type'),
+  body('vehicleType').isIn([
+    'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck',
+    'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
+  ]).withMessage('Invalid vehicle type')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -588,6 +770,7 @@ router.post('/', auth, [
       });
     }
 
+    // Check user authorization
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
@@ -606,73 +789,198 @@ router.post('/', auth, [
       });
     }
 
-    // Enhanced cargo owner name extraction - FIXED VERSION
+    // Date validation
+    const pickupDate = new Date(req.body.pickupDate);
+    const deliveryDate = new Date(req.body.deliveryDate);
+    const now = new Date();
+
+    if (pickupDate < now) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Pickup date cannot be in the past'
+      });
+    }
+
+    if (pickupDate >= deliveryDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Delivery date must be after pickup date'
+      });
+    }
+
+    // Enhanced cargo owner name extraction with proper fallback chain
     const getCargoOwnerName = (userData) => {
-      const possibleNames = [
+      console.log('User data for name extraction:', {
+        id: userData._id,
+        name: userData.name,
+        companyName: userData.companyName,
+        cargoOwnerProfile: userData.cargoOwnerProfile,
+        email: userData.email
+      });
+
+      // Define all possible name sources in order of preference
+      const nameSources = [
+        // From request body (if explicitly provided)
+        req.body.cargoOwnerName,
+        req.body.postedByName,
+        
+        // From user profile - company names first
         userData?.cargoOwnerProfile?.companyName,
         userData?.companyName,
         userData?.profile?.companyName,
         userData?.businessProfile?.companyName,
+        
+        // From user profile - personal names
         userData?.name,
         userData?.fullName,
         userData?.firstName && userData?.lastName ? `${userData.firstName} ${userData.lastName}` : null,
-        userData?.email?.split('@')[0]
+        
+        // Last resort - email username
+        userData?.email ? userData.email.split('@')[0] : null
       ];
 
-      for (const name of possibleNames) {
-        if (name && typeof name === 'string' && name.trim().length > 0) {
-          return name.trim();
+      // Find the first valid name
+      for (const nameOption of nameSources) {
+        if (nameOption && 
+            typeof nameOption === 'string' && 
+            nameOption.trim().length > 0 && 
+            nameOption.trim().toLowerCase() !== 'anonymous') {
+          const cleanName = nameOption.trim();
+          console.log('Selected cargo owner name:', cleanName);
+          return cleanName;
         }
       }
-      
+
+      console.log('Falling back to Anonymous Cargo Owner');
       return 'Anonymous Cargo Owner';
     };
 
-    // Get cargo owner name from multiple sources
-    const cargoOwnerName = req.body.cargoOwnerName || 
-                          req.body.postedByName || 
-                          getCargoOwnerName(user);
+    const cargoOwnerName = getCargoOwnerName(user);
 
-    console.log('Creating load with cargo owner name:', cargoOwnerName);
+    // Prepare contact person information with fallbacks
+    const contactPerson = {
+      name: req.body.contactPerson?.name || user.name || cargoOwnerName,
+      phone: req.body.contactPerson?.phone || user.phone || '',
+      email: req.body.contactPerson?.email || user.email || ''
+    };
 
-    // Prepare load data with explicit cargo owner information
+    // Prepare comprehensive load data
     const loadData = {
-      ...req.body,
-      postedBy: req.user.id,
+      // Basic load information
+      title: req.body.title.trim(),
+      description: req.body.description.trim(),
+      pickupLocation: req.body.pickupLocation.trim(),
+      deliveryLocation: req.body.deliveryLocation.trim(),
+      pickupAddress: req.body.pickupAddress?.trim() || '',
+      deliveryAddress: req.body.deliveryAddress?.trim() || '',
       
-      // CRITICAL: Set multiple name fields for consistency
+      // Cargo specifications
+      weight: parseFloat(req.body.weight),
+      cargoType: req.body.cargoType,
+      vehicleType: req.body.vehicleType,
+      vehicleCapacityRequired: parseFloat(req.body.vehicleCapacityRequired),
+      budget: parseFloat(req.body.budget),
+      
+      // Dates and timing
+      pickupDate: pickupDate.toISOString(),
+      deliveryDate: deliveryDate.toISOString(),
+      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+      
+      // Special requirements and instructions
+      specialInstructions: req.body.specialInstructions?.trim() || '',
+      specialRequirements: req.body.specialRequirements?.trim() || '',
+      isUrgent: Boolean(req.body.isUrgent),
+      
+      // CRITICAL: Multiple cargo owner name fields for consistency
       cargoOwnerName: cargoOwnerName,
       postedByName: cargoOwnerName,
       
-      status: 'posted',
-      isActive: true,
-      biddingEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      // Contact and user information
+      contactPerson: contactPerson,
+      postedBy: req.user.id,
       
-      // Enhanced contact information
-      contactPerson: {
-        name: req.body.contactPerson?.name || cargoOwnerName,
-        phone: req.body.contactPerson?.phone || user.phone || '',
-        email: req.body.contactPerson?.email || user.email || ''
-      },
-
-      // Additional metadata for better tracking
+      // Metadata for tracking and analytics
       createdBy: {
         userId: req.user.id,
         userType: req.user.userType,
-        name: cargoOwnerName
-      }
+        name: cargoOwnerName,
+        timestamp: new Date()
+      },
+      
+      // Status and lifecycle
+      status: 'posted',
+      isActive: true,
+      
+      // Additional business fields
+      paymentTerms: req.body.paymentTerms || 'on_delivery',
+      insuranceRequired: Boolean(req.body.insuranceRequired),
+      insuranceValue: req.body.insuranceValue ? parseFloat(req.body.insuranceValue) : null,
+      
+      // Coordinates if provided
+      pickupCoordinates: req.body.pickupCoordinates || null,
+      deliveryCoordinates: req.body.deliveryCoordinates || null,
+      
+      // Initialize counters
+      viewCount: 0,
+      bidCount: 0,
+      
+      // Boost and priority settings
+      isBoosted: false,
+      boostLevel: 0,
+      isPriorityListing: false,
+      
+      // Timestamps
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
+
+    // Calculate distance if coordinates are provided
+    if (loadData.pickupCoordinates && loadData.deliveryCoordinates) {
+      const pickup = loadData.pickupCoordinates;
+      const delivery = loadData.deliveryCoordinates;
+      
+      if (pickup.lat && pickup.lng && delivery.lat && delivery.lng) {
+        loadData.distance = calculateDistance(pickup.lat, pickup.lng, delivery.lat, delivery.lng);
+      }
+    }
+
+    console.log('Creating load with data:', {
+      cargoOwnerName: loadData.cargoOwnerName,
+      postedByName: loadData.postedByName,
+      postedBy: loadData.postedBy,
+      contactPerson: loadData.contactPerson,
+      title: loadData.title
+    });
 
     // Create and save the load
     const load = new Load(loadData);
     await load.save();
 
-    // Return with cargo owner name guaranteed
+    // Populate the created load for response
+    const populatedLoad = await Load.findById(load._id)
+      .populate('postedBy', 'name email phone location isVerified rating')
+      .lean();
+
+    // Ensure cargo owner name is in the response
     const responseLoad = {
-      ...load.toObject(),
+      ...populatedLoad,
       cargoOwnerName: cargoOwnerName,
-      postedByName: cargoOwnerName
+      postedByName: cargoOwnerName,
+      bidCount: 0,
+      statusHistory: [{
+        status: 'posted',
+        changedBy: req.user.id,
+        changedAt: new Date(),
+        reason: 'Load created',
+        userRole: req.user.userType
+      }]
     };
+
+    console.log('Load created successfully:', {
+      id: responseLoad._id,
+      cargoOwnerName: responseLoad.cargoOwnerName,
+      title: responseLoad.title
+    });
 
     return res.status(201).json({
       status: 'success',
@@ -685,6 +993,7 @@ router.post('/', auth, [
   } catch (error) {
     console.error('Create load error:', error);
     
+    // Handle specific error types
     if (error.name === 'ValidationError') {
       const validationErrors = Object.values(error.errors).map(err => ({
         field: err.path,
@@ -695,6 +1004,14 @@ router.post('/', auth, [
         status: 'error',
         message: 'Load validation failed',
         errors: validationErrors
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Duplicate load detected',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
 
