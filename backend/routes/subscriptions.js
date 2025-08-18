@@ -332,6 +332,9 @@ router.get('/plans', auth, async (req, res) => {
 // @route   POST /api/subscriptions/subscribe
 // @desc    Create a new subscription request (FIXED)
 // @access  Private (Cargo owners only)
+// @route   POST /api/subscriptions/subscribe
+// @desc    Create a new subscription request (FIXED)
+// @access  Private (Cargo owners only)
 router.post('/subscribe', auth, subscriptionLimiter, [
   body('planId')
     .notEmpty()
@@ -378,169 +381,199 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       });
     }
 
-    const mongoose = require('mongoose');
+    // Prevent subscribing to basic plan (it's auto-assigned)
+    if (planId === 'basic') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Basic plan is automatically assigned. Please choose Pro or Business plan.'
+      });
+    }
+
     const db = mongoose.connection.db;
     const subscriptionsCollection = db.collection('subscriptions');
     const usersCollection = db.collection('cargo-owners');
     const notificationsCollection = db.collection('notifications');
-    const auditLogsCollection = db.collection('audit_logs');
 
-    const subscription = await subscriptionsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(id)
+    // Check for existing pending subscription
+    const existingPending = await subscriptionsCollection.findOne({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      status: 'pending',
+      planId: { $ne: 'basic' }
     });
 
-    if (!subscription) {
-      return res.status(404).json({
+    if (existingPending) {
+      return res.status(409).json({
         status: 'error',
-        message: 'Subscription not found'
-      });
-    }
-
-    if (subscription.status !== 'pending') {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Only pending subscriptions can be approved'
-      });
-    }
-
-    // FIXED: Calculate expiry from approval time, not original request time
-    const activatedAt = new Date();
-    const expiresAt = new Date(activatedAt.getTime() + subscription.duration * 24 * 60 * 60 * 1000);
-
-    const adminId = req.admin.id || req.admin._id || null;
-    const adminName = req.admin.name || 'Admin';
-    const adminEmail = req.admin.email || '';
-
-    // Use transaction to ensure data consistency
-    const session = await mongoose.startSession();
-    
-    try {
-      await session.withTransaction(async () => {
-        // Update the subscription to active
-        await subscriptionsCollection.updateOne(
-          { _id: new mongoose.Types.ObjectId(id) },
-          {
-            $set: {
-              status: 'active',
-              paymentStatus: 'completed',
-              paymentVerified,
-              activatedAt,
-              expiresAt,
-              approvedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-              approvedAt: new Date(),
-              adminNotes: notes || '',
-              verificationDetails: {
-                ...verificationDetails,
-                approvedByName: adminName,
-                approvedByEmail: adminEmail,
-                verificationTimestamp: new Date()
-              },
-              updatedAt: new Date()
-            }
-          },
-          { session }
-        );
-
-        // Deactivate any other active premium subscriptions (keep basic as fallback)
-        await subscriptionsCollection.updateMany(
-          {
-            userId: subscription.userId,
-            _id: { $ne: new mongoose.Types.ObjectId(id) },
-            status: 'active',
-            planId: { $ne: 'basic' } // Don't deactivate basic plan
-          },
-          {
-            $set: {
-              status: 'replaced',
-              deactivatedAt: new Date(),
-              replacedBy: new mongoose.Types.ObjectId(id),
-              updatedAt: new Date()
-            }
-          },
-          { session }
-        );
-
-        // Update user's subscription record
-        await usersCollection.updateOne(
-          { _id: subscription.userId },
-          {
-            $set: {
-              currentSubscription: new mongoose.Types.ObjectId(id),
-              subscriptionPlan: subscription.planId,
-              subscriptionStatus: 'active',
-              subscriptionExpiresAt: expiresAt,
-              updatedAt: new Date()
-            },
-            $unset: { pendingSubscription: '' }
-          },
-          { session }
-        );
-
-        // Create user notification
-        await notificationsCollection.insertOne({
-          userId: subscription.userId,
-          userType: 'cargo_owner',
-          type: 'subscription_approved',
-          title: 'Subscription Approved',
-          message: `Your ${subscription.planName} subscription is now active until ${expiresAt.toLocaleDateString()}.`,
-          data: {
-            subscriptionId: id,
-            planId: subscription.planId,
-            planName: subscription.planName,
-            activatedAt,
-            expiresAt
-          },
-          isRead: false,
-          priority: 'high',
-          createdAt: new Date()
-        }, { session });
-
-        // Create audit log
-        await auditLogsCollection.insertOne({
-          action: 'subscription_approved',
-          entityType: 'subscription',
-          entityId: new mongoose.Types.ObjectId(id),
-          adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-          adminName,
-          userId: subscription.userId,
-          details: {
-            planId: subscription.planId,
-            planName: subscription.planName,
-            amount: subscription.price,
-            paymentMethod: subscription.paymentMethod,
-            paymentVerified,
-            notes,
-            activatedAt,
-            expiresAt,
-            verificationDetails
-          },
-          ipAddress: req.ip,
-          userAgent: req.get('User-Agent'),
-          createdAt: new Date()
-        }, { session });
-      });
-
-      res.json({
-        status: 'success',
-        message: 'Subscription approved successfully',
-        data: {
-          subscriptionId: id,
-          approvedAt: activatedAt,
-          expiresAt,
-          approvedBy: adminName,
-          planName: subscription.planName
+        message: 'You already have a pending subscription request. Please wait for approval or cancel the existing request.',
+        existingRequest: {
+          id: existingPending._id,
+          planName: existingPending.planName,
+          requestedAt: existingPending.createdAt,
+          status: existingPending.status
         }
       });
-
-    } finally {
-      await session.endSession();
     }
 
+    // Calculate pricing based on billing cycle
+    let finalPrice = selectedPlan.price;
+    let duration = selectedPlan.duration;
+
+    if (billingCycle === 'quarterly') {
+      finalPrice = selectedPlan.price * 3 * 0.95; // 5% discount
+      duration = 90;
+    } else if (billingCycle === 'yearly') {
+      finalPrice = selectedPlan.price * 12 * 0.85; // 15% discount
+      duration = 365;
+    }
+
+    // Validate payment details based on method
+    if (paymentMethod === 'mpesa') {
+      if (!paymentDetails?.mpesaCode || !paymentDetails?.userPhone) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'M-Pesa code and phone number are required for M-Pesa payments'
+        });
+      }
+      
+      // Validate M-Pesa code format
+      if (!/^[A-Z0-9]{10,12}$/.test(paymentDetails.mpesaCode)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid M-Pesa transaction code format'
+        });
+      }
+    }
+
+    // Create subscription request
+    const subscriptionData = {
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      planId,
+      planName: selectedPlan.name,
+      price: finalPrice,
+      currency: 'KES',
+      billingCycle,
+      duration,
+      features: selectedPlan.features,
+      status: 'pending', // Requires admin approval
+      paymentMethod,
+      paymentDetails: {
+        ...paymentDetails,
+        userInfo: {
+          userId: req.user.id,
+          userName: req.user.name,
+          userEmail: req.user.email,
+          userPhone: req.user.phone
+        }
+      },
+      paymentStatus: 'pending',
+      requestedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      notes: `${billingCycle} subscription requested via ${paymentMethod}`,
+      requestMetadata: {
+        ip: req.ip,
+        userAgent: req.get('User-Agent'),
+        origin: req.headers.origin
+      }
+    };
+
+    // Insert subscription request
+    const result = await subscriptionsCollection.insertOne(subscriptionData);
+    
+    if (!result.insertedId) {
+      throw new Error('Failed to create subscription request');
+    }
+
+    // Update user with pending subscription reference
+    await usersCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(req.user.id) },
+      {
+        $set: {
+          pendingSubscription: result.insertedId,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Create notification for user
+    await notificationsCollection.insertOne({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      userType: 'cargo_owner',
+      type: 'subscription_requested',
+      title: 'Subscription Request Submitted',
+      message: `Your ${selectedPlan.name} subscription request has been submitted and is pending approval. You will be notified once it's processed.`,
+      data: {
+        subscriptionId: result.insertedId,
+        planId,
+        planName: selectedPlan.name,
+        price: finalPrice,
+        paymentMethod
+      },
+      isRead: false,
+      priority: 'medium',
+      createdAt: new Date()
+    });
+
+    // Create notification for admins
+    await notificationsCollection.insertOne({
+      type: 'new_subscription_request',
+      title: 'New Subscription Request',
+      message: `${req.user.name} has requested a ${selectedPlan.name} subscription via ${paymentMethod}.`,
+      data: {
+        subscriptionId: result.insertedId,
+        userId: req.user.id,
+        userName: req.user.name,
+        userEmail: req.user.email,
+        planId,
+        planName: selectedPlan.name,
+        price: finalPrice,
+        paymentMethod,
+        paymentDetails: paymentDetails?.mpesaCode ? { mpesaCode: paymentDetails.mpesaCode } : {}
+      },
+      userType: 'admin',
+      isRead: false,
+      priority: 'high',
+      createdAt: new Date()
+    });
+
+    console.log('Subscription request created:', {
+      subscriptionId: result.insertedId,
+      userId: req.user.id,
+      planId,
+      price: finalPrice,
+      paymentMethod
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: `${selectedPlan.name} subscription request submitted successfully. You will receive a notification once it's approved.`,
+      data: {
+        subscriptionId: result.insertedId,
+        planName: selectedPlan.name,
+        price: finalPrice,
+        currency: 'KES',
+        billingCycle,
+        status: 'pending',
+        paymentMethod,
+        requestedAt: new Date(),
+        estimatedProcessingTime: '24-48 hours'
+      }
+    });
+
   } catch (error) {
-    console.error('Approve subscription error:', error);
+    console.error('Subscribe error:', error);
+    
+    // Handle specific error types
+    if (error.code === 11000) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'A subscription request with these details already exists'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
-      message: 'Server error approving subscription',
+      message: 'Server error creating subscription request',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -680,10 +713,10 @@ router.post('/admin/:id/reject', adminAuth, [
     await auditLogsCollection.insertOne({
       action: 'subscription_rejected',
       entityType: 'subscription',
-      entityId: new mongoose.Types.ObjectId(id),
+      entityId: new mongoose.Types.ObjectId(subscriptionId),
       adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
       adminName,
-      userId: subscription.userId,
+      userId: subscriptionId,
       details: {
         planId: subscription.planId,
         planName: subscription.planName,
