@@ -488,13 +488,13 @@ router.get('/subscription-status',  auth, async (req, res) => {
         name: 'Pro Plan', 
         maxLoads: 25,
         features: ['Priority support', 'Advanced analytics', 'Priority listings'],
-        price: 2999
+        price: 999
       },
       business: {
         name: 'Business Plan',
         maxLoads: 100, 
         features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
-        price: 9999
+        price: 2499
       }
     };
 

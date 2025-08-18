@@ -35,13 +35,13 @@ const SUBSCRIPTION_PLANS = {
         name: 'Pro Plan', 
         maxLoads: 25,
         features: ['Priority support', 'Advanced analytics', 'Priority listings'],
-        price: 2999
+        price: 999
       },
       business: {
         name: 'Business Plan',
         maxLoads: 100, 
         features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
-        price: 9999
+        price: 2499
       }
 };
 
@@ -608,7 +608,8 @@ router.get('/my-subscription',  auth, async (req, res) => {
             status: 'active',
             features: SUBSCRIPTION_PLANS.basic.features,
             price: 0,
-            message: 'You are on the default Basic plan. Upgrade for more features!'
+            message: 'You are on the default Basic plan. Upgrade for more features!',
+            
           }
         }
       });
@@ -674,10 +675,10 @@ router.get('/my-subscription',  auth, async (req, res) => {
         hasActiveSubscription: subscription.status === 'active' && !isExpired,
         usage: {
           loadsThisMonth: monthlyUsage,
-          maxLoads: subscription.features?.maxLoads || 0,
+          maxLoads: subscription.features?.maxLoads || 3,
           remainingLoads: subscription.features?.maxLoads === -1 
             ? -1 
-            : Math.max(0, (subscription.features?.maxLoads || 0) - monthlyUsage),
+            : Math.max(0, (subscription.features?.maxLoads || 3) - monthlyUsage),
           usagePercentage: subscription.features?.maxLoads === -1 
             ? 0 
             : Math.min(100, (monthlyUsage / (subscription.features?.maxLoads || 1)) * 100)

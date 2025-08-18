@@ -194,6 +194,7 @@ const CargoOwnerDashboard = () => {
   
   if (subscriptionData) {
     setSubscription(subscriptionData);
+    console.log('Fetched subscription data:', subscriptionData); 
   }
 } catch (error) {
   console.warn('Could not fetch subscription status:', error.message);
@@ -896,33 +897,30 @@ const CargoOwnerDashboard = () => {
     });
   };
 
-  const getSubscriptionStatus = () => {
-    if (!subscription) {
-      return { status: 'basic', color: 'text-gray-600', icon: Package };
-    }
+const getSubscriptionStatus = () => {
+  if (!subscription) {
+    return { status: 'Basic Plan', color: 'text-gray-600', icon: Package };
+  }
 
-    if (subscription.status === 'active') {
-      return { 
-        status: subscription.planName || 'Active', 
-        color: 'text-green-600', 
-        icon: CheckCircle2 
-      };
-    }
+  // If it's basic plan, even though API marks it active
+  if (subscription.planId === 'basic') {
+    return { status: 'Basic Plan', color: 'text-gray-600', icon: Package };
+  }
 
-    if (subscription.status === 'pending') {
-      return { 
-        status: 'Pending Approval', 
-        color: 'text-yellow-600', 
-        icon: Clock 
-      };
-    }
+  if ((subscription.status?.toLowerCase() === 'active') && subscription.planId !== 'basic') {
+    return { status: subscription.planName, color: 'text-green-600', icon: CheckCircle2 };
+  }
 
-    return { 
-      status: subscription.status || 'Unknown', 
-      color: 'text-red-600', 
-      icon: AlertTriangle 
-    };
-  };
+  if (subscription.status?.toLowerCase() === 'pending') {
+    return { status: 'Pending Approval', color: 'text-yellow-600', icon: Clock };
+  }
+
+  return { status: subscription.status || 'Unknown', color: 'text-red-600', icon: AlertTriangle };
+};
+
+
+
+console.log('Subscription status:', getSubscriptionStatus());
 
   const canPostLoads = () => {
     if (!subscription || subscription.status !== 'active') {
