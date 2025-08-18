@@ -149,15 +149,15 @@ const SubscriptionModal = ({
                   <div className="space-y-3 mb-6">
                     <div className="flex items-center gap-2 text-sm">
                       <CheckCircle size={16} className="text-green-500" />
-                      <span>{plan.features?.maxLoads === -1 ? 'Unlimited loads' : `${plan.features?.maxLoads || 0} loads/month`}</span>
+                      <span>{plan?.features?.maxLoads === -1 ? 'Unlimited loads' : `${plan?.features?.maxLoads || 0} loads/month`}</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm">
-                      <CheckCircle size={16} className={plan.features?.prioritySupport ? 'text-green-500' : 'text-gray-300'} />
-                      <span className={plan.features?.prioritySupport ? '' : 'text-gray-400'}>Priority Support</span>
+                      <CheckCircle size={16} className={plan?.features?.prioritySupport ? 'text-green-500' : 'text-gray-300'} />
+                      <span className={plan?.features?.prioritySupport ? '' : 'text-gray-400'}>Priority Support</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm">
-                      <CheckCircle size={16} className={plan.features?.advancedAnalytics ? 'text-green-500' : 'text-gray-300'} />
-                      <span className={plan.features?.advancedAnalytics ? '' : 'text-gray-400'}>Advanced Analytics</span>
+                      <CheckCircle size={16} className={plan?.features?.advancedAnalytics ? 'text-green-500' : 'text-gray-300'} />
+                      <span className={plan?.features?.advancedAnalytics ? '' : 'text-gray-400'}>Advanced Analytics</span>
                     </div>
                   </div>
 

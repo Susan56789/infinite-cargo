@@ -194,7 +194,6 @@ const CargoOwnerDashboard = () => {
   
   if (subscriptionData) {
     setSubscription(subscriptionData);
-    console.log('Fetched subscription data:', subscriptionData); 
   }
 } catch (error) {
   console.warn('Could not fetch subscription status:', error.message);
@@ -920,7 +919,7 @@ const getSubscriptionStatus = () => {
 
 
 
-console.log('Subscription status:', getSubscriptionStatus());
+
 
   const canPostLoads = () => {
     if (!subscription || subscription.status !== 'active') {

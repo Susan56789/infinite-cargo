@@ -185,7 +185,7 @@ router.get('/plans',  auth, async (req, res) => {
       pro: {
         id: 'pro',
         name: 'Pro Plan',
-        price: 2999,
+        price: 999,
         currency: 'KES', 
         interval: 'monthly',
         maxLoads: 25,
@@ -202,7 +202,7 @@ router.get('/plans',  auth, async (req, res) => {
       business: {
         id: 'business',
         name: 'Business Plan',
-        price: 9999,
+        price: 999,
         currency: 'KES',
         interval: 'monthly', 
         maxLoads: 100,
