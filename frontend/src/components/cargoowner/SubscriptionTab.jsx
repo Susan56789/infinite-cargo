@@ -13,32 +13,116 @@ const SubscriptionTab = ({
   onSubscribe
 }) => {
   
-  // Helper function to safely get usage data
+  // Safe helper function to get usage data with extensive null checks
   const getUsageData = () => {
-    if (!subscription?.usage) return { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3, usagePercentage: 0 };
+    if (!subscription?.usage) {
+      return { 
+        loadsThisMonth: 0, 
+        maxLoads: 3, 
+        remainingLoads: 3, 
+        usagePercentage: 0 
+      };
+    }
     
     const usage = subscription.usage;
+    const loadsThisMonth = usage.loadsThisMonth || 0;
+    const maxLoads = usage.maxLoads || 3;
+    const remainingLoads = usage.remainingLoads !== undefined ? usage.remainingLoads : Math.max(0, maxLoads - loadsThisMonth);
+    const usagePercentage = usage.usagePercentage || (maxLoads === -1 ? 0 : Math.min(100, (loadsThisMonth / maxLoads) * 100));
+    
     return {
-      loadsThisMonth: usage.loadsThisMonth || 0,
-      maxLoads: usage.maxLoads || 3,
-      remainingLoads: usage.remainingLoads || 0,
-      usagePercentage: usage.usagePercentage || 0
+      loadsThisMonth,
+      maxLoads,
+      remainingLoads,
+      usagePercentage
     };
   };
 
-  // Helper function to get plan features
-  const getPlanFeatures = (plan) => {
-    // Handle both structures: plan?.features.x and plan.x
+  // Safe helper function to get current subscription features
+  const getCurrentSubscriptionFeatures = () => {
+    if (!subscription) {
+      return {
+        maxLoads: 3,
+        prioritySupport: false,
+        advancedAnalytics: false,
+        bulkOperations: false
+      };
+    }
+
+    // Try multiple possible data structures
+    const planId = subscription.planId || 'basic';
+    const currentPlan = subscriptionPlans?.[planId];
+    
+    // If we have the plan from subscriptionPlans, use it
+    if (currentPlan) {
+      return {
+        maxLoads: currentPlan.maxLoads || currentPlan.features?.maxLoads || 3,
+        prioritySupport: currentPlan.features?.prioritySupport || 
+                        (Array.isArray(currentPlan.features) && currentPlan.features.includes('Priority support')) ||
+                        false,
+        advancedAnalytics: currentPlan.features?.advancedAnalytics || 
+                          (Array.isArray(currentPlan.features) && currentPlan.features.includes('Advanced analytics')) ||
+                          false,
+        bulkOperations: currentPlan.features?.bulkOperations || 
+                       (Array.isArray(currentPlan.features) && currentPlan.features.includes('Bulk operations')) ||
+                       false
+      };
+    }
+
+    // Fallback to subscription data itself
+    const subscriptionFeatures = subscription.features || [];
     return {
-      maxLoads: plan?.features?.maxLoads || plan.maxLoads || 3,
-      prioritySupport: plan?.features?.prioritySupport || plan?.features?.includes?.('Priority support') || false,
-      advancedAnalytics: plan?.features?.advancedAnalytics || plan?.features?.includes?.('Advanced analytics') || false,
-      bulkOperations: plan?.features?.bulkOperations || plan?.features?.includes?.('Bulk operations') || false
+      maxLoads: subscription.maxLoads || (Array.isArray(subscriptionFeatures) ? 3 : subscriptionFeatures.maxLoads) || 3,
+      prioritySupport: Array.isArray(subscriptionFeatures) ? 
+                      subscriptionFeatures.includes('Priority support') : 
+                      (subscriptionFeatures.prioritySupport || false),
+      advancedAnalytics: Array.isArray(subscriptionFeatures) ? 
+                        subscriptionFeatures.includes('Advanced analytics') : 
+                        (subscriptionFeatures.advancedAnalytics || false),
+      bulkOperations: Array.isArray(subscriptionFeatures) ? 
+                     subscriptionFeatures.includes('Bulk operations') : 
+                     (subscriptionFeatures.bulkOperations || false)
+    };
+  };
+
+  // Safe helper function to get plan features for available plans
+  const getPlanFeatures = (plan) => {
+    if (!plan) {
+      return {
+        maxLoads: 3,
+        prioritySupport: false,
+        advancedAnalytics: false,
+        bulkOperations: false
+      };
+    }
+
+    // Handle different possible structures
+    const features = plan.features || [];
+    
+    return {
+      maxLoads: plan.maxLoads || features.maxLoads || 3,
+      prioritySupport: features.prioritySupport || 
+                      (Array.isArray(features) && features.includes('Priority support')) ||
+                      false,
+      advancedAnalytics: features.advancedAnalytics || 
+                        (Array.isArray(features) && features.includes('Advanced analytics')) ||
+                        false,
+      bulkOperations: features.bulkOperations || 
+                     (Array.isArray(features) && features.includes('Bulk operations')) ||
+                     false
     };
   };
 
   const usage = getUsageData();
-  const isUnlimited = usage.maxLoads === -1;
+  const currentFeatures = getCurrentSubscriptionFeatures();
+  const isUnlimited = usage.maxLoads === -1 || currentFeatures.maxLoads === -1;
+
+  // Safe plans object with fallback
+  const safeSubscriptionPlans = subscriptionPlans || {
+    basic: { id: 'basic', name: 'Basic Plan', price: 0, maxLoads: 3, features: [] },
+    pro: { id: 'pro', name: 'Pro Plan', price: 999, maxLoads: 25, features: [] },
+    business: { id: 'business', name: 'Business Plan', price: 2499, maxLoads: 100, features: [] }
+  };
 
   return (
     <div className="space-y-6">
@@ -71,7 +155,7 @@ const SubscriptionTab = ({
           </div>
           <div className="text-right">
             <p className="text-2xl font-bold text-gray-900">
-              {subscription?.price ? formatCurrency(subscription.price) : 'Free'}
+              {subscription?.price ? (formatCurrency ? formatCurrency(subscription.price) : `KES ${subscription.price}`) : 'Free'}
             </p>
             <p className="text-sm text-gray-600">/month</p>
           </div>
@@ -95,44 +179,36 @@ const SubscriptionTab = ({
           <div className="flex items-center gap-2">
             <Package className="h-4 w-4 text-blue-600" />
             <span className="text-sm">
-              {isUnlimited ? 'Unlimited loads' : `${usage.maxLoads} loads per month`}
+              {isUnlimited ? 'Unlimited loads' : `${currentFeatures.maxLoads} loads per month`}
             </span>
           </div>
           
-          {/* Get current plan's actual features */}
-          {(() => {
-            const currentPlan = subscriptionPlans?.[subscription?.planId] || subscriptionPlans?.basic;
-            const features = getPlanFeatures(currentPlan);
-            
-            return (
-              <>
-                <div className="flex items-center gap-2">
-                  {features.prioritySupport ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-red-600" />
-                  )}
-                  <span className="text-sm">Priority Support</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {features.advancedAnalytics ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-red-600" />
-                  )}
-                  <span className="text-sm">Advanced Analytics</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {features.bulkOperations ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-red-600" />
-                  )}
-                  <span className="text-sm">Bulk Operations</span>
-                </div>
-              </>
-            );
-          })()}
+          <div className="flex items-center gap-2">
+            {currentFeatures.prioritySupport ? (
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+            ) : (
+              <XCircle className="h-4 w-4 text-red-600" />
+            )}
+            <span className="text-sm">Priority Support</span>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {currentFeatures.advancedAnalytics ? (
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+            ) : (
+              <XCircle className="h-4 w-4 text-red-600" />
+            )}
+            <span className="text-sm">Advanced Analytics</span>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {currentFeatures.bulkOperations ? (
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+            ) : (
+              <XCircle className="h-4 w-4 text-red-600" />
+            )}
+            <span className="text-sm">Bulk Operations</span>
+          </div>
         </div>
 
         {/* Usage Stats */}
@@ -154,13 +230,22 @@ const SubscriptionTab = ({
                 ></div>
               </div>
             )}
+            
+            {/* Usage warning */}
+            {usage.usagePercentage > 80 && !isUnlimited && (
+              <div className="mt-2 text-xs text-yellow-600">
+                {usage.remainingLoads === 0 ? 'Monthly limit reached!' : `Only ${usage.remainingLoads} loads remaining this month`}
+              </div>
+            )}
           </div>
         )}
 
         {subscription?.expiresAt && subscription?.planId !== 'basic' && (
           <div className="text-sm text-gray-600">
             <Clock className="h-4 w-4 inline mr-1" />
-            {subscription.isExpired ? 'Expired on' : 'Expires on'} {formatDate(subscription.expiresAt)}
+            {subscription.isExpired ? 'Expired on' : 'Expires on'} {
+              formatDate ? formatDate(subscription.expiresAt) : new Date(subscription.expiresAt).toLocaleDateString()
+            }
           </div>
         )}
       </div>
@@ -169,10 +254,9 @@ const SubscriptionTab = ({
       <div>
         <h4 className="text-lg font-semibold text-gray-900 mb-4">Available Plans</h4>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {Object.entries(subscriptionPlans).map(([planId, plan]) => {
+          {Object.entries(safeSubscriptionPlans).map(([planId, plan]) => {
             const features = getPlanFeatures(plan);
             const isCurrentPlan = subscription?.planId === planId;
-            const isPending = subscription?.status === 'pending' && subscription?.planId !== planId;
             const hasPendingUpgrade = subscription?.hasPendingUpgrade || subscription?.pendingSubscription;
             
             return (
@@ -189,9 +273,11 @@ const SubscriptionTab = ({
                 )}
 
                 <div className="text-center mb-4">
-                  <h5 className="text-lg font-semibold text-gray-900">{plan.name}</h5>
+                  <h5 className="text-lg font-semibold text-gray-900">{plan.name || `${planId} Plan`}</h5>
                   <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {plan.price === 0 ? 'Free' : formatCurrency(plan.price)}
+                    {(plan.price === 0 || plan.price === undefined) ? 'Free' : (
+                      formatCurrency ? formatCurrency(plan.price) : `KES ${plan.price}`
+                    )}
                   </p>
                   <p className="text-sm text-gray-600">/month</p>
                 </div>
@@ -228,7 +314,7 @@ const SubscriptionTab = ({
                 </ul>
 
                 <button
-                  onClick={() => onSubscribe(planId, 'mpesa')}
+                  onClick={() => onSubscribe && onSubscribe(planId, 'mpesa')}
                   disabled={loading || isCurrentPlan || (planId === 'basic') || hasPendingUpgrade}
                   className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
                     isCurrentPlan
@@ -264,12 +350,14 @@ const SubscriptionTab = ({
             <span className="font-medium">Pending Subscription Request</span>
           </div>
           <p className="text-sm text-yellow-600 mb-2">
-            You have a pending {subscription.pendingSubscription.planName} subscription request. 
+            You have a pending {subscription.pendingSubscription.planName || 'premium'} subscription request. 
             It will be reviewed within 24-48 hours.
           </p>
-          <div className="text-xs text-yellow-500">
-            Requested: {formatDate ? formatDate(subscription.pendingSubscription.createdAt) : 'Recently'}
-          </div>
+          {subscription.pendingSubscription.createdAt && (
+            <div className="text-xs text-yellow-500">
+              Requested: {formatDate ? formatDate(subscription.pendingSubscription.createdAt) : 'Recently'}
+            </div>
+          )}
         </div>
       )}
 
@@ -298,5 +386,10 @@ const SubscriptionTab = ({
     </div>
   );
 };
+
+
+
+
+
 
 export default SubscriptionTab;

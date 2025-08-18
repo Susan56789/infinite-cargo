@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Crown, BarChart3, Package, Users, PieChart, 
-  CheckCircle2, AlertTriangle, Clock, Loader2
+  CheckCircle2, AlertCircle,XCircle, Clock, Loader2
 } from 'lucide-react';
+
 
 // Import child components
 import DashboardHeader from './DashboardHeader';
@@ -877,25 +878,38 @@ try {
     });
   };
 
-const getSubscriptionStatus = () => {
+const getSubscriptionStatus = (subscription) => {
   if (!subscription) {
-    return { status: 'Basic Plan', color: 'text-gray-600', icon: Package };
+    return { status: 'Loading...', color: 'text-gray-600', icon: Package };
   }
 
-  // If it's basic plan, even though API marks it active
+  // Check for expired status first
+  if (subscription.isExpired || subscription.status?.toLowerCase() === 'expired') {
+    return { status: 'Expired - Downgraded to Basic', color: 'text-red-600', icon: AlertCircle };
+  }
+
+  // If it's basic plan (free plan)
   if (subscription.planId === 'basic') {
-    return { status: 'Basic Plan', color: 'text-gray-600', icon: Package };
+    return { status: 'Basic Plan (Free)', color: 'text-gray-600', icon: Package };
   }
 
-  if ((subscription.status?.toLowerCase() === 'active') && subscription.planId !== 'basic') {
-    return { status: subscription.planName, color: 'text-green-600', icon: CheckCircle2 };
+  // Check for active premium plans
+  if (subscription.status?.toLowerCase() === 'active' && subscription.planId !== 'basic') {
+    return { status: `${subscription.planName || 'Premium'} (Active)`, color: 'text-green-600', icon: CheckCircle2 };
   }
 
+  // Check for pending status
   if (subscription.status?.toLowerCase() === 'pending') {
-    return { status: 'Pending Approval', color: 'text-yellow-600', icon: Clock };
+    return { status: `${subscription.planName || 'Upgrade'} (Pending Approval)`, color: 'text-yellow-600', icon: Clock };
   }
 
-  return { status: subscription.status || 'Unknown', color: 'text-red-600', icon: AlertTriangle };
+  // Check for rejected status
+  if (subscription.status?.toLowerCase() === 'rejected') {
+    return { status: 'Request Rejected', color: 'text-red-600', icon: XCircle };
+  }
+
+  // Default fallback
+  return { status: subscription.status || 'Unknown', color: 'text-gray-600', icon: AlertCircle };
 };
 
 
@@ -903,11 +917,44 @@ const getSubscriptionStatus = () => {
 
 
   const canPostLoads = () => {
-    if (!subscription || subscription.status !== 'active') {
-      return subscription?.planId === 'basic';
+  // If no subscription data is loaded yet, allow posting (assume basic plan)
+  if (!subscription) {
+    return true;
+  }
+
+  // If subscription is expired, downgrade to basic plan limits
+  if (subscription.isExpired || subscription.status?.toLowerCase() === 'expired') {
+    const currentMonthLoads = loads.filter(load => {
+      const loadDate = new Date(load.createdAt);
+      const now = new Date();
+      return loadDate.getMonth() === now.getMonth() && loadDate.getFullYear() === now.getFullYear();
+    }).length;
+    return currentMonthLoads < 3; // Basic plan limit
+  }
+
+  // If subscription is pending, rejected, or inactive, use basic plan limits
+  if (['pending', 'rejected', 'inactive'].includes(subscription.status?.toLowerCase())) {
+    const currentMonthLoads = loads.filter(load => {
+      const loadDate = new Date(load.createdAt);
+      const now = new Date();
+      return loadDate.getMonth() === now.getMonth() && loadDate.getFullYear() === now.getFullYear();
+    }).length;
+    return currentMonthLoads < 3; // Basic plan limit
+  }
+
+  // If subscription is active (premium plans)
+  if (subscription.status?.toLowerCase() === 'active') {
+    // Check if it's unlimited plan
+    if (subscription.features?.maxLoads === -1 || subscription.usage?.maxLoads === -1) {
+      return true; // Unlimited posting
     }
 
-    if (subscription.features?.maxLoads === -1) return true;
+    // For limited plans, check current usage
+    const maxLoads = subscription.features?.maxLoads || subscription.usage?.maxLoads || subscription.maxLoads;
+    
+    if (!maxLoads || maxLoads <= 0) {
+      return true; // If no limit specified, allow posting
+    }
 
     const currentMonthLoads = loads.filter(load => {
       const loadDate = new Date(load.createdAt);
@@ -915,8 +962,22 @@ const getSubscriptionStatus = () => {
       return loadDate.getMonth() === now.getMonth() && loadDate.getFullYear() === now.getFullYear();
     }).length;
 
-    return currentMonthLoads < subscription.features.maxLoads;
-  };
+    return currentMonthLoads < maxLoads;
+  }
+
+  // For basic plan (free tier)
+  if (subscription.planId === 'basic') {
+    const currentMonthLoads = loads.filter(load => {
+      const loadDate = new Date(load.createdAt);
+      const now = new Date();
+      return loadDate.getMonth() === now.getMonth() && loadDate.getFullYear() === now.getFullYear();
+    }).length;
+    return currentMonthLoads < 3; // Basic plan limit
+  }
+
+  // Default: allow posting if status is unclear
+  return true;
+};
 
   const filteredLoads = loads.filter(load => {
     if (filters.status && load.status !== filters.status) return false;

@@ -1,19 +1,15 @@
 import React from 'react';
-import { Package, Bell, Settings, LogOut } from 'lucide-react';
+import { Package, Bell, Settings, LogOut, Crown, CheckCircle2, AlertCircle, XCircle, Clock } from 'lucide-react';
 
-const DashboardHeader = ({ 
-  user, 
-  subscription, 
-  notifications, 
-  onProfileClick, 
+const DashboardHeader = ({
+  user,
+  subscription,
+  notifications,
+  onProfileClick,
   onLogout,
-  getSubscriptionStatus 
 }) => {
-  
   // Enhanced function to get user display name
   const getUserDisplayName = () => {
-    
-    
     if (!user) return 'Guest User';
     
     // Try multiple sources for the display name
@@ -36,7 +32,43 @@ const DashboardHeader = ({
     return 'Cargo Owner';
   };
 
+  // Function to get subscription status (moved from parent component)
+  const getSubscriptionStatus = (subscription) => {
+    if (!subscription) {
+      return { status: 'Loading...', color: 'text-gray-600', icon: Package };
+    }
+
+    // Check for expired status first
+    if (subscription.isExpired || subscription.status?.toLowerCase() === 'expired') {
+      return { status: 'Expired - Downgraded to Basic', color: 'text-red-600', icon: AlertCircle };
+    }
+
+    // If it's basic plan (free plan)
+    if (subscription.planId === 'basic') {
+      return { status: 'Basic Plan (Free)', color: 'text-gray-600', icon: Package };
+    }
+
+    // Check for active premium plans
+    if (subscription.status?.toLowerCase() === 'active' && subscription.planId !== 'basic') {
+      return { status: `${subscription.planName || 'Premium'} (Active)`, color: 'text-green-600', icon: CheckCircle2 };
+    }
+
+    // Check for pending status
+    if (subscription.status?.toLowerCase() === 'pending') {
+      return { status: `${subscription.planName || 'Upgrade'} (Pending Approval)`, color: 'text-yellow-600', icon: Clock };
+    }
+
+    // Check for rejected status
+    if (subscription.status?.toLowerCase() === 'rejected') {
+      return { status: 'Request Rejected', color: 'text-red-600', icon: XCircle };
+    }
+
+    // Default fallback
+    return { status: subscription.status || 'Unknown', color: 'text-gray-600', icon: AlertCircle };
+  };
+
   const displayName = getUserDisplayName();
+  const subscriptionStatusData = getSubscriptionStatus(subscription);
 
   return (
     <header className="bg-white border-b border-gray-200">
@@ -52,15 +84,10 @@ const DashboardHeader = ({
           <div className="flex items-center space-x-4">
             {/* Subscription Status */}
             <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-50 border">
-              {(() => {
-                const { status, color, icon: StatusIcon } = getSubscriptionStatus();
-                return (
-                  <>
-                    <StatusIcon className={`h-4 w-4 ${color}`} />
-                    <span className={`text-sm font-medium ${color}`}>{status}</span>
-                  </>
-                );
-              })()}
+              <subscriptionStatusData.icon className={`h-4 w-4 ${subscriptionStatusData.color}`} />
+              <span className={`text-sm font-medium ${subscriptionStatusData.color}`}>
+                {subscriptionStatusData.status}
+              </span>
             </div>
 
             {/* Notifications */}
