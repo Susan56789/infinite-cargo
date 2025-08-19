@@ -987,6 +987,7 @@ router.get('/', optionalAuth, [
       });
     }
 
+    // Destructure and set defaults
     const {
       page = 1,
       limit = 12,
@@ -1004,33 +1005,47 @@ router.get('/', optionalAuth, [
       sortOrder = 'desc'
     } = req.query;
 
-    // Ensure DB is connected
+    // Check database connection
     if (mongoose.connection.readyState !== 1) {
+      console.error('Database not connected, readyState:', mongoose.connection.readyState);
       return res.status(500).json({
         status: 'error',
-        message: 'Database not connected. Please try again later.'
+        message: 'Database connection unavailable. Please try again later.'
       });
     }
 
-    
+    console.log('GET /api/loads - Query parameters:', {
+      page, limit, search, cargoType, vehicleType,
+      pickupLocation, deliveryLocation, minBudget, maxBudget,
+      minWeight, maxWeight, urgentOnly, sortBy, sortOrder
+    });
+
+    // Build base query for active, available loads
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
-      isActive: { $ne: false }, // Allow true or undefined (null)
+      $and: [
+        { $or: [{ isActive: { $ne: false } }, { isActive: { $exists: false } }] }
+      ]
     };
 
-    // Add date filter only if we want future pickups
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    baseQuery.$or = [
-      { pickupDate: { $gte: oneDayAgo } }, 
-      { pickupDate: { $exists: false } },   
-      { pickupDate: null }                  
-    ];
+    // Add date filter - don't show very old loads (more than 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    baseQuery.$and.push({
+      $or: [
+        { pickupDate: { $gte: thirtyDaysAgo } }, 
+        { pickupDate: { $exists: false } },   
+        { pickupDate: null },
+        { createdAt: { $gte: thirtyDaysAgo } } // Also check creation date
+      ]
+    });
 
-    // Text search with better regex handling
+    // Text search across multiple fields
     if (search && search.trim()) {
       const searchTerm = search.trim();
-      const regex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); // Escape special chars
-      baseQuery.$and = baseQuery.$and || [];
+      // Escape special regex characters
+      const escapedSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escapedSearch, 'i');
+      
       baseQuery.$and.push({
         $or: [
           { title: regex },
@@ -1043,7 +1058,7 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // FIXED: Exact match filters instead of regex for dropdown selections
+    // Exact match filters for dropdowns
     if (cargoType && cargoType.trim()) {
       baseQuery.cargoType = cargoType.trim();
     }
@@ -1051,99 +1066,125 @@ router.get('/', optionalAuth, [
       baseQuery.vehicleType = vehicleType.trim();
     }
 
-    // Location filters with regex for partial matching
+    // Location filters with partial matching
     if (pickupLocation && pickupLocation.trim()) {
-      baseQuery.pickupLocation = new RegExp(pickupLocation.trim(), 'i');
+      const locationRegex = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      baseQuery.pickupLocation = locationRegex;
     }
     if (deliveryLocation && deliveryLocation.trim()) {
-      baseQuery.deliveryLocation = new RegExp(deliveryLocation.trim(), 'i');
+      const locationRegex = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      baseQuery.deliveryLocation = locationRegex;
     }
 
-    // Budget filter
+    // Budget range filter
     if (minBudget || maxBudget) {
       baseQuery.budget = {};
       if (minBudget) baseQuery.budget.$gte = parseFloat(minBudget);
       if (maxBudget) baseQuery.budget.$lte = parseFloat(maxBudget);
     }
 
-    // Weight filter
+    // Weight range filter
     if (minWeight || maxWeight) {
       baseQuery.weight = {};
       if (minWeight) baseQuery.weight.$gte = parseFloat(minWeight);
       if (maxWeight) baseQuery.weight.$lte = parseFloat(maxWeight);
     }
 
-    // Urgent filter
+    // Urgent loads only
     if (urgentOnly === 'true' || urgentOnly === true) {
       baseQuery.isUrgent = true;
     }
 
-    console.log('Base query for loads:', JSON.stringify(baseQuery, null, 2));
+    console.log('Final base query:', JSON.stringify(baseQuery, null, 2));
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build sort options
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
-
-    // FIXED: Simplified sort configuration
     const sortOptions = {};
     
-    // Priority sorting: boosted loads first
-    if (sortBy !== 'boostLevel') {
-      sortOptions.isBoosted = -1;
-      sortOptions.boostLevel = -1;
-    }
-    
-    // Main sort field
+    // Priority: boosted loads first, then by requested sort
+    sortOptions.isBoosted = -1;
+    sortOptions.boostLevel = -1;
     sortOptions[sortBy] = sortDirection;
     
-    // Secondary sort by creation date if not primary
+    // Secondary sort by creation date if not the primary sort
     if (sortBy !== 'createdAt') {
       sortOptions.createdAt = -1;
     }
 
     console.log('Sort options:', sortOptions);
 
-    // FIXED: Corrected aggregation pipeline
+    // Use MongoDB collection directly for better control
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
+
+    // First, get total count for pagination
+    const totalLoads = await loadsCollection.countDocuments(baseQuery);
+    console.log(`Total matching loads: ${totalLoads}`);
+
+    if (totalLoads === 0) {
+      return res.json({
+        status: 'success',
+        data: {
+          loads: [],
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 0,
+            totalLoads: 0,
+            limit: limitNum,
+            hasNextPage: false,
+            hasPrevPage: false
+          }
+        }
+      });
+    }
+
+    // Build aggregation pipeline for better user data handling
     const pipeline = [
       { $match: baseQuery },
       
-      // FIXED: Lookup from correct collections based on userType
+      // Lookup user information from different collections
       {
         $lookup: {
-          from: 'cargo-owners', // Try cargo-owners collection first
+          from: 'cargo-owners',
           localField: 'postedBy',
           foreignField: '_id',
-          as: 'cargoOwnerUser'
+          as: 'cargoOwnerInfo'
         }
       },
       {
         $lookup: {
-          from: 'drivers', // Also try drivers collection as fallback
+          from: 'drivers',
           localField: 'postedBy',
           foreignField: '_id',
-          as: 'driverUser'
+          as: 'driverInfo'
         }
       },
       {
         $lookup: {
-          from: 'users', // Generic users collection as final fallback
+          from: 'users',
           localField: 'postedBy',
           foreignField: '_id',
-          as: 'genericUser'
+          as: 'userInfo'
         }
       },
       
-      // FIXED: Better user data merging
+      // Merge user information
       {
         $addFields: {
-          postedByUser: {
+          userDetails: {
             $cond: {
-              if: { $gt: [{ $size: '$cargoOwnerUser' }, 0] },
-              then: { $arrayElemAt: ['$cargoOwnerUser', 0] },
+              if: { $gt: [{ $size: '$cargoOwnerInfo' }, 0] },
+              then: { $arrayElemAt: ['$cargoOwnerInfo', 0] },
               else: {
                 $cond: {
-                  if: { $gt: [{ $size: '$driverUser' }, 0] },
-                  then: { $arrayElemAt: ['$driverUser', 0] },
-                  else: { $arrayElemAt: ['$genericUser', 0] }
+                  if: { $gt: [{ $size: '$driverInfo' }, 0] },
+                  then: { $arrayElemAt: ['$driverInfo', 0] },
+                  else: { $arrayElemAt: ['$userInfo', 0] }
                 }
               }
             }
@@ -1151,7 +1192,7 @@ router.get('/', optionalAuth, [
         }
       },
       
-      // FIXED: Better projection with proper fallbacks
+      // Project final fields
       {
         $project: {
           _id: 1,
@@ -1163,6 +1204,8 @@ router.get('/', optionalAuth, [
           deliveryLocation: 1,
           pickupAddress: 1,
           deliveryAddress: 1,
+          pickupDate: 1,
+          deliveryDate: 1,
           budget: 1,
           status: 1,
           createdAt: 1,
@@ -1173,8 +1216,6 @@ router.get('/', optionalAuth, [
           boostLevel: 1,
           vehicleType: 1,
           vehicleCapacityRequired: 1,
-          pickupDate: 1,
-          deliveryDate: 1,
           specialInstructions: 1,
           specialRequirements: 1,
           paymentTerms: 1,
@@ -1184,23 +1225,23 @@ router.get('/', optionalAuth, [
           bidCount: { $ifNull: ['$bidCount', 0] },
           viewCount: { $ifNull: ['$viewCount', 0] },
           
-          // FIXED: Better cargo owner name extraction
+          // Cargo owner name with multiple fallbacks
           cargoOwnerName: {
             $cond: {
-              if: '$cargoOwnerName',
+              if: { $and: ['$cargoOwnerName', { $ne: ['$cargoOwnerName', ''] }] },
               then: '$cargoOwnerName',
               else: {
                 $cond: {
-                  if: '$postedByUser.companyName',
-                  then: '$postedByUser.companyName',
+                  if: '$userDetails.companyName',
+                  then: '$userDetails.companyName',
                   else: {
                     $cond: {
-                      if: '$postedByUser.cargoOwnerProfile.companyName',
-                      then: '$postedByUser.cargoOwnerProfile.companyName',
+                      if: '$userDetails.cargoOwnerProfile.companyName',
+                      then: '$userDetails.cargoOwnerProfile.companyName',
                       else: {
                         $cond: {
-                          if: '$postedByUser.name',
-                          then: '$postedByUser.name',
+                          if: '$userDetails.name',
+                          then: '$userDetails.name',
                           else: 'Anonymous Cargo Owner'
                         }
                       }
@@ -1211,24 +1252,30 @@ router.get('/', optionalAuth, [
             }
           },
           
-          // FIXED: Simplified postedBy object
+          // Posted by information
           postedBy: {
             $cond: {
-              if: '$postedByUser',
+              if: '$userDetails',
               then: {
-                _id: '$postedByUser._id',
-                name: '$postedByUser.name',
-                email: '$postedByUser.email',
-                phone: '$postedByUser.phone',
+                _id: '$userDetails._id',
+                name: '$userDetails.name',
+                email: '$userDetails.email',
+                phone: '$userDetails.phone',
                 companyName: {
                   $ifNull: [
-                    '$postedByUser.companyName',
-                    '$postedByUser.cargoOwnerProfile.companyName'
+                    '$userDetails.companyName',
+                    '$userDetails.cargoOwnerProfile.companyName'
                   ]
                 },
-                rating: { $ifNull: ['$postedByUser.rating', 4.5] },
-                isVerified: { $ifNull: ['$postedByUser.isVerified', false] },
-                location: '$postedByUser.location'
+                rating: { 
+                  $ifNull: [
+                    '$userDetails.rating',
+                    '$userDetails.cargoOwnerProfile.rating',
+                    4.5
+                  ]
+                },
+                isVerified: { $ifNull: ['$userDetails.isVerified', false] },
+                location: '$userDetails.location'
               },
               else: {
                 _id: '$postedBy',
@@ -1239,155 +1286,138 @@ router.get('/', optionalAuth, [
             }
           },
           
-          // Contact person with fallbacks
+          // Contact person
           contactPerson: {
             $cond: {
               if: '$contactPerson',
               then: '$contactPerson',
               else: {
-                name: { $ifNull: ['$postedByUser.name', 'Contact'] },
-                phone: { $ifNull: ['$postedByUser.phone', ''] },
-                email: { $ifNull: ['$postedByUser.email', ''] }
+                name: { $ifNull: ['$userDetails.name', 'Contact Person'] },
+                phone: { $ifNull: ['$userDetails.phone', ''] },
+                email: { $ifNull: ['$userDetails.email', ''] }
               }
             }
           }
         }
       },
       
+      // Sort and paginate
       { $sort: sortOptions },
       { $skip: skip },
-      { $limit: parseInt(limit) }
+      { $limit: limitNum }
     ];
 
-    console.log('Aggregation pipeline:', JSON.stringify(pipeline, null, 2));
-
-    // FIXED: Use direct MongoDB collection instead of Mongoose model to avoid schema issues
-    const db = mongoose.connection.db;
-    const loadsCollection = db.collection('loads');
+    console.log('Executing aggregation pipeline...');
     
     // Execute aggregation
     const loads = await loadsCollection.aggregate(pipeline).toArray();
     
-    // Get total count with same base query
-    const totalLoads = await loadsCollection.countDocuments(baseQuery);
-    const totalPages = Math.ceil(totalLoads / parseInt(limit));
+    console.log(`Aggregation returned ${loads.length} loads`);
 
-    console.log(`Found ${loads.length} loads out of ${totalLoads} total`);
-
-    // BACKUP: If aggregation returns no results, try a simple find
+    // If aggregation failed but we have results, try simple find
     if (loads.length === 0 && totalLoads > 0) {
-      console.log('Aggregation returned no results, trying simple find...');
+      console.log('Aggregation returned no results, falling back to simple find...');
       
       const simpleLoads = await loadsCollection
         .find(baseQuery)
         .sort(sortOptions)
         .skip(skip)
-        .limit(parseInt(limit))
+        .limit(limitNum)
         .toArray();
       
-      // Manually add missing fields
+      // Enhance simple loads with required fields
       const enhancedLoads = simpleLoads.map(load => ({
         ...load,
         cargoOwnerName: load.cargoOwnerName || load.postedByName || 'Anonymous Cargo Owner',
         bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
         postedBy: load.postedBy ? {
           _id: load.postedBy,
           name: load.cargoOwnerName || 'Anonymous',
           rating: 4.5,
           isVerified: false
-        } : null
+        } : null,
+        contactPerson: load.contactPerson || {
+          name: load.cargoOwnerName || 'Contact Person',
+          phone: '',
+          email: ''
+        }
       }));
       
       console.log(`Simple find returned ${enhancedLoads.length} loads`);
+      
+      const totalPages = Math.ceil(totalLoads / limitNum);
       
       return res.json({
         status: 'success',
         data: {
           loads: enhancedLoads,
           pagination: {
-            currentPage: parseInt(page),
+            currentPage: pageNum,
             totalPages,
             totalLoads,
-            limit: parseInt(limit),
-            hasNextPage: parseInt(page) < totalPages,
-            hasPrevPage: parseInt(page) > 1
+            limit: limitNum,
+            hasNextPage: pageNum < totalPages,
+            hasPrevPage: pageNum > 1
           }
         }
       });
     }
 
-    // DEBUGGING: Log sample data
+    const totalPages = Math.ceil(totalLoads / limitNum);
+
+    // Log sample data for debugging
     if (loads.length > 0) {
-      console.log('Sample load data:', {
+      console.log('Sample load structure:', {
         id: loads[0]._id,
         title: loads[0].title,
         cargoOwnerName: loads[0].cargoOwnerName,
         status: loads[0].status,
-        isActive: loads[0].isActive,
-        pickupDate: loads[0].pickupDate
+        hasPostedBy: !!loads[0].postedBy,
+        bidCount: loads[0].bidCount
       });
     }
 
-    // Response with additional metadata
+    // Return successful response
     return res.json({
       status: 'success',
       data: {
         loads,
         pagination: {
-          currentPage: parseInt(page),
+          currentPage: pageNum,
           totalPages,
           totalLoads,
-          limit: parseInt(limit),
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
-        },
-        // DEBUG INFO (remove in production)
-        debug: process.env.NODE_ENV === 'development' ? {
-          queryMatched: totalLoads,
-          returned: loads.length,
-          baseQuery: baseQuery,
-          appliedFilters: {
-            search,
-            cargoType,
-            vehicleType,
-            pickupLocation,
-            deliveryLocation,
-            minBudget,
-            maxBudget,
-            urgentOnly
-          }
-        } : undefined
+          limit: limitNum,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1
+        }
       }
     });
 
   } catch (err) {
-    console.error('GET /api/loads error:', err);
-    console.error('Error stack:', err.stack);
-    
-    // DEBUGGING: Try to get basic count
-    try {
-      const db = mongoose.connection.db;
-      const totalCount = await db.collection('loads').countDocuments({});
-      console.log(`Total loads in database: ${totalCount}`);
-      
-      // Get sample documents
-      const samples = await db.collection('loads').find({}).limit(3).toArray();
-      console.log('Sample loads structure:', samples.map(s => ({
-        id: s._id,
-        title: s.title,
-        status: s.status,
-        isActive: s.isActive,
-        cargoOwnerName: s.cargoOwnerName,
-        hasPostedBy: !!s.postedBy
-      })));
-      
-    } catch (debugError) {
-      console.error('Debug query failed:', debugError);
+    // Try to provide debug information in development
+    if (process.env.NODE_ENV === 'development') {
+      try {
+        const db = mongoose.connection.db;
+        const totalCount = await db.collection('loads').countDocuments({});
+        console.log(`Total loads in database: ${totalCount}`);
+        
+        const sampleLoads = await db.collection('loads').find({}).limit(3).toArray();
+        console.log('Sample loads:', sampleLoads.map(l => ({
+          id: l._id,
+          title: l.title,
+          status: l.status,
+          isActive: l.isActive,
+          hasPostedBy: !!l.postedBy
+        })));
+      } catch (debugError) {
+        console.error('Debug query failed:', debugError);
+      }
     }
     
     return res.status(500).json({
       status: 'error',
-      message: 'Server error fetching loads. Please try again.',
+      message: 'Server error occurred while fetching loads. Please try again.',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }

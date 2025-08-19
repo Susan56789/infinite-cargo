@@ -537,12 +537,49 @@ const LoadSearch = () => {
     }
   }, [successMessage]);
 
-  const fetchLoads = async () => {
+  const fetchLoads = async (page = 1) => {
   try {
     setLoading(true);
     setError('');
 
-    const url = 'https://infinite-cargo-api.onrender.com/api/loads';
+    // Build query parameters
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString()
+    });
+
+    // Add search query if provided
+    if (searchQuery && searchQuery.trim()) {
+      params.append('search', searchQuery.trim());
+    }
+
+    // Add filters only if they have values
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && value.toString().trim()) {
+        // Map frontend filter names to backend expected names
+        const filterMap = {
+          pickupLocation: 'pickupLocation',
+          deliveryLocation: 'deliveryLocation', 
+          cargoType: 'cargoType',
+          vehicleType: 'vehicleType',
+          minBudget: 'minBudget',
+          maxBudget: 'maxBudget',
+          minWeight: 'minWeight',
+          maxWeight: 'maxWeight',
+          isUrgent: 'urgentOnly'
+        };
+        
+        const backendKey = filterMap[key] || key;
+        params.append(backendKey, value.toString());
+      }
+    });
+
+    // Add default sorting
+    params.append('sortBy', 'createdAt');
+    params.append('sortOrder', 'desc');
+
+    const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
+    console.log('Fetching loads from:', url);
 
     const headers = {
       'Content-Type': 'application/json',
@@ -556,44 +593,129 @@ const LoadSearch = () => {
       credentials: 'include'
     });
 
+    console.log('Response status:', response.status);
+    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
     if (!response.ok) {
       let serverError = 'Failed to fetch loads.';
+      let errorDetails = '';
+      
       try {
         const resData = await response.json();
         serverError = resData.message || serverError;
-      } catch (_) {}
+        errorDetails = resData.error || '';
+        
+        // Log detailed error for debugging
+        console.error('Server error details:', resData);
+      } catch (parseError) {
+        console.error('Could not parse error response:', parseError);
+        const responseText = await response.text();
+        console.error('Raw response:', responseText);
+      }
+      
       throw new Error(`${serverError} (HTTP ${response.status})`);
     }
 
     const data = await response.json();
+    console.log('Response data structure:', {
+      status: data.status,
+      hasData: !!data.data,
+      hasLoads: !!(data.data && data.data.loads),
+      loadCount: data.data?.loads?.length || 0,
+      hasPagination: !!(data.data && data.data.pagination)
+    });
 
     if (data.status !== 'success') {
-      throw new Error(data.message || 'Unexpected server response.');
+      throw new Error(data.message || 'Unexpected server response format.');
     }
 
-    // The backend might not return pagination if no params passed
-    // So we do a fallback here:
-    const { loads: loadsArr, pagination } = data.data;
+    if (!data.data) {
+      throw new Error('No data returned from server.');
+    }
 
-    setLoads(loadsArr || []);
+    // Extract loads and pagination
+    const { loads: loadsArray, pagination } = data.data;
+
+    if (!Array.isArray(loadsArray)) {
+      console.error('Invalid loads data:', loadsArray);
+      throw new Error('Invalid loads data format received from server.');
+    }
+
+    // Process loads to ensure consistent data structure
+    const processedLoads = loadsArray.map(load => ({
+      ...load,
+      // Ensure these fields exist with fallbacks
+      _id: load._id || load.id,
+      title: load.title || 'Untitled Load',
+      description: load.description || 'No description available',
+      cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+      pickupLocation: load.pickupLocation || 'Location not specified',
+      deliveryLocation: load.deliveryLocation || 'Location not specified',
+      weight: load.weight || 0,
+      budget: load.budget || 0,
+      cargoType: load.cargoType || 'other',
+      vehicleType: load.vehicleType || 'van',
+      status: load.status || 'available',
+      createdAt: load.createdAt || new Date().toISOString(),
+      isUrgent: Boolean(load.isUrgent),
+      isPriorityListing: Boolean(load.isPriorityListing),
+      bidCount: load.bidCount || 0,
+      viewCount: load.viewCount || 0,
+      // Ensure postedBy has minimum required structure
+      postedBy: load.postedBy || {
+        _id: load.postedBy || load.cargoOwnerId,
+        name: load.cargoOwnerName || 'Anonymous',
+        rating: 4.5,
+        isVerified: false
+      }
+    }));
+
+    console.log(`Successfully processed ${processedLoads.length} loads`);
+
+    // Update state
+    setLoads(processedLoads);
+    
+    // Update pagination
     if (pagination) {
-      setCurrentPage(pagination.currentPage);
-      setTotalPages(pagination.totalPages);
-      setTotalLoads(pagination.totalLoads);
+      setCurrentPage(pagination.currentPage || page);
+      setTotalPages(pagination.totalPages || 1);
+      setTotalLoads(pagination.totalLoads || processedLoads.length);
     } else {
-      // fallback when pagination not present
-      setCurrentPage(1);
+      // Fallback when pagination not present
+      setCurrentPage(page);
       setTotalPages(1);
-      setTotalLoads(loadsArr.length);
+      setTotalLoads(processedLoads.length);
     }
+
+    console.log('State updated successfully');
 
   } catch (err) {
     console.error('Error loading loads:', err);
-    setError(
-      err.message === 'Failed to fetch'
-        ? 'Network error: Could not reach server.'
-        : err.message
-    );
+    
+    // Set user-friendly error messages
+    let userMessage = '';
+    if (err.message.includes('Failed to fetch')) {
+      userMessage = 'Network error: Could not reach server. Please check your internet connection.';
+    } else if (err.message.includes('404')) {
+      userMessage = 'Loads service not found. Please try again later.';
+    } else if (err.message.includes('500')) {
+      userMessage = 'Server error occurred. Please try again in a few moments.';
+    } else if (err.message.includes('timeout')) {
+      userMessage = 'Request timed out. Please try again.';
+    } else {
+      userMessage = err.message || 'An unexpected error occurred while loading loads.';
+    }
+    
+    setError(userMessage);
+    
+    // Don't clear existing loads on error unless it's the first load
+    if (page === 1) {
+      setLoads([]);
+      setCurrentPage(1);
+      setTotalPages(1);
+      setTotalLoads(0);
+    }
+    
   } finally {
     setLoading(false);
   }
