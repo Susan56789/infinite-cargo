@@ -1012,29 +1012,54 @@ router.get('/', optionalAuth, [
       });
     }
 
-    /// Base query
-const baseQuery = {
-  status: { $in: ['available', 'posted', 'receiving_bids'] },
-  isActive: true,
-  pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-};
+    // FIXED: More flexible base query - don't restrict by date too much
+    const baseQuery = {
+      status: { $in: ['available', 'posted', 'receiving_bids'] },
+      isActive: { $ne: false }, // Allow true or undefined (null)
+      // REMOVED: restrictive date filter that was filtering out loads
+      // pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    };
 
-    // Text search
+    // Add date filter only if we want future pickups
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    baseQuery.$or = [
+      { pickupDate: { $gte: oneDayAgo } }, // Future or recent pickups
+      { pickupDate: { $exists: false } },   // No pickup date specified
+      { pickupDate: null }                  // Null pickup date
+    ];
+
+    // Text search with better regex handling
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), 'i');
-      baseQuery.$or = [
-        { title: regex },
-        { description: regex },
-        { pickupLocation: regex },
-        { deliveryLocation: regex }
-      ];
+      const searchTerm = search.trim();
+      const regex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); // Escape special chars
+      baseQuery.$and = baseQuery.$and || [];
+      baseQuery.$and.push({
+        $or: [
+          { title: regex },
+          { description: regex },
+          { pickupLocation: regex },
+          { deliveryLocation: regex },
+          { cargoOwnerName: regex },
+          { 'postedBy.name': regex }
+        ]
+      });
     }
 
-    // Filters
-    if (cargoType) baseQuery.cargoType = new RegExp(cargoType, 'i');
-    if (vehicleType) baseQuery.vehicleType = new RegExp(vehicleType, 'i');
-    if (pickupLocation) baseQuery.pickupLocation = new RegExp(pickupLocation, 'i');
-    if (deliveryLocation) baseQuery.deliveryLocation = new RegExp(deliveryLocation, 'i');
+    // FIXED: Exact match filters instead of regex for dropdown selections
+    if (cargoType && cargoType.trim()) {
+      baseQuery.cargoType = cargoType.trim();
+    }
+    if (vehicleType && vehicleType.trim()) {
+      baseQuery.vehicleType = vehicleType.trim();
+    }
+
+    // Location filters with regex for partial matching
+    if (pickupLocation && pickupLocation.trim()) {
+      baseQuery.pickupLocation = new RegExp(pickupLocation.trim(), 'i');
+    }
+    if (deliveryLocation && deliveryLocation.trim()) {
+      baseQuery.deliveryLocation = new RegExp(deliveryLocation.trim(), 'i');
+    }
 
     // Budget filter
     if (minBudget || maxBudget) {
@@ -1050,35 +1075,85 @@ const baseQuery = {
       if (maxWeight) baseQuery.weight.$lte = parseFloat(maxWeight);
     }
 
+    // Urgent filter
     if (urgentOnly === 'true' || urgentOnly === true) {
       baseQuery.isUrgent = true;
     }
 
+    console.log('Base query for loads:', JSON.stringify(baseQuery, null, 2));
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-    // Sort configuration
-    const sortOptions = {
-      boostLevel: -1,
-      isBoosted: -1,
-      [sortBy]: sortDirection
-    };
+    // FIXED: Simplified sort configuration
+    const sortOptions = {};
+    
+    // Priority sorting: boosted loads first
+    if (sortBy !== 'boostLevel') {
+      sortOptions.isBoosted = -1;
+      sortOptions.boostLevel = -1;
+    }
+    
+    // Main sort field
+    sortOptions[sortBy] = sortDirection;
+    
+    // Secondary sort by creation date if not primary
     if (sortBy !== 'createdAt') {
-      sortOptions['createdAt'] = -1;
+      sortOptions.createdAt = -1;
     }
 
-    // Aggregation pipeline with postedBy user info
+    console.log('Sort options:', sortOptions);
+
+    // FIXED: Corrected aggregation pipeline
     const pipeline = [
       { $match: baseQuery },
+      
+      // FIXED: Lookup from correct collections based on userType
       {
         $lookup: {
-          from: 'users',
+          from: 'cargo-owners', // Try cargo-owners collection first
           localField: 'postedBy',
           foreignField: '_id',
-          as: 'postedByUser'
+          as: 'cargoOwnerUser'
         }
       },
-      { $addFields: { postedBy: { $arrayElemAt: ['$postedByUser', 0] } } },
+      {
+        $lookup: {
+          from: 'drivers', // Also try drivers collection as fallback
+          localField: 'postedBy',
+          foreignField: '_id',
+          as: 'driverUser'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users', // Generic users collection as final fallback
+          localField: 'postedBy',
+          foreignField: '_id',
+          as: 'genericUser'
+        }
+      },
+      
+      // FIXED: Better user data merging
+      {
+        $addFields: {
+          postedByUser: {
+            $cond: {
+              if: { $gt: [{ $size: '$cargoOwnerUser' }, 0] },
+              then: { $arrayElemAt: ['$cargoOwnerUser', 0] },
+              else: {
+                $cond: {
+                  if: { $gt: [{ $size: '$driverUser' }, 0] },
+                  then: { $arrayElemAt: ['$driverUser', 0] },
+                  else: { $arrayElemAt: ['$genericUser', 0] }
+                }
+              }
+            }
+          }
+        }
+      },
+      
+      // FIXED: Better projection with proper fallbacks
       {
         $project: {
           _id: 1,
@@ -1088,6 +1163,8 @@ const baseQuery = {
           weight: 1,
           pickupLocation: 1,
           deliveryLocation: 1,
+          pickupAddress: 1,
+          deliveryAddress: 1,
           budget: 1,
           status: 1,
           createdAt: 1,
@@ -1097,40 +1174,163 @@ const baseQuery = {
           isBoosted: 1,
           boostLevel: 1,
           vehicleType: 1,
+          vehicleCapacityRequired: 1,
           pickupDate: 1,
           deliveryDate: 1,
-          // Extract name
+          specialInstructions: 1,
+          specialRequirements: 1,
+          paymentTerms: 1,
+          insuranceRequired: 1,
+          insuranceValue: 1,
+          distance: 1,
+          bidCount: { $ifNull: ['$bidCount', 0] },
+          viewCount: { $ifNull: ['$viewCount', 0] },
+          
+          // FIXED: Better cargo owner name extraction
           cargoOwnerName: {
-            $ifNull: [
-              '$postedBy.cargoOwnerProfile.companyName',
-              { $ifNull: ['$postedBy.companyName', { $ifNull: ['$postedBy.name', 'Anonymous'] }] }
-            ]
+            $cond: {
+              if: '$cargoOwnerName',
+              then: '$cargoOwnerName',
+              else: {
+                $cond: {
+                  if: '$postedByUser.companyName',
+                  then: '$postedByUser.companyName',
+                  else: {
+                    $cond: {
+                      if: '$postedByUser.cargoOwnerProfile.companyName',
+                      then: '$postedByUser.cargoOwnerProfile.companyName',
+                      else: {
+                        $cond: {
+                          if: '$postedByUser.name',
+                          then: '$postedByUser.name',
+                          else: 'Anonymous Cargo Owner'
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
+          
+          // FIXED: Simplified postedBy object
           postedBy: {
-            _id: '$postedBy._id',
-            name: '$postedBy.name',
-            companyName: {
-              $ifNull: [
-                '$postedBy.cargoOwnerProfile.companyName',
-                { $ifNull: ['$postedBy.companyName', '$postedBy.name'] }
-              ]
-            },
-            rating: { $ifNull: ['$postedBy.rating', 4.5] },
-            isVerified: { $ifNull: ['$postedBy.isVerified', false] },
-            location: '$postedBy.location'
+            $cond: {
+              if: '$postedByUser',
+              then: {
+                _id: '$postedByUser._id',
+                name: '$postedByUser.name',
+                email: '$postedByUser.email',
+                phone: '$postedByUser.phone',
+                companyName: {
+                  $ifNull: [
+                    '$postedByUser.companyName',
+                    '$postedByUser.cargoOwnerProfile.companyName'
+                  ]
+                },
+                rating: { $ifNull: ['$postedByUser.rating', 4.5] },
+                isVerified: { $ifNull: ['$postedByUser.isVerified', false] },
+                location: '$postedByUser.location'
+              },
+              else: {
+                _id: '$postedBy',
+                name: 'Anonymous',
+                rating: 4.5,
+                isVerified: false
+              }
+            }
+          },
+          
+          // Contact person with fallbacks
+          contactPerson: {
+            $cond: {
+              if: '$contactPerson',
+              then: '$contactPerson',
+              else: {
+                name: { $ifNull: ['$postedByUser.name', 'Contact'] },
+                phone: { $ifNull: ['$postedByUser.phone', ''] },
+                email: { $ifNull: ['$postedByUser.email', ''] }
+              }
+            }
           }
         }
       },
+      
       { $sort: sortOptions },
       { $skip: skip },
       { $limit: parseInt(limit) }
     ];
 
-    const loads = await Load.aggregate(pipeline);
-    const totalLoads = await Load.countDocuments(baseQuery);
+    console.log('Aggregation pipeline:', JSON.stringify(pipeline, null, 2));
+
+    // FIXED: Use direct MongoDB collection instead of Mongoose model to avoid schema issues
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
+    
+    // Execute aggregation
+    const loads = await loadsCollection.aggregate(pipeline).toArray();
+    
+    // Get total count with same base query
+    const totalLoads = await loadsCollection.countDocuments(baseQuery);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Response
+    console.log(`Found ${loads.length} loads out of ${totalLoads} total`);
+
+    // BACKUP: If aggregation returns no results, try a simple find
+    if (loads.length === 0 && totalLoads > 0) {
+      console.log('Aggregation returned no results, trying simple find...');
+      
+      const simpleLoads = await loadsCollection
+        .find(baseQuery)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .toArray();
+      
+      // Manually add missing fields
+      const enhancedLoads = simpleLoads.map(load => ({
+        ...load,
+        cargoOwnerName: load.cargoOwnerName || load.postedByName || 'Anonymous Cargo Owner',
+        bidCount: load.bidCount || 0,
+        postedBy: load.postedBy ? {
+          _id: load.postedBy,
+          name: load.cargoOwnerName || 'Anonymous',
+          rating: 4.5,
+          isVerified: false
+        } : null
+      }));
+      
+      console.log(`Simple find returned ${enhancedLoads.length} loads`);
+      
+      return res.json({
+        status: 'success',
+        data: {
+          loads: enhancedLoads,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages,
+            totalLoads,
+            limit: parseInt(limit),
+            hasNextPage: parseInt(page) < totalPages,
+            hasPrevPage: parseInt(page) > 1
+          }
+        }
+      });
+    }
+
+    // DEBUGGING: Log sample data
+    if (loads.length > 0) {
+      console.log('Sample load data:', {
+        id: loads[0]._id,
+        title: loads[0].title,
+        cargoOwnerName: loads[0].cargoOwnerName,
+        status: loads[0].status,
+        isActive: loads[0].isActive,
+        pickupDate: loads[0].pickupDate
+      });
+    }
+
+    // Response with additional metadata
     return res.json({
       status: 'success',
       data: {
@@ -1142,18 +1342,105 @@ const baseQuery = {
           limit: parseInt(limit),
           hasNextPage: parseInt(page) < totalPages,
           hasPrevPage: parseInt(page) > 1
-        }
+        },
+        // DEBUG INFO (remove in production)
+        debug: process.env.NODE_ENV === 'development' ? {
+          queryMatched: totalLoads,
+          returned: loads.length,
+          baseQuery: baseQuery,
+          appliedFilters: {
+            search,
+            cargoType,
+            vehicleType,
+            pickupLocation,
+            deliveryLocation,
+            minBudget,
+            maxBudget,
+            urgentOnly
+          }
+        } : undefined
       }
     });
 
   } catch (err) {
     console.error('GET /api/loads error:', err);
+    console.error('Error stack:', err.stack);
+    
+    // DEBUGGING: Try to get basic count
+    try {
+      const db = mongoose.connection.db;
+      const totalCount = await db.collection('loads').countDocuments({});
+      console.log(`Total loads in database: ${totalCount}`);
+      
+      // Get sample documents
+      const samples = await db.collection('loads').find({}).limit(3).toArray();
+      console.log('Sample loads structure:', samples.map(s => ({
+        id: s._id,
+        title: s.title,
+        status: s.status,
+        isActive: s.isActive,
+        cargoOwnerName: s.cargoOwnerName,
+        hasPostedBy: !!s.postedBy
+      })));
+      
+    } catch (debugError) {
+      console.error('Debug query failed:', debugError);
+    }
+    
     return res.status(500).json({
       status: 'error',
-      message: 'Server error fetching loads. Please try again.'
+      message: 'Server error fetching loads. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
+
+// HELPER: Add this endpoint for debugging database contents
+if (process.env.NODE_ENV === 'development') {
+  router.get('/debug', async (req, res) => {
+    try {
+      const db = mongoose.connection.db;
+      
+      // Get collections
+      const collections = await db.listCollections().toArray();
+      console.log('Available collections:', collections.map(c => c.name));
+      
+      // Get loads count and sample
+      const totalLoads = await db.collection('loads').countDocuments({});
+      const sampleLoads = await db.collection('loads').find({}).limit(5).toArray();
+      
+      // Get users count from different collections
+      const cargoOwnersCount = await db.collection('cargo-owners').countDocuments({});
+      const driversCount = await db.collection('drivers').countDocuments({});
+      const usersCount = await db.collection('users').countDocuments({});
+      
+      return res.json({
+        status: 'success',
+        debug: {
+          collections: collections.map(c => c.name),
+          totalLoads,
+          cargoOwnersCount,
+          driversCount,
+          usersCount,
+          sampleLoads: sampleLoads.map(load => ({
+            id: load._id,
+            title: load.title,
+            status: load.status,
+            isActive: load.isActive,
+            cargoOwnerName: load.cargoOwnerName,
+            postedBy: load.postedBy,
+            createdAt: load.createdAt
+          }))
+        }
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: 'error',
+        error: error.message
+      });
+    }
+  });
+}
 
 
 // @route   PUT /api/loads/:id

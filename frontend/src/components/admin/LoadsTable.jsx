@@ -23,11 +23,11 @@ const LoadsTable = ({
 
       if (searchTerm) endpoint += `&search=${encodeURIComponent(searchTerm)}`;
       if (statusFilter !== 'all') endpoint += `&status=${statusFilter}`;
-
       const res = await apiCall(endpoint);
       if (res.status === 'success') {
         setLoads(res.data.loads || []);
         setTotalPages(res.data.totalPages || 1);
+        
       }
     } catch (err) {
       console.error('Failed to fetch loads:', err);
@@ -36,6 +36,8 @@ const LoadsTable = ({
       setLoading(false);
     }
   };
+
+  console.log('FETCHED LOADS', loads)
 
   useEffect(() => {
     fetchLoads(1);
@@ -101,7 +103,7 @@ const LoadsTable = ({
               loads.map((load) => (
                 <tr key={load._id}>
                   <td className="px-4 py-3">{load.loadNumber || load._id}</td>
-                  <td className="px-4 py-3">{load.cargoOwnerName || '-'}</td>
+                  <td className="px-4 py-3">{load.name || '-'}</td>
                   <td className="px-4 py-3">{load.origin || '-'}</td>
                   <td className="px-4 py-3">{load.destination || '-'}</td>
                   <td className="px-4 py-3">

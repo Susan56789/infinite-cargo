@@ -433,7 +433,7 @@ const LoadSearch = () => {
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [isUserAuthenticated, setIsUserAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
-  const [bidStates, setBidStates] = useState({}); // Track bid form states for each load
+  const [bidStates, setBidStates] = useState({}); 
   const [successMessage, setSuccessMessage] = useState('');
 
   // Pagination
@@ -584,14 +584,14 @@ const LoadSearch = () => {
       }
 
       const data = await response.json();
-      console.log('Load fetch response:', data);
-
+      
       if (data.status !== 'success') {
         throw new Error(data.message || 'Unexpected server response.');
       }
 
       const { loads: loadsArr, pagination } = data.data;
-      console.log('Fetched loads:', loadsArr);
+      console.log('LOAD DAAAATA',data.data)
+      
       setLoads(loadsArr);
       setCurrentPage(pagination.currentPage);
       setTotalPages(pagination.totalPages);
@@ -608,6 +608,8 @@ const LoadSearch = () => {
       setLoading(false);
     }
   };
+
+  console.log('Loads fetched:', loads);
 
   // Place bid function (Fixed)
 const handleBidSubmit = async (bidData) => {
