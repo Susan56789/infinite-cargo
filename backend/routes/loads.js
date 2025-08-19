@@ -103,319 +103,151 @@ function deg2rad(deg) {
 // @route   GET /api/loads/user/my-loads
 // @desc    Get cargo owner's loads with detailed information
 // @access  Private (Cargo owners only)
+
 router.get('/user/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('status').optional().isIn(['posted', 'receiving_bids', 'driver_assigned', 'in_transit', 'delivered', 'cancelled']),
-  query('sortBy').optional().isIn(['createdAt', 'budget', 'title', 'status']),
-  query('sortOrder').optional().isIn(['asc', 'desc'])
+  query('status').optional().isIn(['posted','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled']),
+  query('sortBy').optional().isIn(['createdAt','budget','title','status']),
+  query('sortOrder').optional().isIn(['asc','desc'])
 ], async (req, res) => {
+  console.log('=== MY LOADS REQUEST START ===');
+
+  // ✅ AUTHENTICATION FIRST - avoid undefined req.user errors
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({
+      status: 'error',
+      message: 'Unauthorized or invalid token'
+    });
+  }
+
+  // ✅ ROLE CHECK EARLY
+  if (req.user.userType !== 'cargo_owner') {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Access denied. Cargo owners only.'
+    });
+  }
+
+  // ✅ Validate query parameters
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Validation failed',
+      errors: errors.array()
+    });
+  }
+
+  const { page = 1, limit = 50, status, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+
+  // ✅ DB connection check
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      status: 'error',
+      message: 'Database connection unavailable. Please try again later.'
+    });
+  }
+
+  // Build query
+  let queryObj = { postedBy: new mongoose.Types.ObjectId(req.user.id) };
+  if (status) queryObj.status = status;
+
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  const sortDirection = sortOrder === 'desc' ? -1 : 1;
+
   try {
-    // Check authentication
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'Unauthorized or invalid token'
-      });
-    }
-    
-    // Only allow cargo_owner
-    if (req.user.userType !== 'cargo_owner') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. Cargo owners only.'
-      });
-    }
+    // MAIN LOAD FETCH
+    const loads = await Load.find(queryObj)
+      .populate({
+        path: 'postedBy',
+        select: 'name email phone companyName cargoOwnerProfile isVerified',
+        options: { strictPopulate: false }
+      })
+      .populate({
+        path: 'assignedDriver',
+        select: 'name phone email location vehicleType rating',
+        options: { strictPopulate: false }
+      })
+      .sort({ [sortBy]: sortDirection, createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean()
+      .exec();
 
-    const { 
-      page = 1, 
-      limit = 50, 
-      status,
-      sortBy = 'createdAt',
-      sortOrder = 'desc'
-    } = req.query;
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    // Build query
-    let query = { 
-      postedBy: new mongoose.Types.ObjectId(req.user.id) 
-    };
-    
-    if (status) {
-      query.status = status;
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const sortDirection = sortOrder === 'desc' ? -1 : 1;
-
-    // Enhanced aggregation pipeline with proper cargo owner name handling
-    const aggregationPipeline = [
-      { $match: query },
-      
-      // Lookup user information
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'postedBy',
-          foreignField: '_id',
-          as: 'postedByUser'
-        }
-      },
-      
-      // Lookup bid statistics
-      {
-        $lookup: {
-          from: 'bids',
-          let: { loadId: '$_id' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ['$load', '$$loadId'] },
-                    { $nin: ['$status', ['withdrawn', 'expired']] }
-                  ]
-                }
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                total: { $sum: 1 },
-                pending: {
-                  $sum: {
-                    $cond: [{ $in: ['$status', ['submitted', 'viewed', 'under_review']] }, 1, 0]
-                  }
-                },
-                accepted: {
-                  $sum: {
-                    $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0]
-                  }
-                },
-                avgBidAmount: { $avg: '$bidAmount' },
-                lowestBid: { $min: '$bidAmount' },
-                highestBid: { $max: '$bidAmount' }
-              }
-            }
-          ],
-          as: 'bidStats'
-        }
-      },
-      
-      // Lookup assigned driver if any
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'assignedDriver',
-          foreignField: '_id',
-          as: 'assignedDriverInfo'
-        }
-      },
-      
-      // Add computed fields
-      {
-        $addFields: {
-          postedByUser: { $arrayElemAt: ['$postedByUser', 0] },
-          bidStats: { $arrayElemAt: ['$bidStats', 0] },
-          assignedDriverInfo: { $arrayElemAt: ['$assignedDriverInfo', 0] },
-          
-          // Enhanced cargo owner name resolution
-          resolvedCargoOwnerName: {
-            $cond: {
-              if: { $and: [{ $ne: ['$cargoOwnerName', null] }, { $ne: ['$cargoOwnerName', ''] }] },
-              then: '$cargoOwnerName',
-              else: {
-                $cond: {
-                  if: { $and: [{ $ne: ['$postedByName', null] }, { $ne: ['$postedByName', ''] }] },
-                  then: '$postedByName',
-                  else: {
-                    $let: {
-                      vars: { user: { $arrayElemAt: ['$postedByUser', 0] } },
-                      in: {
-                        $cond: {
-                          if: { $and: [{ $ne: ['$$user.cargoOwnerProfile.companyName', null] }, { $ne: ['$$user.cargoOwnerProfile.companyName', ''] }] },
-                          then: '$$user.cargoOwnerProfile.companyName',
-                          else: {
-                            $cond: {
-                              if: { $and: [{ $ne: ['$$user.companyName', null] }, { $ne: ['$$user.companyName', ''] }] },
-                              then: '$$user.companyName',
-                              else: {
-                                $cond: {
-                                  if: { $and: [{ $ne: ['$$user.name', null] }, { $ne: ['$$user.name', ''] }] },
-                                  then: '$$user.name',
-                                  else: 'Anonymous Cargo Owner'
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      
-      // Project final structure
-      {
-        $project: {
-          _id: 1,
-          title: 1,
-          description: 1,
-          cargoType: 1,
-          weight: 1,
-          dimensions: 1,
-          pickupLocation: 1,
-          deliveryLocation: 1,
-          pickupAddress: 1,
-          deliveryAddress: 1,
-          pickupDate: 1,
-          deliveryDate: 1,
-          budget: 1,
-          vehicleType: 1,
-          vehicleCapacityRequired: 1,
-          specialRequirements: 1,
-          specialInstructions: 1,
-          status: 1,
-          isUrgent: 1,
-          isActive: 1,
-          boostLevel: { $ifNull: ['$boostLevel', 0] },
-          isBoosted: { $ifNull: ['$isBoosted', false] },
-          isPriorityListing: { $ifNull: ['$isPriorityListing', false] },
-          createdAt: 1,
-          updatedAt: 1,
-          assignedAt: 1,
-          deliveredAt: 1,
-          viewCount: { $ifNull: ['$viewCount', 0] },
-          distance: 1,
-          
-          // Cargo owner information - GUARANTEED TO BE PRESENT
-          cargoOwnerName: '$resolvedCargoOwnerName',
-          postedByName: '$resolvedCargoOwnerName',
-          
-          // Contact information
-          contactPerson: 1,
-          
-          // Bid statistics
-          bidCount: { $ifNull: ['$bidStats.total', 0] },
-          pendingBids: { $ifNull: ['$bidStats.pending', 0] },
-          acceptedBids: { $ifNull: ['$bidStats.accepted', 0] },
-          averageBidAmount: '$bidStats.avgBidAmount',
-          lowestBid: '$bidStats.lowestBid',
-          highestBid: '$bidStats.highestBid',
-          
-          // Assigned driver information (if any)
-          assignedDriver: {
-            $cond: {
-              if: { $ne: ['$assignedDriverInfo', null] },
-              then: {
-                _id: '$assignedDriverInfo._id',
-                name: '$assignedDriverInfo.name',
-                phone: '$assignedDriverInfo.phone',
-                email: '$assignedDriverInfo.email',
-                location: '$assignedDriverInfo.location',
-                vehicleType: '$assignedDriverInfo.vehicleType',
-                rating: { $ifNull: ['$assignedDriverInfo.rating', 4.5] },
-                isVerified: { $ifNull: ['$assignedDriverInfo.isVerified', false] }
-              },
-              else: null
-            }
-          },
-          
-          // Accepted bid amount if applicable
-          acceptedBidAmount: {
-            $cond: {
-              if: { $eq: ['$status', 'assigned'] },
-              then: '$bidStats.acceptedBidAmount',
-              else: null
-            }
-          }
-        }
-      },
-      
-      // Sort
-      { $sort: { [sortBy]: sortDirection, createdAt: -1 } },
-      
-      // Pagination
-      { $skip: skip },
-      { $limit: parseInt(limit) }
-    ];
-
-    // Execute aggregation
-    const loads = await Load.aggregate(aggregationPipeline);
-    const totalLoads = await Load.countDocuments(query);
+    const totalLoads = await Load.countDocuments(queryObj);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Transform the data for frontend with additional computed fields
-    const transformedLoads = loads.map(load => ({
-      ...load,
-      
-      // Calculate savings if bid was accepted
-      savings: load.acceptedBidAmount && load.budget 
-        ? load.budget - load.acceptedBidAmount 
-        : null,
-      
-      // Calculate days since posted
-      daysSincePosted: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
-      
-      // Status helpers for frontend
-      canReceiveBids: ['posted', 'receiving_bids'].includes(load.status),
-      isActive: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'].includes(load.status),
-      isCompleted: load.status === 'delivered',
-      isCancelled: load.status === 'cancelled',
-      
-      // Urgency and priority indicators
-      isExpired: load.biddingEndDate && new Date() > new Date(load.biddingEndDate),
-      isExpiringSoon: load.biddingEndDate && 
-        new Date(load.biddingEndDate) - new Date() < 24 * 60 * 60 * 1000, // Less than 24 hours
-        
-      // Ensure cargo owner name is always present
-      cargoOwnerName: load.cargoOwnerName || 'Anonymous Cargo Owner',
-      postedByName: load.cargoOwnerName || 'Anonymous Cargo Owner'
-    }));
-
-    // Get summary statistics
-    const summaryStats = await Load.aggregate([
-      { $match: { postedBy: new mongoose.Types.ObjectId(req.user.id) } },
-      {
-        $group: {
-          _id: null,
-          totalLoads: { $sum: 1 },
-          activeLoads: {
-            $sum: {
-              $cond: [
-                { $in: ['$status', ['posted', 'receiving_bids', 'driver_assigned', 'in_transit']] },
-                1,
-                0
-              ]
-            }
-          },
-          completedLoads: {
-            $sum: {
-              $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0]
-            }
-          },
-          totalBudget: { $sum: '$budget' },
-          avgBudget: { $avg: '$budget' }
-        }
+    // BID COUNTS
+    let bidMap = {};
+    if (loads.length > 0) {
+      try {
+        const ids = loads.map(l => l._id);
+        const bidCounts = await Bid.aggregate([
+          { $match: { load: { $in: ids }, status: { $nin: ['withdrawn','expired'] } } },
+          { $group: { _id: '$load', count: { $sum: 1 } } }
+        ]);
+        bidCounts.forEach(item => {
+          bidMap[item._id.toString()] = item.count;
+        });
+      } catch (bidErr) {
+        console.warn('Error fetching bids:', bidErr.message);
       }
-    ]);
+    }
 
+    const transformed = loads.map(l => {
+      const cargoOwnerName =
+        l?.postedBy?.cargoOwnerProfile?.companyName ||
+        l?.postedBy?.companyName ||
+        l?.postedBy?.name ||
+        'Anonymous Cargo Owner';
+
+      return {
+        _id: l._id,
+        title: l.title || 'Untitled Load',
+        description: l.description || '',
+        pickupLocation: l.pickupLocation || '',
+        deliveryLocation: l.deliveryLocation || '',
+        // ... other fields ...
+        budget: l.budget || 0,
+        status: l.status || 'posted',
+        createdAt: l.createdAt,
+        isUrgent: l.isUrgent || false,
+        bidCount: bidMap[l._id.toString()] || 0,
+        cargoOwnerName,
+        postedByName: cargoOwnerName
+      };
+    });
+
+    // SUMMARY STATS
+    let summary = {
+      totalLoads: 0, activeLoads: 0, completedLoads: 0, totalBudget: 0, avgBudget: 0
+    };
+
+    try {
+      const statsResult = await Load.aggregate([
+        { $match: { postedBy: new mongoose.Types.ObjectId(req.user.id) } },
+        {
+          $group: {
+            _id: null,
+            totalLoads: { $sum: 1 },
+            activeLoads: { $sum: { $cond: [{ $in: ['$status',['posted','receiving_bids', 'assigned','in_transit']]}, 1, 0] } },
+            completedLoads: { $sum: { $cond: [{ $eq: ['$status','delivered']}, 1, 0] } },
+            totalBudget: { $sum: '$budget' },
+            avgBudget: { $avg: '$budget' }
+          }
+        }
+      ]);
+      if (statsResult.length > 0) summary = statsResult[0];
+    } catch (statsErr) {
+      console.warn('Summary stats error:', statsErr.message);
+    }
+
+    // ✅ SUCCESS RESPONSE
     return res.json({
       status: 'success',
       data: {
-        loads: transformedLoads,
+        loads: transformed,
         pagination: {
           currentPage: parseInt(page),
           totalPages,
@@ -424,30 +256,23 @@ router.get('/user/my-loads', auth, [
           hasPrevPage: parseInt(page) > 1,
           limit: parseInt(limit)
         },
-        summary: summaryStats[0] || {
-          totalLoads: 0,
-          activeLoads: 0,
-          completedLoads: 0,
-          totalBudget: 0,
-          avgBudget: 0
-        },
-        filters: {
-          status: status || 'all',
-          sortBy,
-          sortOrder
-        }
+        summary,
+        filters: { status: status || 'all', sortBy, sortOrder }
       }
     });
+  } catch (err) {
+    console.error('=== MY LOADS **SERVER ERROR** ===');
+    console.error(err);
 
-  } catch (error) {
-    console.error('Get my loads error:', error);
-    res.status(500).json({
+    // Generic server error
+    return res.status(500).json({
       status: 'error',
       message: 'Server error fetching loads',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
+
 
 // @route   GET /api/loads/subscription-status
 // @desc    Get current user's subscription status

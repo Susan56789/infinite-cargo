@@ -10,7 +10,7 @@ const LoadFormModal = ({
   onSubmit,
   onClose,
   resetForm,
-  user // Add user prop to access user data
+  user 
 }) => {
   if (!showLoadForm) return null;
 
