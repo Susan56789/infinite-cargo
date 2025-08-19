@@ -28,51 +28,37 @@ const bidLimiter = rateLimit({
 
 // Bid validation middleware
 const bidValidation = [
-  body('load')
-    .notEmpty()
-    .withMessage('Load ID is required')
-    .isMongoId()
-    .withMessage('Invalid load ID'),
+  body('load').isMongoId().withMessage('Valid load ID is required'),
+  body('bidAmount').isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
+  body('currency').optional().isIn(['KES', 'USD', 'EUR']).withMessage('Invalid currency'),
+  body('proposedPickupDate').isISO8601().withMessage('Valid pickup date is required'),
+  body('proposedDeliveryDate').isISO8601().withMessage('Valid delivery date is required'),
+  body('message').optional().isLength({ max: 1000 }).withMessage('Message cannot exceed 1000 characters'),
+  body('coverLetter').optional().isLength({ max: 2000 }).withMessage('Cover letter cannot exceed 2000 characters'),
+  body('vehicleDetails.type').optional().isIn([
+    'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck', 
+    'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
+  ]).withMessage('Invalid vehicle type'),
+  body('vehicleDetails.capacity').optional().isFloat({ min: 0.1 }).withMessage('Vehicle capacity must be at least 0.1 tonnes'),
+  body('additionalServices').optional().isArray().withMessage('Additional services must be an array'),
+  body('terms.paymentMethod').optional().isIn(['cash', 'bank_transfer', 'mobile_money', 'check']).withMessage('Invalid payment method'),
+  body('terms.paymentTiming').optional().isIn(['upfront', 'on_pickup', 'on_delivery', '50_50_split']).withMessage('Invalid payment timing'),
+  
+  // Custom validation for date logic
+  body('proposedDeliveryDate').custom((value, { req }) => {
+    const pickupDate = new Date(req.body.proposedPickupDate);
+    const deliveryDate = new Date(value);
     
-  body('bidAmount')
-    .isFloat({ min: 1 })
-    .withMessage('Bid amount must be at least 1 KES'),
+    if (deliveryDate <= pickupDate) {
+      throw new Error('Delivery date must be after pickup date');
+    }
     
-  body('proposedPickupDate')
-    .isISO8601()
-    .toDate()
-    .withMessage('Valid proposed pickup date is required'),
+    if (pickupDate < new Date()) {
+      throw new Error('Pickup date cannot be in the past');
+    }
     
-  body('proposedDeliveryDate')
-    .isISO8601()
-    .toDate()
-    .custom((value, { req }) => {
-      if (value <= new Date(req.body.proposedPickupDate)) {
-        throw new Error('Proposed delivery date must be after pickup date');
-      }
-      return true;
-    }),
-    
-  body('message')
-    .optional()
-    .isLength({ max: 1000 })
-    .withMessage('Message cannot exceed 1000 characters'),
-    
-  body('coverLetter')
-    .optional()
-    .isLength({ max: 2000 })
-    .withMessage('Cover letter cannot exceed 2000 characters'),
-    
-  body('vehicleDetails.type')
-    .isIn([
-      'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck', 
-      'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
-    ])
-    .withMessage('Invalid vehicle type'),
-    
-  body('vehicleDetails.capacity')
-    .isFloat({ min: 0.1 })
-    .withMessage('Vehicle capacity must be at least 0.1 tonnes')
+    return true;
+  })
 ];
 
 // @route   POST /api/bids
@@ -143,7 +129,7 @@ router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
       });
     }
 
-    // Prepare bid data
+    // Prepare bid data matching your existing schema structure
     const bidData = {
       load: loadId,
       driver: req.user.id,
@@ -153,12 +139,50 @@ router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
       proposedPickupDate: req.body.proposedPickupDate,
       proposedDeliveryDate: req.body.proposedDeliveryDate,
       message: req.body.message,
+      coverLetter: req.body.coverLetter,
+
+      // Vehicle details (matching your schema)
+      vehicleDetails: req.body.vehicleDetails ? {
+        type: req.body.vehicleDetails.type,
+        capacity: req.body.vehicleDetails.capacity,
+        year: req.body.vehicleDetails.year,
+        make: req.body.vehicleDetails.make,
+        model: req.body.vehicleDetails.model,
+        licensePlate: req.body.vehicleDetails.licensePlate,
+        insuranceValid: req.body.vehicleDetails.insuranceValid !== false,
+        specialFeatures: req.body.vehicleDetails.specialFeatures || []
+      } : undefined,
+
+      // Additional services (matching your schema enum values)
+      additionalServices: req.body.additionalServices ? req.body.additionalServices.map(service => ({
+        service: service.service || service, // Handle both object and string formats
+        cost: service.cost || service.additionalCost || 0,
+        description: service.description
+      })) : [],
+
+      // Pricing breakdown (matching your schema)
       pricingBreakdown: {
-        baseFare: req.body.bidAmount,
-        totalAmount: req.body.bidAmount
+        baseFare: req.body.pricingBreakdown?.baseFare || req.body.bidAmount,
+        distanceFare: req.body.pricingBreakdown?.distanceFare || 0,
+        weightSurcharge: req.body.pricingBreakdown?.weightSurcharge || 0,
+        urgencySurcharge: req.body.pricingBreakdown?.urgencySurcharge || 0,
+        serviceFees: req.body.pricingBreakdown?.serviceFees || 0,
+        taxes: req.body.pricingBreakdown?.taxes || 0,
+        discount: req.body.pricingBreakdown?.discount || 0,
+        totalAmount: req.body.pricingBreakdown?.totalAmount || req.body.bidAmount
       },
 
-      // Driver snapshot
+      // Terms (matching your schema enum values)
+      terms: {
+        paymentMethod: req.body.terms?.paymentMethod || 'cash',
+        paymentTiming: req.body.terms?.paymentTiming === 'advance' ? '50_50_split' : 
+                      req.body.terms?.paymentTiming === 'weekly' ? 'on_delivery' :
+                      req.body.terms?.paymentTiming || 'on_delivery',
+        cancellationPolicy: req.body.terms?.cancellationPolicy,
+        specialTerms: req.body.terms?.additionalTerms
+      },
+
+      // Driver info snapshot (matching your schema)
       driverInfo: {
         name: driver.name,
         phone: driver.phone,
@@ -170,35 +194,105 @@ router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
         isVerified: driver.driverProfile?.verified || false
       },
 
-      // Load snapshot
+      // Load info snapshot (matching your schema)
       loadInfo: {
         title: load.title,
         pickupLocation: load.pickupLocation,
         deliveryLocation: load.deliveryLocation,
         weight: load.weight,
         budget: load.budget
-      }
+      },
+
+      // Set status to 'submitted' as per your schema
+      status: 'submitted',
+      
+      // Initialize analytics
+      analytics: {
+        views: 0,
+        profileViews: 0,
+        contactAttempts: 0
+      },
+
+      // Initialize notifications
+      notifications: {
+        driverNotified: false,
+        cargoOwnerNotified: false,
+        reminderSent: false
+      },
+
+      // System fields
+      isActive: true,
+      priority: 0,
+      version: 1
     };
 
+    // Create and save the bid
     const bid = new Bid(bidData);
     await bid.save();
 
-    // Increment bid count on load
-    await Load.findByIdAndUpdate(loadId, { $inc: { bidsReceived: 1 } });
+    // Increment bid count on load (use your existing field name)
+    await Load.findByIdAndUpdate(loadId, { 
+      $inc: { bidsReceived: 1 },
+      $set: { lastBidDate: new Date() }
+    });
 
+    // Populate the created bid for response
     await bid.populate([
-      { path: 'driver', select: 'name phone email location rating isVerified vehicleType vehicleCapacity' },
+      { path: 'driver', select: 'name phone email location rating isVerified' },
       { path: 'load', select: 'title pickupLocation deliveryLocation weight budget status' }
     ]);
 
+    // Send success response with data matching your schema structure
     res.status(201).json({
       status: 'success',
       message: 'Bid submitted successfully',
-      data: { bid }
+      data: { 
+        bid: {
+          _id: bid._id,
+          bidAmount: bid.bidAmount,
+          currency: bid.currency,
+          proposedPickupDate: bid.proposedPickupDate,
+          proposedDeliveryDate: bid.proposedDeliveryDate,
+          status: bid.status,
+          submittedAt: bid.submittedAt,
+          expiresAt: bid.expiresAt,
+          vehicleDetails: bid.vehicleDetails,
+          terms: bid.terms,
+          pricingBreakdown: bid.pricingBreakdown,
+          additionalServices: bid.additionalServices,
+          driverInfo: {
+            name: bid.driverInfo.name,
+            rating: bid.driverInfo.rating,
+            totalTrips: bid.driverInfo.totalTrips,
+            isVerified: bid.driverInfo.isVerified
+          },
+          loadInfo: bid.loadInfo,
+          createdAt: bid.createdAt,
+          updatedAt: bid.updatedAt
+        }
+      }
     });
+
+    // TODO: Send notification to cargo owner
+    // await sendBidNotification(load.postedBy, bid);
 
   } catch (error) {
     console.error('Create bid error:', error);
+    
+    // Handle validation errors specifically
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }));
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Bid validation failed',
+        errors: validationErrors
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
       message: 'Server error creating bid',

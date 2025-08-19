@@ -86,6 +86,7 @@ const LoadsTable = ({
             <tr>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cargo Owner</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Phone Number</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Destination</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -101,6 +102,7 @@ const LoadsTable = ({
                 <tr key={load._id}>
                   <td className="px-4 py-3">{load.cargoType}</td>
                   <td className="px-4 py-3">{load.cargoOwnerName|| '-'}</td>
+                  <td className="px-4 py-3">{load.cargoOwnerPhone|| '-'}</td>
                   <td className="px-4 py-3">{load.origin || '-'}</td>
                   <td className="px-4 py-3">{load.destination || '-'}</td>
                   <td className="px-4 py-3">

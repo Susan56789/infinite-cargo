@@ -28,7 +28,7 @@ import {
   logout 
 } from '../../utils/auth';
 
-// BidForm Component
+// BidForm Component - FIXED
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   const [bidData, setBidData] = useState({
     bidAmount: '',
@@ -122,8 +122,9 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
     
     if (!validateForm()) return;
 
+    // FIXED: Match backend API expectations exactly
     const bidPayload = {
-      load: load._id,
+      load: load._id,  // Backend expects 'load' field
       bidAmount: parseFloat(bidData.bidAmount),
       currency: bidData.currency,
       proposedPickupDate: bidData.proposedPickupDate,
@@ -538,264 +539,314 @@ const LoadSearch = () => {
   }, [successMessage]);
 
   const fetchLoads = async (page = 1) => {
-  try {
-    setLoading(true);
-    setError('');
+    try {
+      setLoading(true);
+      setError('');
 
-    // Build query parameters
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString()
-    });
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString()
+      });
 
-    // Add search query if provided
-    if (searchQuery && searchQuery.trim()) {
-      params.append('search', searchQuery.trim());
-    }
+      // Add search query if provided
+      if (searchQuery && searchQuery.trim()) {
+        params.append('search', searchQuery.trim());
+      }
 
-    // Add filters only if they have values
-    Object.entries(filters).forEach(([key, value]) => {
-      if (value && value.toString().trim()) {
-        // Map frontend filter names to backend expected names
-        const filterMap = {
-          pickupLocation: 'pickupLocation',
-          deliveryLocation: 'deliveryLocation', 
-          cargoType: 'cargoType',
-          vehicleType: 'vehicleType',
-          minBudget: 'minBudget',
-          maxBudget: 'maxBudget',
-          minWeight: 'minWeight',
-          maxWeight: 'maxWeight',
-          isUrgent: 'urgentOnly'
-        };
+      // Add filters only if they have values
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value && value.toString().trim()) {
+          // Map frontend filter names to backend expected names
+          const filterMap = {
+            pickupLocation: 'pickupLocation',
+            deliveryLocation: 'deliveryLocation', 
+            cargoType: 'cargoType',
+            vehicleType: 'vehicleType',
+            minBudget: 'minBudget',
+            maxBudget: 'maxBudget',
+            minWeight: 'minWeight',
+            maxWeight: 'maxWeight',
+            isUrgent: 'urgentOnly'
+          };
+          
+          const backendKey = filterMap[key] || key;
+          params.append(backendKey, value.toString());
+        }
+      });
+
+      // Add default sorting
+      params.append('sortBy', 'createdAt');
+      params.append('sortOrder', 'desc');
+
+      const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
+      console.log('Fetching loads from:', url);
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()
+      };
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        credentials: 'include'
+      });
+
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
+      if (!response.ok) {
+        let serverError = 'Failed to fetch loads.';
+        let errorDetails = '';
         
-        const backendKey = filterMap[key] || key;
-        params.append(backendKey, value.toString());
-      }
-    });
-
-    // Add default sorting
-    params.append('sortBy', 'createdAt');
-    params.append('sortOrder', 'desc');
-
-    const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-    console.log('Fetching loads from:', url);
-
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...getAuthHeaders()
-    };
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      credentials: 'include'
-    });
-
-    console.log('Response status:', response.status);
-    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-
-    if (!response.ok) {
-      let serverError = 'Failed to fetch loads.';
-      let errorDetails = '';
-      
-      try {
-        const resData = await response.json();
-        serverError = resData.message || serverError;
-        errorDetails = resData.error || '';
+        try {
+          const resData = await response.json();
+          serverError = resData.message || serverError;
+          errorDetails = resData.error || '';
+          
+          // Log detailed error for debugging
+          console.error('Server error details:', resData);
+        } catch (parseError) {
+          console.error('Could not parse error response:', parseError);
+          const responseText = await response.text();
+          console.error('Raw response:', responseText);
+        }
         
-        // Log detailed error for debugging
-        console.error('Server error details:', resData);
-      } catch (parseError) {
-        console.error('Could not parse error response:', parseError);
-        const responseText = await response.text();
-        console.error('Raw response:', responseText);
+        throw new Error(`${serverError} (HTTP ${response.status})`);
       }
-      
-      throw new Error(`${serverError} (HTTP ${response.status})`);
-    }
 
-    const data = await response.json();
-    console.log('Response data structure:', {
-      status: data.status,
-      hasData: !!data.data,
-      hasLoads: !!(data.data && data.data.loads),
-      loadCount: data.data?.loads?.length || 0,
-      hasPagination: !!(data.data && data.data.pagination)
-    });
+      const data = await response.json();
+      console.log('Response data structure:', {
+        status: data.status,
+        hasData: !!data.data,
+        hasLoads: !!(data.data && data.data.loads),
+        loadCount: data.data?.loads?.length || 0,
+        hasPagination: !!(data.data && data.data.pagination)
+      });
 
-    if (data.status !== 'success') {
-      throw new Error(data.message || 'Unexpected server response format.');
-    }
-
-    if (!data.data) {
-      throw new Error('No data returned from server.');
-    }
-
-    // Extract loads and pagination
-    const { loads: loadsArray, pagination } = data.data;
-
-    if (!Array.isArray(loadsArray)) {
-      console.error('Invalid loads data:', loadsArray);
-      throw new Error('Invalid loads data format received from server.');
-    }
-
-    // Process loads to ensure consistent data structure
-    const processedLoads = loadsArray.map(load => ({
-      ...load,
-      // Ensure these fields exist with fallbacks
-      _id: load._id || load.id,
-      title: load.title || 'Untitled Load',
-      description: load.description || 'No description available',
-      cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
-      pickupLocation: load.pickupLocation || 'Location not specified',
-      deliveryLocation: load.deliveryLocation || 'Location not specified',
-      weight: load.weight || 0,
-      budget: load.budget || 0,
-      cargoType: load.cargoType || 'other',
-      vehicleType: load.vehicleType || 'van',
-      status: load.status || 'available',
-      createdAt: load.createdAt || new Date().toISOString(),
-      isUrgent: Boolean(load.isUrgent),
-      isPriorityListing: Boolean(load.isPriorityListing),
-      bidCount: load.bidCount || 0,
-      viewCount: load.viewCount || 0,
-      // Ensure postedBy has minimum required structure
-      postedBy: load.postedBy || {
-        _id: load.postedBy || load.cargoOwnerId,
-        name: load.cargoOwnerName || 'Anonymous',
-        rating: 4.5,
-        isVerified: false
+      if (data.status !== 'success') {
+        throw new Error(data.message || 'Unexpected server response format.');
       }
-    }));
 
-    console.log(`Successfully processed ${processedLoads.length} loads`);
+      if (!data.data) {
+        throw new Error('No data returned from server.');
+      }
 
-    // Update state
-    setLoads(processedLoads);
-    
-    // Update pagination
-    if (pagination) {
-      setCurrentPage(pagination.currentPage || page);
-      setTotalPages(pagination.totalPages || 1);
-      setTotalLoads(pagination.totalLoads || processedLoads.length);
-    } else {
-      // Fallback when pagination not present
-      setCurrentPage(page);
-      setTotalPages(1);
-      setTotalLoads(processedLoads.length);
-    }
+      // Extract loads and pagination
+      const { loads: loadsArray, pagination } = data.data;
 
-    console.log('State updated successfully');
+      if (!Array.isArray(loadsArray)) {
+        console.error('Invalid loads data:', loadsArray);
+        throw new Error('Invalid loads data format received from server.');
+      }
 
-  } catch (err) {
-    console.error('Error loading loads:', err);
-    
-    // Set user-friendly error messages
-    let userMessage = '';
-    if (err.message.includes('Failed to fetch')) {
-      userMessage = 'Network error: Could not reach server. Please check your internet connection.';
-    } else if (err.message.includes('404')) {
-      userMessage = 'Loads service not found. Please try again later.';
-    } else if (err.message.includes('500')) {
-      userMessage = 'Server error occurred. Please try again in a few moments.';
-    } else if (err.message.includes('timeout')) {
-      userMessage = 'Request timed out. Please try again.';
-    } else {
-      userMessage = err.message || 'An unexpected error occurred while loading loads.';
-    }
-    
-    setError(userMessage);
-    
-    // Don't clear existing loads on error unless it's the first load
-    if (page === 1) {
-      setLoads([]);
-      setCurrentPage(1);
-      setTotalPages(1);
-      setTotalLoads(0);
-    }
-    
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-  
-
-  // Place bid function (Fixed)
-const handleBidSubmit = async (bidData) => {
-  try {
-    // Check auth
-    if (!isUserAuthenticated) {
-      setShowLoginPrompt(true);
-      return { success: false, error: 'Please login to place a bid' };
-    }
-
-    if (user?.userType !== 'driver') {
-      setError('Only drivers can place bids on loads.');
-      return { success: false, error: 'Only drivers can place bids' };
-    }
-
-    // Build headers
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...getAuthHeaders()
-    };
-
-    // Prepare payload
-    const payload = {
-      load: bidData.loadId || bidData.load,      // fallback
-      bidAmount: bidData.bidAmount,
-      proposedPickupDate: bidData.proposedPickupDate,
-      proposedDeliveryDate: bidData.proposedDeliveryDate,
-      message: bidData.message
-    };
-
-    const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: JSON.stringify(payload)
-    });
-
-    const result = await response.json();
-
-    if (response.ok && result.status === 'success') {
-      setSuccessMessage('Bid placed successfully!');
-      // Close bid form
-      setBidStates(prev => ({
-        ...prev,
-        [payload.load]: { showBidForm: false, submitting: false }
+      // Process loads to ensure consistent data structure
+      const processedLoads = loadsArray.map(load => ({
+        ...load,
+        // Ensure these fields exist with fallbacks
+        _id: load._id || load.id,
+        title: load.title || 'Untitled Load',
+        description: load.description || 'No description available',
+        cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+        pickupLocation: load.pickupLocation || 'Location not specified',
+        deliveryLocation: load.deliveryLocation || 'Location not specified',
+        weight: load.weight || 0,
+        budget: load.budget || 0,
+        cargoType: load.cargoType || 'other',
+        vehicleType: load.vehicleType || 'van',
+        status: load.status || 'available',
+        createdAt: load.createdAt || new Date().toISOString(),
+        isUrgent: Boolean(load.isUrgent),
+        isPriorityListing: Boolean(load.isPriorityListing),
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
+        // Ensure postedBy has minimum required structure
+        postedBy: load.postedBy || {
+          _id: load.postedBy || load.cargoOwnerId,
+          name: load.cargoOwnerName || 'Anonymous',
+          rating: 4.5,
+          isVerified: false
+        }
       }));
-      // Refresh loads to update bid count
-      await fetchLoads(currentPage);
-      return { success: true };
-    } else {
-      let errorMsg = result.message || 'Failed to place bid';
 
-      // Specific error handling
-      if (response.status === 400 && errorMsg.includes('already')) {
-        errorMsg = 'You already have a bid on this load.';
-      } else if (response.status === 404) {
-        errorMsg = 'Load not found.';
-      } else if (response.status === 403) {
-        errorMsg = 'Only drivers can place bids.';
+      console.log(`Successfully processed ${processedLoads.length} loads`);
+
+      // Update state
+      setLoads(processedLoads);
+      
+      // Update pagination
+      if (pagination) {
+        setCurrentPage(pagination.currentPage || page);
+        setTotalPages(pagination.totalPages || 1);
+        setTotalLoads(pagination.totalLoads || processedLoads.length);
+      } else {
+        // Fallback when pagination not present
+        setCurrentPage(page);
+        setTotalPages(1);
+        setTotalLoads(processedLoads.length);
       }
 
+      console.log('State updated successfully');
+
+    } catch (err) {
+      console.error('Error loading loads:', err);
+      
+      // Set user-friendly error messages
+      let userMessage = '';
+      if (err.message.includes('Failed to fetch')) {
+        userMessage = 'Network error: Could not reach server. Please check your internet connection.';
+      } else if (err.message.includes('404')) {
+        userMessage = 'Loads service not found. Please try again later.';
+      } else if (err.message.includes('500')) {
+        userMessage = 'Server error occurred. Please try again in a few moments.';
+      } else if (err.message.includes('timeout')) {
+        userMessage = 'Request timed out. Please try again.';
+      } else {
+        userMessage = err.message || 'An unexpected error occurred while loading loads.';
+      }
+      
+      setError(userMessage);
+      
+      // Don't clear existing loads on error unless it's the first load
+      if (page === 1) {
+        setLoads([]);
+        setCurrentPage(1);
+        setTotalPages(1);
+        setTotalLoads(0);
+      }
+      
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // FIXED Place bid function - matches backend API expectations
+  const handleBidSubmit = async (bidData) => {
+    try {
+      // Check auth
+      if (!isUserAuthenticated) {
+        setShowLoginPrompt(true);
+        return { success: false, error: 'Please login to place a bid' };
+      }
+
+      if (user?.userType !== 'driver') {
+        setError('Only drivers can place bids on loads.');
+        return { success: false, error: 'Only drivers can place bids' };
+      }
+
+      // Build headers
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()
+      };
+
+      // FIXED: Prepare payload to match backend validation exactly
+      const payload = {
+        load: bidData.load,  // Backend expects 'load' field (MongoDB ObjectId)
+        bidAmount: parseFloat(bidData.bidAmount),
+        currency: bidData.currency || 'KES',
+        proposedPickupDate: bidData.proposedPickupDate,
+        proposedDeliveryDate: bidData.proposedDeliveryDate,
+        message: bidData.message || undefined,
+        coverLetter: bidData.coverLetter || undefined,
+        vehicleDetails: {
+          type: bidData.vehicleDetails.type,
+          capacity: parseFloat(bidData.vehicleDetails.capacity)
+        },
+        additionalServices: bidData.additionalServices || [],
+        pricingBreakdown: bidData.pricingBreakdown || {
+          baseFare: parseFloat(bidData.bidAmount),
+          totalAmount: parseFloat(bidData.bidAmount)
+        },
+        terms: bidData.terms || {
+          paymentMethod: 'cash',
+          paymentTiming: 'on_delivery'
+        }
+      };
+
+      console.log('Submitting bid payload:', payload);
+
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+
+      console.log('Bid response status:', response.status);
+
+      if (!response.ok) {
+        let errorMsg = 'Failed to place bid';
+        
+        try {
+          const errorData = await response.json();
+          console.error('Bid submission error details:', errorData);
+          
+          errorMsg = errorData.message || errorMsg;
+          
+          // Handle specific error cases
+          if (response.status === 400) {
+            if (errorData.errors && Array.isArray(errorData.errors)) {
+              // Validation errors - show first error
+              errorMsg = errorData.errors[0].msg || errorData.errors[0].message || errorMsg;
+            } else if (errorMsg.includes('already')) {
+              errorMsg = 'You already have a bid on this load.';
+            } else if (errorMsg.includes('validation')) {
+              errorMsg = 'Please check your bid details and try again.';
+            }
+          } else if (response.status === 403) {
+            errorMsg = 'Only drivers can place bids.';
+          } else if (response.status === 404) {
+            errorMsg = 'Load not found or no longer available.';
+          } else if (response.status === 429) {
+            errorMsg = 'Too many bid requests. Please wait and try again.';
+          }
+        } catch (parseError) {
+          console.error('Could not parse error response:', parseError);
+        }
+        
+        setError(errorMsg);
+        return { success: false, error: errorMsg };
+      }
+
+      const result = await response.json();
+      console.log('Bid submission successful:', result);
+
+      if (result.status === 'success') {
+        setSuccessMessage('Bid placed successfully! The cargo owner will be notified.');
+        
+        // Close bid form
+        setBidStates(prev => ({
+          ...prev,
+          [payload.load]: { showBidForm: false, submitting: false }
+        }));
+        
+        // Refresh loads to update bid count
+        await fetchLoads(currentPage);
+        return { success: true };
+      } else {
+        const errorMsg = result.message || 'Unexpected response from server';
+        setError(errorMsg);
+        return { success: false, error: errorMsg };
+      }
+
+    } catch (error) {
+      console.error('Bid submit network error:', error);
+      let errorMsg = 'Network error: Could not place bid.';
+      
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        errorMsg = 'Network connection failed. Please check your internet and try again.';
+      } else if (error.message.includes('timeout')) {
+        errorMsg = 'Request timed out. Please try again.';
+      }
+      
       setError(errorMsg);
       return { success: false, error: errorMsg };
     }
-  } catch (error) {
-    console.error('Bid submit error:', error);
-    const errorMsg = 'Network error: Could not place bid.';
-    setError(errorMsg);
-    return { success: false, error: errorMsg };
-  }
-};
-
+  };
 
   const retryFetch = async (retries = 3) => {
     for (let i = 0; i < retries; i++) {
@@ -935,19 +986,30 @@ const handleBidSubmit = async (bidData) => {
     }));
   };
 
+  // FIXED: Handle bid form submission with proper error handling
   const handleBidFormSubmit = async (loadId, bidData) => {
     setBidStates(prev => ({
       ...prev,
       [loadId]: { ...prev[loadId], submitting: true }
     }));
 
-    const result = await handleBidSubmit(bidData);
-    
-    if (!result.success) {
+    try {
+      const result = await handleBidSubmit(bidData);
+      
+      if (!result.success) {
+        setBidStates(prev => ({
+          ...prev,
+          [loadId]: { ...prev[loadId], submitting: false }
+        }));
+      }
+      // If successful, the bid form is closed in handleBidSubmit
+    } catch (error) {
+      console.error('Bid form submission error:', error);
       setBidStates(prev => ({
         ...prev,
         [loadId]: { ...prev[loadId], submitting: false }
       }));
+      setError('An error occurred while submitting your bid. Please try again.');
     }
   };
 
@@ -1630,7 +1692,17 @@ const handleBidSubmit = async (bidData) => {
               {isUserAuthenticated && selectedLoad.contactPerson && (
                 <div className="border-t pt-4">
                   <label className="block text-sm font-medium text-gray-700">Contact Person</label>
-                  <p className="text-gray-900">{selectedLoad.contactPerson}</p>
+                  <div className="text-gray-900">
+                    {typeof selectedLoad.contactPerson === 'object' ? (
+                      <div className="space-y-1">
+                        {selectedLoad.contactPerson.name && <p><strong>Name:</strong> {selectedLoad.contactPerson.name}</p>}
+                        {selectedLoad.contactPerson.phone && <p><strong>Phone:</strong> {selectedLoad.contactPerson.phone}</p>}
+                        {selectedLoad.contactPerson.email && <p><strong>Email:</strong> {selectedLoad.contactPerson.email}</p>}
+                      </div>
+                    ) : (
+                      <p>{selectedLoad.contactPerson}</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
