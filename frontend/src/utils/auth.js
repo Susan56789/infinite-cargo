@@ -419,6 +419,36 @@ class AuthManager {
     }
   }
 
+  async refreshToken(isAdmin = false) {
+  try {
+    // Define your refresh endpoint
+    const endpoint = isAdmin ? '/api/admin/refresh-token' : '/api/users/refresh-token';
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...this.getAuthHeader(isAdmin),
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to refresh token');
+    }
+
+    const data = await response.json();
+    const newToken = data.token;
+    const user = this.getUser(isAdmin);
+
+    // Save new token and reset timestamp
+    this.setAuth(newToken, user, (!isAdmin && localStorage.getItem(this.REMEMBER_KEY) === 'true'), isAdmin);
+    return newToken;
+  } catch (error) {
+    console.error('Error refreshing token:', error);
+    throw error;
+  }
+}
+
   clearAuth(isAdmin = false) {
     try {
       if (isAdmin) {

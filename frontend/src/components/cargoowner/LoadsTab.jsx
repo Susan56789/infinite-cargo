@@ -4,12 +4,12 @@ import {
   MapPin, ArrowRight, ChevronLeft, Calendar, Clock, 
   Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
   AlertCircle, CheckCircle, XCircle, MoreVertical,
-  Download, ChevronRight, Trash2, Edit2,MoreHorizontal, MenuIcon,MenuSquare
+  Download, ChevronRight, Trash2, Edit2, MoreHorizontal,
+  Play, Pause, Square, CheckCircle2, AlertTriangle
 } from 'lucide-react';
 
 import {getAuthHeader, logout, getUser} from '../../utils/auth'; 
 import LoadFormModal from './LoadFormModal';
-
 
 const LoadsTab = () => {
   // State management
@@ -38,6 +38,7 @@ const LoadsTab = () => {
   const [editingLoad, setEditingLoad] = useState(null);
   const [user, setUser] = useState(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState(null);
+  const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [loadForm, setLoadForm] = useState({
     title: '',
     description: '',
@@ -102,6 +103,70 @@ const LoadsTab = () => {
     });
   };
 
+  // Status configuration with icons and colors
+  const statusConfig = {
+    posted: {
+      label: 'Posted',
+      icon: <Package className="h-3 w-3" />,
+      color: 'bg-blue-100 text-blue-800',
+      nextStates: ['receiving_bids', 'not_available', 'cancelled']
+    },
+    receiving_bids: {
+      label: 'Receiving Bids',
+      icon: <Clock className="h-3 w-3" />,
+      color: 'bg-yellow-100 text-yellow-800',
+      nextStates: ['assigned', 'not_available', 'cancelled']
+    },
+    assigned: {
+      label: 'Assigned',
+      icon: <Truck className="h-3 w-3" />,
+      color: 'bg-purple-100 text-purple-800',
+      nextStates: ['in_transit', 'on_hold', 'cancelled']
+    },
+    driver_assigned: {
+      label: 'Driver Assigned',
+      icon: <Truck className="h-3 w-3" />,
+      color: 'bg-purple-100 text-purple-800',
+      nextStates: ['in_transit', 'on_hold', 'cancelled']
+    },
+    in_transit: {
+      label: 'In Transit',
+      icon: <ArrowRight className="h-3 w-3" />,
+      color: 'bg-orange-100 text-orange-800',
+      nextStates: ['delivered', 'on_hold']
+    },
+    on_hold: {
+      label: 'On Hold',
+      icon: <Pause className="h-3 w-3" />,
+      color: 'bg-gray-100 text-gray-800',
+      nextStates: ['in_transit', 'cancelled']
+    },
+    delivered: {
+      label: 'Delivered',
+      icon: <CheckCircle2 className="h-3 w-3" />,
+      color: 'bg-green-100 text-green-800',
+      nextStates: ['completed']
+    },
+    completed: {
+      label: 'Completed',
+      icon: <CheckCircle className="h-3 w-3" />,
+      color: 'bg-green-200 text-green-900',
+      nextStates: []
+    },
+    not_available: {
+      label: 'Not Available',
+      icon: <XCircle className="h-3 w-3" />,
+      color: 'bg-gray-100 text-gray-800',
+      nextStates: ['posted']
+    },
+    cancelled: {
+      label: 'Cancelled',
+      icon: <Ban className="h-3 w-3" />,
+      color: 'bg-red-100 text-red-800',
+      nextStates: []
+    }
+  };
+
   // Fetch subscription status
   const fetchSubscriptionStatus = useCallback(async () => {
     try {
@@ -122,7 +187,8 @@ const LoadsTab = () => {
   }, [API_BASE_URL]);
 
   const fetchUserProfile = () => {
-     
+    const user = getUser();
+    
     // Try multiple sources for the display name
     const sources = [
       user?.cargoOwnerProfile?.companyName,
@@ -137,140 +203,137 @@ const LoadsTab = () => {
 
     for (const name of sources) {
       if (name && typeof name === 'string' && name.trim().length > 0) {
-       
-       setUser({
+        setUser({
           displayName: name.trim(),
           ...user
         });
+        return;
       }
     }
 
-   
-    return 'Anonymous Cargo Owner';
+    setUser({ displayName: 'Anonymous Cargo Owner', ...user });
   };
 
   const fetchLoads = useCallback(
-  async (page = 1, customFilters = null) => {
-    try {
-      if (page === 1) {
-        setInitialLoading(true);
-      } else {
-        setLoading(true);
-      }
-      setError('');
-
-      const currentFilters = customFilters || filters;
-
-      const queryParams = new URLSearchParams();
-
-      queryParams.append('page', page.toString());
-      queryParams.append('limit', pagination.limit.toString());
-      queryParams.append('sortBy', sortConfig.key);
-      queryParams.append('sortOrder', sortConfig.direction);
-
-      if (currentFilters.search?.trim()) {
-        queryParams.append('search', currentFilters.search.trim());
-      }
-
-      if (currentFilters.status) {
-        queryParams.append('status', currentFilters.status);
-      }
-
-      if (
-        currentFilters.minBudget !== undefined &&
-        currentFilters.minBudget !== null &&
-        currentFilters.minBudget !== ''
-      ) {
-        queryParams.append('minBudget', String(currentFilters.minBudget));
-      }
-
-      if (
-        currentFilters.maxBudget !== undefined &&
-        currentFilters.maxBudget !== null &&
-        currentFilters.maxBudget !== ''
-      ) {
-        queryParams.append('maxBudget', String(currentFilters.maxBudget));
-      }
-
-      if (currentFilters.urgent === true) {
-        queryParams.append('urgentOnly', 'true');
-      }
-
-      const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
-      const headers = getAuthHeaders();
-
-      const response = await fetch(endpoint, { method: 'GET', headers });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          setError('Session expired. Please log in again.');
-          logout();
-          return;
+    async (page = 1, customFilters = null) => {
+      try {
+        if (page === 1) {
+          setInitialLoading(true);
+        } else {
+          setLoading(true);
         }
-        if (response.status === 403) {
-          setError('Access denied. Only cargo owners can view loads.');
-          return;
-        }
-        if (response.status === 500) {
-          setError('Server error. Please try again later.');
-          return;
+        setError('');
+
+        const currentFilters = customFilters || filters;
+
+        const queryParams = new URLSearchParams();
+
+        queryParams.append('page', page.toString());
+        queryParams.append('limit', pagination.limit.toString());
+        queryParams.append('sortBy', sortConfig.key);
+        queryParams.append('sortOrder', sortConfig.direction);
+
+        if (currentFilters.search?.trim()) {
+          queryParams.append('search', currentFilters.search.trim());
         }
 
-        // fall-through error text
-        const errorData = await response.json().catch(() => ({}));
-        const errMsg = errorData?.message || `HTTP ${response.status}`;
-        throw new Error(errMsg);
-      }
-
-      const data = await response.json();
-      if (data.status === 'success') {
-        const loadsData = data.data?.loads || [];
-        setLoads(loadsData);
-
-        if (data.data?.pagination) {
-          setPagination({
-            page: data.data.pagination.currentPage,
-            limit: data.data.pagination.limit || pagination.limit,
-            total: data.data.pagination.totalLoads,
-            totalPages: data.data.pagination.totalPages
-          });
+        if (currentFilters.status) {
+          queryParams.append('status', currentFilters.status);
         }
 
-        if (data.data?.summary) {
-          setSummary(data.data.summary);
+        if (
+          currentFilters.minBudget !== undefined &&
+          currentFilters.minBudget !== null &&
+          currentFilters.minBudget !== ''
+        ) {
+          queryParams.append('minBudget', String(currentFilters.minBudget));
         }
 
-        if (data.fallback) {
-          setError(
-            'Data loaded successfully, but some features may be limited due to server issues.'
-          );
+        if (
+          currentFilters.maxBudget !== undefined &&
+          currentFilters.maxBudget !== null &&
+          currentFilters.maxBudget !== ''
+        ) {
+          queryParams.append('maxBudget', String(currentFilters.maxBudget));
         }
-      } else {
-        throw new Error(data.message || 'Failed to fetch loads.');
+
+        if (currentFilters.urgent === true) {
+          queryParams.append('urgentOnly', 'true');
+        }
+
+        const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
+        const headers = getAuthHeaders();
+
+        const response = await fetch(endpoint, { method: 'GET', headers });
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            setError('Session expired. Please log in again.');
+            logout();
+            return;
+          }
+          if (response.status === 403) {
+            setError('Access denied. Only cargo owners can view loads.');
+            return;
+          }
+          if (response.status === 500) {
+            setError('Server error. Please try again later.');
+            return;
+          }
+
+          const errorData = await response.json().catch(() => ({}));
+          const errMsg = errorData?.message || `HTTP ${response.status}`;
+          throw new Error(errMsg);
+        }
+
+        const data = await response.json();
+        if (data.status === 'success') {
+          const loadsData = data.data?.loads || [];
+          setLoads(loadsData);
+
+          if (data.data?.pagination) {
+            setPagination({
+              page: data.data.pagination.currentPage,
+              limit: data.data.pagination.limit || pagination.limit,
+              total: data.data.pagination.totalLoads,
+              totalPages: data.data.pagination.totalPages
+            });
+          }
+
+          if (data.data?.summary) {
+            setSummary(data.data.summary);
+          }
+
+          if (data.fallback) {
+            setError(
+              'Data loaded successfully, but some features may be limited due to server issues.'
+            );
+          }
+        } else {
+          throw new Error(data.message || 'Failed to fetch loads.');
+        }
+      } catch (err) {
+        console.error('Error fetching loads:', err);
+
+        if (err.message.includes('Network') || err.name === 'TypeError') {
+          setError('Network error. Please check your connection and try again.');
+        } else if (
+          err.message.includes('Authentication') ||
+          err.message.includes('Session expired')
+        ) {
+          setError('Please log in to view your loads.');
+        } else {
+          setError(err.message || 'Failed to load data. Please try again.');
+        }
+
+        setLoads([]);
+      } finally {
+        setLoading(false);
+        setInitialLoading(false);
       }
-    } catch (err) {
-      console.error('Error fetching loads:', err);
-
-      if (err.message.includes('Network') || err.name === 'TypeError') {
-        setError('Network error. Please check your connection and try again.');
-      } else if (
-        err.message.includes('Authentication') ||
-        err.message.includes('Session expired')
-      ) {
-        setError('Please log in to view your loads.');
-      } else {
-        setError(err.message || 'Failed to load data. Please try again.');
-      }
-
-      setLoads([]);
-    } finally {
-      setLoading(false);
-      setInitialLoading(false);
-    }
-  },
-  [filters, sortConfig, pagination.limit, API_BASE_URL]
-);
-
+    },
+    [filters, sortConfig, pagination.limit, API_BASE_URL]
+  );
 
   // Create or update load
   const submitLoad = async (e, formDataWithOwner) => {
@@ -376,18 +439,18 @@ const LoadsTab = () => {
     try {
       setLoading(true);
       setError('');
+      setDropdownOpenId(null); // Close dropdown after selection
 
       const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({ 
           status: newStatus,
-          reason: reason || `Status changed to ${newStatus.replace('_', ' ')}`
+          reason: reason || `Status changed to ${statusConfig[newStatus]?.label || newStatus}`
         })
       });
 
       if (!response.ok) {
-        // Handle authentication errors
         if (response.status === 401 || response.status === 403) {
           setError('Session expired or not authorized. Please log in again.');
           logout();
@@ -419,6 +482,9 @@ const LoadsTab = () => {
             } : load
           )
         );
+
+        // Show success message
+        console.log(`Load status updated to ${statusConfig[newStatus]?.label || newStatus}`);
       } else {
         throw new Error(data.message || 'Failed to update load status');
       }
@@ -505,33 +571,33 @@ const LoadsTab = () => {
     return () => clearTimeout(timeoutId);
   }, [filters, sortConfig]);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('.dropdown-container')) {
+        setDropdownOpenId(null);
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
   // Utility functions
   const getStatusColor = (status) => {
-    const colors = {
-      posted: 'bg-blue-100 text-blue-800',
-      receiving_bids: 'bg-yellow-100 text-yellow-800',
-      driver_assigned: 'bg-purple-100 text-purple-800',
-      assigned: 'bg-purple-100 text-purple-800',
-      in_transit: 'bg-orange-100 text-orange-800',
-      delivered: 'bg-green-100 text-green-800',
-      not_available: 'bg-gray-100 text-gray-800',
-      cancelled: 'bg-red-100 text-red-800'
-    };
-    return colors[status] || 'bg-gray-100 text-gray-800';
+    return statusConfig[status]?.color || 'bg-gray-100 text-gray-800';
   };
 
   const getStatusIcon = (status) => {
-    const icons = {
-      posted: <Package className="h-3 w-3" />,
-      receiving_bids: <Clock className="h-3 w-3" />,
-      driver_assigned: <Truck className="h-3 w-3" />,
-      assigned: <Truck className="h-3 w-3" />,
-      in_transit: <ArrowRight className="h-3 w-3" />,
-      delivered: <CheckCircle className="h-3 w-3" />,
-      not_available: <XCircle className="h-3 w-3" />,
-      cancelled: <Ban className="h-3 w-3" />
-    };
-    return icons[status] || <Package className="h-3 w-3" />;
+    return statusConfig[status]?.icon || <Package className="h-3 w-3" />;
+  };
+
+  const getStatusLabel = (status) => {
+    return statusConfig[status]?.label || status?.replace('_', ' ').toUpperCase();
+  };
+
+  const getAvailableStatusTransitions = (currentStatus) => {
+    return statusConfig[currentStatus]?.nextStates || [];
   };
 
   const formatCurrency = (amount) => {
@@ -563,11 +629,12 @@ const LoadsTab = () => {
   };
 
   const canDeleteLoad = (load) => {
-    return ['posted', 'receiving_bids'].includes(load.status);
+    return ['posted', 'receiving_bids', 'not_available'].includes(load.status);
   };
 
   const canChangeStatus = (load) => {
-    return load.status !== 'delivered';
+    const availableTransitions = getAvailableStatusTransitions(load.status);
+    return availableTransitions.length > 0;
   };
 
   // Event handlers
@@ -581,7 +648,7 @@ const LoadsTab = () => {
   const handlePostLoadClick = () => {
     // Check subscription limits
     if (subscriptionStatus && subscriptionStatus.usage) {
-      const { maxLoads,remainingLoads } = subscriptionStatus.usage;
+      const { maxLoads, remainingLoads } = subscriptionStatus.usage;
       
       if (maxLoads !== -1 && remainingLoads <= 0) {
         setError(`You've reached your monthly limit of ${maxLoads} loads. Upgrade your plan to post more loads.`);
@@ -596,7 +663,7 @@ const LoadsTab = () => {
 
   const handleEditLoad = (load) => {
     if (!canEditLoad(load)) {
-      setError(`Cannot edit load with status: ${load.status.replace('_', ' ')}`);
+      setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
       return;
     }
 
@@ -648,7 +715,7 @@ const LoadsTab = () => {
             load.deliveryLocation?.address || load.deliveryLocation,
             load.weight,
             load.budget,
-            load.status,
+            getStatusLabel(load.status),
             formatDate(load.createdAt)
           ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
         ].join('\n');
@@ -669,12 +736,6 @@ const LoadsTab = () => {
           updateLoadStatus(loadId, 'cancelled', 'Bulk cancellation')
         );
         await Promise.all(promises);
-        
-        setLoads(prevLoads => 
-          prevLoads.map(load =>
-            selectedLoads.has(load._id) ? { ...load, status: 'cancelled', isActive: false } : load
-          )
-        );
       }
       
       setSelectedLoads(new Set());
@@ -712,21 +773,10 @@ const LoadsTab = () => {
   const handleViewDetails = (loadId) => {
     console.log('Navigate to load details:', loadId);
     // TODO: Implement navigation to load details page
-    // This would typically be: navigate(`/loads/${loadId}`) or similar
   };
 
   const handleUpdateLoadStatus = async (loadId, newStatus) => {
-    const statusLabels = {
-      posted: 'Posted',
-      receiving_bids: 'Receiving Bids',
-      assigned: 'Assigned',
-      in_transit: 'In Transit',
-      delivered: 'Delivered',
-      cancelled: 'Cancelled',
-      on_hold: 'On Hold'
-    };
-
-    const confirmMessage = `Are you sure you want to change the status to "${statusLabels[newStatus] || newStatus}"?`;
+    const confirmMessage = `Are you sure you want to change the status to "${getStatusLabel(newStatus)}"?`;
     
     if (window.confirm(confirmMessage)) {
       await updateLoadStatus(loadId, newStatus);
@@ -756,6 +806,54 @@ const LoadsTab = () => {
       deliveryDate: '',
       urgent: false
     });
+  };
+
+  // Status dropdown component
+  const StatusDropdown = ({ load }) => {
+    const availableTransitions = getAvailableStatusTransitions(load.status);
+    const isOpen = dropdownOpenId === load._id;
+
+    if (availableTransitions.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="relative dropdown-container">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setDropdownOpenId(isOpen ? null : load._id);
+          }}
+          className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+          disabled={loading}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+        
+        {isOpen && (
+          <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+            <div className="py-1">
+              <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                Change Status To
+              </div>
+              {availableTransitions.map((status) => (
+                <button
+                  key={status}
+                  onClick={() => handleUpdateLoadStatus(load._id, status)}
+                  className="flex items-center w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                  disabled={loading}
+                >
+                  <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)}`}>
+                    {getStatusIcon(status)}
+                    {getStatusLabel(status)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -907,7 +1005,10 @@ const LoadsTab = () => {
             <option value="driver_assigned">Driver Assigned</option>
             <option value="assigned">Assigned</option>
             <option value="in_transit">In Transit</option>
+            <option value="on_hold">On Hold</option>
             <option value="delivered">Delivered</option>
+            <option value="completed">Completed</option>
+            <option value="not_available">Not Available</option>
             <option value="cancelled">Cancelled</option>
           </select>
 
@@ -1197,7 +1298,7 @@ const LoadsTab = () => {
                         <div className="space-y-1">
                           <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
                             {getStatusIcon(load.status)}
-                            {load.status?.replace('_', ' ').toUpperCase()}
+                            {getStatusLabel(load.status)}
                           </span>
                           {load.assignedDriver && (
                             <div className="text-xs text-gray-500">
@@ -1228,6 +1329,7 @@ const LoadsTab = () => {
                           <button
                             onClick={() => handleViewDetails(load._id)}
                             className="text-blue-600 hover:text-blue-700"
+                            title="View Details"
                           >
                             <Eye className="h-4 w-4" />
                           </button>
@@ -1235,6 +1337,7 @@ const LoadsTab = () => {
                             <button
                               onClick={() => handleEditLoad(load)}
                               className="text-yellow-600 hover:text-yellow-700"
+                              title="Edit Load"
                             >
                               <Edit2 className="h-4 w-4" />
                             </button>
@@ -1243,29 +1346,12 @@ const LoadsTab = () => {
                             <button
                               onClick={() => handleDeleteLoad(load._id)}
                               className="text-red-600 hover:text-red-700"
+                              title="Delete Load"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
                           )}
-                          {canChangeStatus(load) && (
-                            <MenuIcon>
-                             <MenuIcon asChild>
-                                <button className="text-gray-600 hover:text-gray-800">
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </button>
-                              </MenuIcon>
-                              <MenuSquare align="end">
-                                {['posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled'].map(status => (
-                                  <MenuIcon
-                                    key={status}
-                                    onClick={() => handleUpdateLoadStatus(load._id, status)}
-                                  >
-                                    Change to {status.replace('_', ' ').toUpperCase()}
-                                  </MenuIcon>
-                                ))}
-                              </MenuSquare>
-                            </MenuIcon>
-                          )}
+                          <StatusDropdown load={load} />
                         </div>
                       </td>
                     </tr>
@@ -1273,7 +1359,8 @@ const LoadsTab = () => {
                 </tbody>
               </table>
             </div>
-           {/* Mobile Card View */}
+
+            {/* Mobile Card View */}
             <div className="lg:hidden">
               <div className="space-y-4 p-4">
                 {loads.map((load) => (
@@ -1333,7 +1420,7 @@ const LoadsTab = () => {
                       <div className="flex flex-col items-end space-y-2">
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
                           {getStatusIcon(load.status)}
-                          {load.status?.replace('_', ' ').toUpperCase()}
+                          {getStatusLabel(load.status)}
                         </span>
                         <div className="text-sm font-medium text-gray-900">
                           {formatCurrency(load.budget)}
@@ -1373,25 +1460,7 @@ const LoadsTab = () => {
                             <Trash2 className="h-4 w-4" />
                           </button>
                         )}
-                        {canChangeStatus(load) && (
-                          <MenuIcon>
-                            <MenuIcon asChild>
-                              <button className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded-lg transition-colors">
-                                <MoreVertical className="h-4 w-4" />
-                              </button>
-                            </MenuIcon>
-                            <MenuSquare align="end">
-                              {['posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled'].map(status => (
-                                <MenuIcon
-                                  key={status}
-                                  onClick={() => handleUpdateLoadStatus(load._id, status)}
-                                >
-                                  Change to {status.replace('_', ' ').toUpperCase()}
-                                </MenuIcon>
-                              ))}
-                            </MenuSquare>
-                          </MenuIcon>
-                        )}
+                        <StatusDropdown load={load} />
                       </div>
                     </div>
                   </div>
@@ -1436,22 +1505,23 @@ const LoadsTab = () => {
                   disabled={pagination.page <= 1 || loading}
                   className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  <ChevronLeft className="h-5 w-5" />
+                  <span className="sr-only">Previous</span>
+                  <ChevronLeft className="h-5 w-5" aria-hidden="true" />
                 </button>
                 
-                {/* Page Numbers */}
-                {[...Array(Math.min(5, pagination.totalPages))].map((_, index) => {
+                {/* Page numbers */}
+                {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
                   let pageNum;
                   if (pagination.totalPages <= 5) {
-                    pageNum = index + 1;
+                    pageNum = i + 1;
                   } else if (pagination.page <= 3) {
-                    pageNum = index + 1;
+                    pageNum = i + 1;
                   } else if (pagination.page >= pagination.totalPages - 2) {
-                    pageNum = pagination.totalPages - 4 + index;
+                    pageNum = pagination.totalPages - 4 + i;
                   } else {
-                    pageNum = pagination.page - 2 + index;
+                    pageNum = pagination.page - 2 + i;
                   }
-
+                  
                   return (
                     <button
                       key={pageNum}
@@ -1473,7 +1543,8 @@ const LoadsTab = () => {
                   disabled={pagination.page >= pagination.totalPages || loading}
                   className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  <ChevronRight className="h-5 w-5" />
+                  <span className="sr-only">Next</span>
+                  <ChevronRight className="h-5 w-5" aria-hidden="true" />
                 </button>
               </nav>
             </div>
@@ -1482,20 +1553,22 @@ const LoadsTab = () => {
       )}
 
       {/* Load Form Modal */}
-      <LoadFormModal
-       showLoadForm={showLoadForm}
-  editingLoad={editingLoad}
-  loadForm={loadForm}
-  setLoadForm={setLoadForm}
-  loading={loading}
-  onSubmit={submitLoad}
-  onClose={handleCloseModal}
-  resetForm={resetForm}
-  user={getUser()}  
-      />
+      {showLoadForm && (
+        <LoadFormModal
+          isOpen={showLoadForm}
+          onClose={handleCloseModal}
+          onSubmit={submitLoad}
+          formData={loadForm}
+          setFormData={setLoadForm}
+          loading={loading}
+          editing={!!editingLoad}
+          error={error}
+          user={user}
+          subscriptionStatus={subscriptionStatus}
+        />
+      )}
     </div>
   );
 };
 
-export default LoadsTab; 
-
+export default LoadsTab;
