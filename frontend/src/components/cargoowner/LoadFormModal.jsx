@@ -1,5 +1,6 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { getUser } from '../../utils/auth'; 
 
 const LoadFormModal = ({
   showLoadForm,
@@ -14,32 +15,7 @@ const LoadFormModal = ({
 }) => {
   if (!showLoadForm) return null;
 
-  // Enhanced function to get display name
-  const getDisplayName = () => {
-    
-    
-    // Try multiple sources for the display name
-    const sources = [
-      user?.cargoOwnerProfile?.companyName,
-      user?.companyName,
-      user?.profile?.companyName,
-      user?.businessProfile?.companyName,
-      user?.name,
-      user?.fullName,
-      user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : null,
-      user?.email?.split('@')[0]
-    ];
-
-    for (const name of sources) {
-      if (name && typeof name === 'string' && name.trim().length > 0) {
-      
-        return name.trim();
-      }
-    }
-
-   
-    return 'Anonymous Cargo Owner';
-  };
+  
 
   // Enhanced form submission handler
   const handleSubmit = (e) => {
@@ -86,7 +62,7 @@ const LoadFormModal = ({
     onSubmit(e, formDataWithOwner);
   };
 
-  const displayName = getDisplayName();
+  const displayName = getUser() ? getUser().name || 'Cargo Owner' : 'Guest User';
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50">

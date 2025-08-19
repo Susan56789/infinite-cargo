@@ -640,40 +640,64 @@ router.post('/', auth, [
       });
     }
 
-    // Get the user with comprehensive error handling
-    const User = require('../models/user');
+    // FIXED: Get the user from the correct collection based on userType
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
     let user;
     
     try {
-      // Try multiple ID formats that might be in req.user
+      // Get user ID from various possible sources
       const userId = req.user.id || req.user._id || req.user.userId;
+      console.log('Looking for user with ID:', userId, 'Type:', req.user.userType);
       
-      user = await User.findById(userId).lean();
+      // Convert to ObjectId if it's a string
+      const userObjectId = mongoose.Types.ObjectId.isValid(userId) 
+        ? new mongoose.Types.ObjectId(userId) 
+        : userId;
+
+      // CRITICAL FIX: Search in the correct collection based on userType
+      if (req.user.userType === 'cargo_owner') {
+        user = await db.collection('cargo-owners').findOne({ _id: userObjectId });
+      } else if (req.user.userType === 'driver') {
+        user = await db.collection('drivers').findOne({ _id: userObjectId });
+      }
       
-      if (!user) {
+      // If not found by ID, try by email as fallback
+      if (!user && req.user.email) {
+        console.log('User not found by ID, trying email:', req.user.email);
         
-        // Try finding by email if available in req.user
-        if (req.user.email) {
-          user = await User.findOne({ email: req.user.email }).lean();
-          
-        }
-        
-        if (!user) {
-          
-          // Check if user exists at all
-          const userCount = await User.countDocuments();
-         
-          return res.status(404).json({
-            status: 'error',
-            message: 'User not found in database',
-            debug: process.env.NODE_ENV === 'development' ? {
-              searchedId: userId,
-              userKeys: Object.keys(req.user),
-              totalUsers: userCount
-            } : undefined
-          });
+        if (req.user.userType === 'cargo_owner') {
+          user = await db.collection('cargo-owners').findOne({ email: req.user.email });
+        } else if (req.user.userType === 'driver') {
+          user = await db.collection('drivers').findOne({ email: req.user.email });
         }
       }
+      
+      if (!user) {
+        console.error('User not found in database:', {
+          searchedId: userId,
+          userType: req.user.userType,
+          email: req.user.email,
+          userKeys: Object.keys(req.user)
+        });
+        
+        return res.status(404).json({
+          status: 'error',
+          message: 'User not found in database. Please log out and log back in.',
+          debug: process.env.NODE_ENV === 'development' ? {
+            searchedId: userId,
+            userType: req.user.userType,
+            userKeys: Object.keys(req.user)
+          } : undefined
+        });
+      }
+
+      console.log('User found successfully:', { 
+        id: user._id, 
+        email: user.email, 
+        name: user.name,
+        userType: req.user.userType 
+      });
 
     } catch (dbError) {
       console.error('Database error finding user:', dbError);
@@ -703,9 +727,8 @@ router.post('/', auth, [
       });
     }
 
-    
+    // IMPROVED: Enhanced cargo owner name extraction
     const getCargoOwnerName = (userData) => {
-      
       // Define all possible name sources in order of preference
       const nameSources = [
         // From request body (if explicitly provided)
@@ -733,8 +756,7 @@ router.post('/', auth, [
             typeof nameOption === 'string' && 
             nameOption.trim().length > 0 && 
             nameOption.trim().toLowerCase() !== 'anonymous') {
-          const cleanName = nameOption.trim();
-          return cleanName;
+          return nameOption.trim();
         }
       }
       return 'Anonymous Cargo Owner';
@@ -783,6 +805,7 @@ router.post('/', auth, [
       // Contact and user information - Use the actual found user ID
       contactPerson: contactPerson,
       postedBy: user._id, // Use the actual user _id from database
+      cargoOwnerId: user._id, // ADDED: Explicit cargo owner ID field
       
       // Metadata for tracking and analytics
       createdBy: {
@@ -793,7 +816,7 @@ router.post('/', auth, [
       },
       
       // Status and lifecycle
-      status: 'posted',
+      status: 'available', 
       isActive: true,
       
       // Additional business fields
@@ -829,53 +852,73 @@ router.post('/', auth, [
       }
     }
 
+    console.log('Creating load with data:', {
+      cargoOwnerId: loadData.cargoOwnerId,
+      cargoOwnerName: loadData.cargoOwnerName,
+      title: loadData.title,
+      status: loadData.status
+    });
 
-    // Create and save the load
-    const Load = require('../models/load');
-    const load = new Load(loadData);
-    
+    // Create and save the load using direct database insertion for consistency
     try {
-      await load.save();
-      console.log('Load saved successfully with ID:', load._id);
+      const loadsCollection = db.collection('loads');
+      const result = await loadsCollection.insertOne(loadData);
+      
+      if (!result.insertedId) {
+        throw new Error('Failed to insert load into database');
+      }
+
+      console.log('Load saved successfully with ID:', result.insertedId);
+      
+      // Retrieve the created load
+      const createdLoad = await loadsCollection.findOne({ _id: result.insertedId });
+      
+      // Ensure cargo owner name is in the response
+      const responseLoad = {
+        ...createdLoad,
+        cargoOwnerName: cargoOwnerName,
+        postedByName: cargoOwnerName,
+        bidCount: 0,
+        statusHistory: [{
+          status: 'available',
+          changedBy: user._id,
+          changedAt: new Date(),
+          reason: 'Load created',
+          userRole: req.user.userType
+        }],
+        // Add populated user data for response
+        postedByDetails: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          location: user.location,
+          isVerified: user.isVerified || false,
+          rating: user.cargoOwnerProfile?.rating || 0
+        }
+      };
+
+      console.log('=== LOAD CREATED SUCCESSFULLY ===');
+      console.log('Response load:', {
+        id: responseLoad._id,
+        cargoOwnerId: responseLoad.cargoOwnerId,
+        cargoOwnerName: responseLoad.cargoOwnerName,
+        title: responseLoad.title,
+        status: responseLoad.status
+      });
+
+      return res.status(201).json({
+        status: 'success',
+        message: 'Load created successfully',
+        data: {
+          load: responseLoad
+        }
+      });
+
     } catch (saveError) {
-      console.error('Error saving load:', saveError)
+      console.error('Error saving load:', saveError);
       throw saveError;
     }
-
-    // Populate the created load for response
-    const populatedLoad = await Load.findById(load._id)
-      .populate('postedBy', 'name email phone location isVerified rating')
-      .lean();
-
-    // Ensure cargo owner name is in the response
-    const responseLoad = {
-      ...populatedLoad,
-      cargoOwnerName: cargoOwnerName,
-      postedByName: cargoOwnerName,
-      bidCount: 0,
-      statusHistory: [{
-        status: 'posted',
-        changedBy: user._id, // Use actual user ID
-        changedAt: new Date(),
-        reason: 'Load created',
-        userRole: req.user.userType
-      }]
-    };
-
-    console.log('=== LOAD CREATED SUCCESSFULLY ===');
-    console.log('Response load:', {
-      id: responseLoad._id,
-      cargoOwnerName: responseLoad.cargoOwnerName,
-      title: responseLoad.title
-    });
-
-    return res.status(201).json({
-      status: 'success',
-      message: 'Load created successfully',
-      data: {
-        load: responseLoad
-      }
-    });
 
   } catch (error) {
     console.error('=== CREATE LOAD ERROR ===');
