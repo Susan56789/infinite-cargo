@@ -452,12 +452,22 @@ router.get('/user/my-loads', auth, [
 // @route   GET /api/loads/subscription-status
 // @desc    Get current user's subscription status
 // @access  Private
-router.get('/subscription-status',  auth, async (req, res) => {
+router.get('/subscription-status', auth, async (req, res) => {
   try {
+    console.log('Subscription status request for user:', req.user?.id);
+
+    // Check authentication
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Unauthorized - no valid user session'
+      });
+    }
+
     // Get user with subscription details
     const User = require('../models/user');
     const user = await User.findById(req.user.id)
-      .select('subscriptionPlan subscriptionStatus subscriptionFeatures billing')
+      .select('subscriptionPlan subscriptionStatus subscriptionFeatures billing name email')
       .lean();
 
     if (!user) {
@@ -467,16 +477,24 @@ router.get('/subscription-status',  auth, async (req, res) => {
       });
     }
 
+    console.log('Found user:', { id: user._id, plan: user.subscriptionPlan, status: user.subscriptionStatus });
+
     // Get current month's load count for usage calculation
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     
-    const loadsThisMonth = await Load.countDocuments({
-      postedBy: req.user.id,
-      createdAt: { $gte: startOfMonth }
-    });
+    let loadsThisMonth = 0;
+    try {
+      loadsThisMonth = await Load.countDocuments({
+        postedBy: req.user.id,
+        createdAt: { $gte: startOfMonth }
+      });
+    } catch (loadCountError) {
+      console.warn('Error counting loads:', loadCountError);
+      // Continue with 0 count
+    }
 
-    // Define subscription plans 
+    // Define subscription plans with fallbacks
     const subscriptionPlans = {
       basic: {
         name: 'Basic Plan',
@@ -495,12 +513,18 @@ router.get('/subscription-status',  auth, async (req, res) => {
         maxLoads: 100, 
         features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
         price: 2499
+      },
+      unlimited: {
+        name: 'Unlimited Plan',
+        maxLoads: -1,
+        features: ['Premium support', 'Unlimited loads', 'Custom integrations'],
+        price: 4999
       }
     };
 
     const currentPlan = user.subscriptionPlan || 'basic';
-    const planDetails = subscriptionPlans[currentPlan];
-    const isActive = user.subscriptionStatus === 'active';
+    const planDetails = subscriptionPlans[currentPlan] || subscriptionPlans.basic;
+    const isActive = user.subscriptionStatus === 'active' || currentPlan === 'basic';
     
     const maxLoads = planDetails.maxLoads;
     const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - loadsThisMonth);
@@ -508,7 +532,7 @@ router.get('/subscription-status',  auth, async (req, res) => {
     const subscriptionData = {
       plan: currentPlan,
       planName: planDetails.name,
-      status: user.subscriptionStatus || 'inactive',
+      status: user.subscriptionStatus || (currentPlan === 'basic' ? 'active' : 'inactive'),
       isActive,
       features: {
         maxLoads,
@@ -528,13 +552,14 @@ router.get('/subscription-status',  auth, async (req, res) => {
         currency: 'KES',
         interval: 'monthly'
       },
-      // Add any additional subscription features
       limits: {
         canCreateLoads: maxLoads === -1 || loadsThisMonth < maxLoads,
         canAccessAnalytics: true,
         canContactSupport: true
       }
     };
+
+    console.log('Returning subscription data:', subscriptionData);
 
     res.json({
       status: 'success',
@@ -761,8 +786,10 @@ router.post('/', auth, [
   ]).withMessage('Invalid vehicle type')
 ], async (req, res) => {
   try {
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Validation errors:', errors.array());
       return res.status(400).json({
         status: 'error',
         message: 'Validation failed',
@@ -770,22 +797,65 @@ router.post('/', auth, [
       });
     }
 
+    // Enhanced user authentication and authorization check
+    if (!req.user || !req.user.id) {
+      console.error('No user found in request object');
+      return res.status(401).json({
+        status: 'error',
+        message: 'Authentication required - no user found'
+      });
+    }
+
     // Check user authorization
     if (req.user.userType !== 'cargo_owner') {
+      console.error('User type check failed:', req.user.userType);
       return res.status(403).json({
         status: 'error',
         message: 'Only cargo owners can create loads'
       });
     }
 
-    // Get the user with full profile information
+    // Get the user with comprehensive error handling
     const User = require('../models/user');
-    const user = await User.findById(req.user.id).lean();
+    let user;
+    
+    try {
+      // Try multiple ID formats that might be in req.user
+      const userId = req.user.id || req.user._id || req.user.userId;
+      
+      user = await User.findById(userId).lean();
+      
+      if (!user) {
+        
+        // Try finding by email if available in req.user
+        if (req.user.email) {
+          user = await User.findOne({ email: req.user.email }).lean();
+          
+        }
+        
+        if (!user) {
+          
+          // Check if user exists at all
+          const userCount = await User.countDocuments();
+         
+          return res.status(404).json({
+            status: 'error',
+            message: 'User not found in database',
+            debug: process.env.NODE_ENV === 'development' ? {
+              searchedId: userId,
+              userKeys: Object.keys(req.user),
+              totalUsers: userCount
+            } : undefined
+          });
+        }
+      }
 
-    if (!user) {
-      return res.status(404).json({
+    } catch (dbError) {
+      console.error('Database error finding user:', dbError);
+      return res.status(500).json({
         status: 'error',
-        message: 'User not found'
+        message: 'Database error while finding user',
+        error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
       });
     }
 
@@ -808,16 +878,9 @@ router.post('/', auth, [
       });
     }
 
-    // Enhanced cargo owner name extraction with proper fallback chain
+    
     const getCargoOwnerName = (userData) => {
-      console.log('User data for name extraction:', {
-        id: userData._id,
-        name: userData.name,
-        companyName: userData.companyName,
-        cargoOwnerProfile: userData.cargoOwnerProfile,
-        email: userData.email
-      });
-
+      
       // Define all possible name sources in order of preference
       const nameSources = [
         // From request body (if explicitly provided)
@@ -846,12 +909,9 @@ router.post('/', auth, [
             nameOption.trim().length > 0 && 
             nameOption.trim().toLowerCase() !== 'anonymous') {
           const cleanName = nameOption.trim();
-          console.log('Selected cargo owner name:', cleanName);
           return cleanName;
         }
       }
-
-      console.log('Falling back to Anonymous Cargo Owner');
       return 'Anonymous Cargo Owner';
     };
 
@@ -895,13 +955,13 @@ router.post('/', auth, [
       cargoOwnerName: cargoOwnerName,
       postedByName: cargoOwnerName,
       
-      // Contact and user information
+      // Contact and user information - Use the actual found user ID
       contactPerson: contactPerson,
-      postedBy: req.user.id,
+      postedBy: user._id, // Use the actual user _id from database
       
       // Metadata for tracking and analytics
       createdBy: {
-        userId: req.user.id,
+        userId: user._id, // Use the actual user _id
         userType: req.user.userType,
         name: cargoOwnerName,
         timestamp: new Date()
@@ -944,17 +1004,18 @@ router.post('/', auth, [
       }
     }
 
-    console.log('Creating load with data:', {
-      cargoOwnerName: loadData.cargoOwnerName,
-      postedByName: loadData.postedByName,
-      postedBy: loadData.postedBy,
-      contactPerson: loadData.contactPerson,
-      title: loadData.title
-    });
 
     // Create and save the load
+    const Load = require('../models/load');
     const load = new Load(loadData);
-    await load.save();
+    
+    try {
+      await load.save();
+      console.log('Load saved successfully with ID:', load._id);
+    } catch (saveError) {
+      console.error('Error saving load:', saveError)
+      throw saveError;
+    }
 
     // Populate the created load for response
     const populatedLoad = await Load.findById(load._id)
@@ -969,14 +1030,15 @@ router.post('/', auth, [
       bidCount: 0,
       statusHistory: [{
         status: 'posted',
-        changedBy: req.user.id,
+        changedBy: user._id, // Use actual user ID
         changedAt: new Date(),
         reason: 'Load created',
         userRole: req.user.userType
       }]
     };
 
-    console.log('Load created successfully:', {
+    console.log('=== LOAD CREATED SUCCESSFULLY ===');
+    console.log('Response load:', {
       id: responseLoad._id,
       cargoOwnerName: responseLoad.cargoOwnerName,
       title: responseLoad.title
@@ -991,7 +1053,9 @@ router.post('/', auth, [
     });
 
   } catch (error) {
-    console.error('Create load error:', error);
+    console.error('=== CREATE LOAD ERROR ===');
+    console.error('Error details:', error);
+    console.error('Error stack:', error.stack);
     
     // Handle specific error types
     if (error.name === 'ValidationError') {

@@ -309,13 +309,22 @@ try {
     }
   };
 
-  const handleCreateLoad = async (e, formDataWithOwner = null) => {
+const handleCreateLoad = async (e, formDataWithOwner = null) => {
   e.preventDefault();
 
-  // Use the enhanced form data if provided, otherwise use the current form state
   const currentLoadForm = formDataWithOwner || loadForm;
 
   try {
+    // Debug: Log current auth state
+    console.log('=== AUTH DEBUG INFO ===');
+    const authHeaders = getAuthHeaders();
+    console.log('Auth headers:', authHeaders);
+    
+    // Check if we have a valid token
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    console.log('Token exists:', !!token);
+    console.log('Token preview:', token ? `${token.substring(0, 20)}...` : 'No token');
+
     // Basic validation
     if (!currentLoadForm.title || currentLoadForm.title.trim().length < 5) {
       setError('Title must be at least 5 characters long');
@@ -444,20 +453,6 @@ try {
       postedByName: cargoOwnerName,
       contactPerson: contactPerson,
       
-      // User reference
-      postedBy: user?.id || user?._id,
-      
-      // Metadata for tracking
-      createdBy: {
-        userId: user?.id || user?._id,
-        userType: 'cargo_owner',
-        name: cargoOwnerName
-      },
-      
-      // Status and lifecycle
-      status: 'posted',
-      isActive: true,
-      
       // Payment terms
       paymentTerms: currentLoadForm.paymentTerms || 'on_delivery',
       insuranceRequired: Boolean(currentLoadForm.insuranceRequired),
@@ -467,6 +462,8 @@ try {
       updatedAt: new Date().toISOString()
     };
 
+    console.log('=== PAYLOAD READY ===');
+    console.log('Final payload:', payload);
 
     setLoading(true);
     setError('');
@@ -477,20 +474,48 @@ try {
       ? `${API_BASE_URL}/loads/${editingLoad}`
       : `${API_BASE_URL}/loads`;
 
+    console.log('=== MAKING REQUEST ===');
+    console.log('Method:', method);
+    console.log('URL:', url);
+    console.log('Headers:', authHeaders);
+
     const response = await fetch(url, {
       method,
-      headers: getAuthHeaders(),
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
 
+    console.log('=== RESPONSE RECEIVED ===');
+    console.log('Response status:', response.status);
+    console.log('Response statusText:', response.statusText);
+    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
     // Handle authentication errors
     if (response.status === 401) {
-      console.error('Authentication failed');
+      console.error('Authentication failed - 401 response');
       handleLogout();
+      setError('Authentication failed. Please log in again.');
       return;
     }
 
-    const data = await response.json();
+    // Parse response
+    let data;
+    try {
+      const responseText = await response.text();
+      console.log('Raw response text:', responseText);
+      
+      if (responseText) {
+        data = JSON.parse(responseText);
+      } else {
+        data = {};
+      }
+    } catch (parseError) {
+      console.error('Failed to parse response JSON:', parseError);
+      setError('Invalid response from server. Please try again.');
+      return;
+    }
+
+    console.log('Parsed response data:', data);
 
     if (response.ok) {
       const actionText = editingLoad ? 'updated' : 'created';
@@ -507,10 +532,13 @@ try {
       // Trigger auth state change event
       window.dispatchEvent(new Event('authStateChanged'));
       
-
     } else {
-      // Handle specific error cases
+      // Handle specific error cases with enhanced debugging
       let errorMessage = 'An unexpected error occurred';
+      
+      console.log('=== ERROR RESPONSE ANALYSIS ===');
+      console.log('Status:', response.status);
+      console.log('Data:', data);
       
       if (response.status === 400) {
         if (data.errors && Array.isArray(data.errors)) {
@@ -523,7 +551,15 @@ try {
       } else if (response.status === 403) {
         errorMessage = 'Access denied. You may not have permission to perform this action.';
       } else if (response.status === 404) {
-        errorMessage = editingLoad ? 'Load not found. It may have been deleted.' : 'Service not found.';
+        // Enhanced 404 handling
+        if (data.message && data.message.includes('User not found')) {
+          errorMessage = 'User authentication issue. Please log out and log back in.';
+          console.error('User not found in database. Auth token may be stale.');
+          // Optionally force logout
+          // handleLogout();
+        } else {
+          errorMessage = editingLoad ? 'Load not found. It may have been deleted.' : 'Service not found.';
+        }
       } else if (response.status === 409) {
         errorMessage = 'A conflict occurred. The load may have been modified by another user.';
       } else if (response.status === 422) {
@@ -543,16 +579,22 @@ try {
       }
       
       setError(errorMessage);
-      console.error('Load submission error:', {
+      console.error('=== LOAD SUBMISSION ERROR ===');
+      console.error('Final error details:', {
         status: response.status,
         statusText: response.statusText,
         data,
-        payload
+        payload,
+        errorMessage
       });
     }
 
   } catch (error) {
+    console.error('=== CATCH BLOCK ERROR ===');
     console.error('Error in handleCreateLoad:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
     
     // Handle network errors
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
@@ -895,7 +937,7 @@ const getSubscriptionStatus = (subscription) => {
 
   // Check for active premium plans
   if (subscription.status?.toLowerCase() === 'active' && subscription.planId !== 'basic') {
-    return { status: `${subscription.planName || 'Premium'} (Active)`, color: 'text-green-600', icon: CheckCircle2 };
+    return { status: `${subscription.planName || 'Premium'}`, color: 'text-green-600', icon: CheckCircle2 };
   }
 
   // Check for pending status

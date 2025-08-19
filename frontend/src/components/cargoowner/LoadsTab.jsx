@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Search, RefreshCw, Package, Plus, Eye, Edit, Ban, 
-  MapPin, ArrowRight, DollarSign, Calendar, Clock, 
+  MapPin, ArrowRight, ChevronLeft, Calendar, Clock, 
   Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
   AlertCircle, CheckCircle, XCircle
 } from 'lucide-react';
 
-import { getAuthHeader, authManager } from '../../utils/auth'; 
+import { getAuthHeader, authManager } from '../../utils/auth';
+import LoadFormModal from './LoadFormModal'; 
 
 const LoadsTab = () => {
   // State management
@@ -32,6 +33,7 @@ const LoadsTab = () => {
   const [selectedLoads, setSelectedLoads] = useState(new Set());
   const [loads, setLoads] = useState([]);
   const [editingLoad, setEditingLoad] = useState(null);
+  const [user, setUser] = useState(null); 
   const [loadForm, setLoadForm] = useState({
     title: '',
     description: '',
@@ -61,13 +63,51 @@ const LoadsTab = () => {
   
   const getAuthHeaders = () => {
     const authHeader = getAuthHeader();
-    
-    
     return {
       ...authHeader,
       'Content-Type': 'application/json'
     };
   };
+
+  // Load form reset function
+  const resetForm = () => {
+    setLoadForm({
+      title: '',
+      description: '',
+      pickupLocation: '',
+      deliveryLocation: '',
+      pickupAddress: '',
+      deliveryAddress: '',
+      weight: '',
+      cargoType: 'other',
+      vehicleType: 'small_truck',
+      vehicleCapacityRequired: '',
+      budget: '',
+      pickupDate: '',
+      deliveryDate: '',
+      specialInstructions: '',
+      isUrgent: false
+    });
+  };
+
+  // Fetch user profile
+  const fetchUserProfile = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/user/profile`, {
+        method: 'GET',
+        headers: getAuthHeaders()
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'success') {
+          setUser(data.data.user);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching user profile:', err);
+    }
+  }, [API_BASE_URL]);
 
   // Enhanced API Functions with better error handling
   const fetchLoads = useCallback(async (page = 1, customFilters = null) => {
@@ -109,17 +149,13 @@ const LoadsTab = () => {
       }
 
       const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams}`;
-     
-
       const headers = getAuthHeaders();
-      
 
       const response = await fetch(endpoint, {
         method: 'GET',
         headers
       });
 
-   
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}`;
         
@@ -150,7 +186,6 @@ const LoadsTab = () => {
       }
 
       const data = await response.json();
-     
       
       if (data.status === 'success') {
         const loadsData = data.data.loads || [];
@@ -185,13 +220,80 @@ const LoadsTab = () => {
     }
   }, [filters, sortConfig, pagination.limit, API_BASE_URL]);
 
+  // Create or update load
+  const submitLoad = async (e, formDataWithOwner) => {
+    e.preventDefault();
+    
+    try {
+      setLoading(true);
+      setError('');
+
+      // Validation
+      if (!formDataWithOwner.title?.trim()) {
+        throw new Error('Load title is required');
+      }
+      if (!formDataWithOwner.pickupLocation?.trim()) {
+        throw new Error('Pickup location is required');
+      }
+      if (!formDataWithOwner.deliveryLocation?.trim()) {
+        throw new Error('Delivery location is required');
+      }
+      if (!formDataWithOwner.weight || parseFloat(formDataWithOwner.weight) <= 0) {
+        throw new Error('Valid weight is required');
+      }
+      if (!formDataWithOwner.budget || parseFloat(formDataWithOwner.budget) < 100) {
+        throw new Error('Budget must be at least KES 100');
+      }
+
+      const method = editingLoad ? 'PUT' : 'POST';
+      const endpoint = editingLoad 
+        ? `${API_BASE_URL}/loads/${editingLoad}`
+        : `${API_BASE_URL}/loads`;
+
+      const response = await fetch(endpoint, {
+        method,
+        headers: getAuthHeaders(),
+        body: JSON.stringify(formDataWithOwner)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to save load';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (parseError) {
+          const errorText = await response.text();
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        setShowLoadForm(false);
+        resetForm();
+        setEditingLoad(null);
+        // Refresh the loads list
+        fetchLoads(pagination.page);
+      } else {
+        throw new Error(data.message || 'Failed to save load');
+      }
+
+    } catch (err) {
+      console.error('Error submitting load:', err);
+      setError(err.message || 'Failed to save load');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const updateLoadStatus = async (loadId, newStatus) => {
     try {
       setLoading(true);
       setError('');
 
       const headers = getAuthHeaders();
-      
 
       const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
         method: 'PATCH',
@@ -220,7 +322,6 @@ const LoadsTab = () => {
       }
 
       const data = await response.json();
-      
 
       if (data.status === 'success') {
         // Update the load in the local state
@@ -229,8 +330,6 @@ const LoadsTab = () => {
             load._id === loadId ? { ...load, status: newStatus } : load
           )
         );
-        
-        
       } else {
         throw new Error(data.message || 'Failed to update load status');
       }
@@ -282,41 +381,17 @@ const LoadsTab = () => {
     }
   };
 
-  const checkUserLimits = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
-        method: 'GET',
-        headers: getAuthHeaders()
-      });
-
-      if (!response.ok) {
-        console.warn('Failed to check user limits');
-        return { canCreateLoads: true, remainingLoads: 0 };
-      }
-
-      const data = await response.json();
-      return data.data?.limits || { canCreateLoads: true, remainingLoads: 0 };
-    } catch (err) {
-      console.error('Error checking user limits:', err);
-      return { canCreateLoads: true, remainingLoads: 0 };
-    }
-  };
-
   // Test API connection on component mount
   useEffect(() => {
     const testConnection = async () => {
       try {
-        
         const headers = getAuthHeaders();
-        
         
         // First test if we can reach the API at all
         const testResponse = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
           method: 'GET',
           headers
         });
-        
-        
         
         if (testResponse.status === 401) {
           setError('Authentication required. Please log in.');
@@ -328,8 +403,9 @@ const LoadsTab = () => {
           return;
         }
         
-        // If connection test passes, fetch loads
+        // If connection test passes, fetch loads and user profile
         fetchLoads();
+        fetchUserProfile();
         
       } catch (connectionError) {
         console.error('Connection test failed:', connectionError);
@@ -339,7 +415,7 @@ const LoadsTab = () => {
     };
 
     testConnection();
-  }, []);
+  }, [fetchLoads, fetchUserProfile]);
 
   // Refetch when filters or sort changes with debounce
   useEffect(() => {
@@ -350,7 +426,7 @@ const LoadsTab = () => {
     }, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [filters, sortConfig]);
+  }, [filters, sortConfig, fetchLoads, loading]);
 
   // Utility functions
   const getStatusColor = (status) => {
@@ -415,28 +491,33 @@ const LoadsTab = () => {
 
   const handlePostLoadClick = async () => {
     setEditingLoad(null);
+    resetForm();
+    setShowLoadForm(true);
+  };
+
+  const handleEditLoad = (load) => {
+    setEditingLoad(load._id);
     setLoadForm({
-      title: '',
-      description: '',
-      pickupLocation: '',
-      deliveryLocation: '',
-      pickupAddress: '',
-      deliveryAddress: '',
-      weight: '',
-      cargoType: 'other',
-      vehicleType: 'small_truck',
-      vehicleCapacityRequired: '',
-      budget: '',
-      pickupDate: '',
-      deliveryDate: '',
-      specialInstructions: '',
-      isUrgent: false
+      title: load.title || '',
+      description: load.description || '',
+      pickupLocation: load.pickupLocation?.address || load.pickupAddress || load.pickupLocation || '',
+      deliveryLocation: load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation || '',
+      pickupAddress: load.pickupAddress || '',
+      deliveryAddress: load.deliveryAddress || '',
+      weight: load.weight?.toString() || '',
+      cargoType: load.cargoType || 'other',
+      vehicleType: load.vehicleType || 'small_truck',
+      vehicleCapacityRequired: load.vehicleCapacityRequired?.toString() || '',
+      budget: load.budget?.toString() || '',
+      pickupDate: load.pickupDate ? new Date(load.pickupDate).toISOString().slice(0, 16) : '',
+      deliveryDate: load.deliveryDate ? new Date(load.deliveryDate).toISOString().slice(0, 16) : '',
+      specialInstructions: load.specialInstructions || '',
+      isUrgent: load.isUrgent || load.urgent || false
     });
     setShowLoadForm(true);
   };
 
   const onRefresh = () => {
-    
     fetchLoads(pagination.page);
   };
 
@@ -520,11 +601,6 @@ const LoadsTab = () => {
     // TODO: Implement navigation to load details
   };
 
-  const handleEditLoad = (loadId) => {
-    
-    // TODO: Implement edit functionality
-  };
-
   const handleUpdateLoadStatus = async (loadId, newStatus) => {
     if (window.confirm(`Are you sure you want to change the status to "${newStatus.replace('_', ' ')}"?`)) {
       await updateLoadStatus(loadId, newStatus);
@@ -537,9 +613,29 @@ const LoadsTab = () => {
     }
   };
 
-  
+  const handleCloseModal = () => {
+    setShowLoadForm(false);
+    setEditingLoad(null);
+    resetForm();
+  };
+
   return (
     <div className="space-y-6">
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center">
+            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+            <span className="text-red-800">{error}</span>
+            <button
+              onClick={() => setError('')}
+              className="ml-auto text-red-600 hover:text-red-800"
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -728,202 +824,278 @@ const LoadsTab = () => {
             <span className="ml-2 text-gray-600">Loading loads...</span>
           </div>
         ) : loads.length === 0 ? (
-          <div className="text-center py-12">
-            <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <div className="flex flex-col items-center justify-center py-12">
+            <Package className="h-16 w-16 text-gray-300 mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
-            <p className="text-gray-600 mb-4">
-              {error ? 'Unable to load your data.' : 
-               filters.search || filters.status ? 'No loads match your current filters.' : 'You haven\'t posted any loads yet.'}
+            <p className="text-gray-500 mb-6">
+              {filters.search || filters.status || filters.minBudget || filters.maxBudget || filters.urgent
+                ? 'No loads match your current filters. Try adjusting your search criteria.'
+                : 'You haven\'t posted any loads yet. Create your first load to get started.'
+              }
             </p>
-            {!error && !filters.search && !filters.status && (
-              <button
-                onClick={handlePostLoadClick}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium"
-              >
-                Post Your First Load
-              </button>
-            )}
-            {error && (
-              <button
-                onClick={onRefresh}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 mx-auto"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Try Again
-              </button>
-            )}
+            <button
+              onClick={handlePostLoadClick}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              Post Your First Load
+            </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    <input
-                      type="checkbox"
-                      checked={selectedLoads.size === loads.length}
-                      onChange={selectAllLoads}
-                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Load Details
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Route
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Budget
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Dates
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {loads.map((load) => (
-                  <tr key={load._id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+          <>
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left">
+                      <input
+                        type="checkbox"
+                        checked={selectedLoads.size === loads.length && loads.length > 0}
+                        onChange={selectAllLoads}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Load Details
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Route
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Budget
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Dates
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {loads.map((load) => (
+                    <tr key={load._id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedLoads.has(load._id)}
+                          onChange={() => toggleLoadSelection(load._id)}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-start space-x-3">
+                          <div className="flex-shrink-0">
+                            {load.isUrgent || load.urgent ? (
+                              <div className="relative">
+                                <Package className="h-6 w-6 text-gray-400" />
+                                <Zap className="h-3 w-3 text-red-500 absolute -top-1 -right-1" />
+                              </div>
+                            ) : (
+                              <Package className="h-6 w-6 text-gray-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {load.title}
+                            </p>
+                            {load.description && (
+                              <p className="text-sm text-gray-500 truncate">
+                                {load.description}
+                              </p>
+                            )}
+                            <div className="flex items-center mt-1 text-xs text-gray-500">
+                              <span>{load.weight} kg</span>
+                              <span className="mx-1">•</span>
+                              <span className="capitalize">{load.cargoType?.replace('_', ' ')}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm">
+                          <div className="flex items-center text-gray-900 mb-1">
+                            <MapPin className="h-3 w-3 text-green-500 mr-1" />
+                            <span className="truncate max-w-32">
+                              {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation}
+                            </span>
+                          </div>
+                          <div className="flex items-center text-gray-500">
+                            <ArrowRight className="h-3 w-3 mr-1" />
+                            <span className="truncate max-w-32">
+                              {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-medium text-gray-900">
+                          {formatCurrency(load.budget)}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
+                          {getStatusIcon(load.status)}
+                          {load.status?.replace('_', ' ').toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-500">
+                        <div className="space-y-1">
+                          <div className="flex items-center">
+                            <Calendar className="h-3 w-3 mr-1" />
+                            <span>Pickup: {formatDate(load.pickupDate)}</span>
+                          </div>
+                          <div className="flex items-center">
+                            <Clock className="h-3 w-3 mr-1" />
+                            <span>Delivery: {formatDate(load.deliveryDate)}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => handleViewDetails(load._id)}
+                            className="text-blue-600 hover:text-blue-700 p-1"
+                            title="View Details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleEditLoad(load)}
+                            className="text-gray-600 hover:text-gray-700 p-1"
+                            title="Edit Load"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          {load.status === 'posted' && (
+                            <button
+                              onClick={() => handleDeleteLoad(load._id)}
+                              className="text-red-600 hover:text-red-700 p-1"
+                              title="Delete Load"
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="lg:hidden space-y-4 p-4">
+              {loads.map((load) => (
+                <div key={load._id} className="border border-gray-200 rounded-lg p-4 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start space-x-3 flex-1">
                       <input
                         type="checkbox"
                         checked={selectedLoads.has(load._id)}
                         onChange={() => toggleLoadSelection(load._id)}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-1"
                       />
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0">
-                          <div className="h-10 w-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                            <Package className="h-5 w-5 text-blue-600" />
-                          </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center space-x-2">
+                          {load.isUrgent || load.urgent ? (
+                            <div className="relative">
+                              <Package className="h-5 w-5 text-gray-400" />
+                              <Zap className="h-3 w-3 text-red-500 absolute -top-1 -right-1" />
+                            </div>
+                          ) : (
+                            <Package className="h-5 w-5 text-gray-400" />
+                          )}
+                          <h3 className="text-sm font-medium text-gray-900 truncate">
+                            {load.title}
+                          </h3>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">
-                            {load.title || 'Untitled Load'}
-                            {(load.urgent || load.isUrgent) && (
-                              <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                <Zap className="h-3 w-3 mr-1" />
-                                Urgent
-                              </span>
-                            )}
+                        {load.description && (
+                          <p className="text-sm text-gray-500 mt-1 truncate">
+                            {load.description}
                           </p>
-                          <p className="text-sm text-gray-500">
-                            {load.cargoType || 'other'} • {load.weight || 0} kg
-                          </p>
-                          <p className="text-xs text-gray-400">
-                            Posted {formatDate(load.createdAt)}
-                          </p>
-                        </div>
+                        )}
                       </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center text-sm">
-                          <MapPin className="h-4 w-4 text-green-500 mr-1" />
-                          <span className="text-gray-900 truncate max-w-32">
-                            {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation || 'N/A'}
-                          </span>
-                        </div>
-                        <ArrowRight className="h-4 w-4 text-gray-400 mx-1" />
-                        <div className="flex items-center text-sm">
-                          <MapPin className="h-4 w-4 text-red-500 mr-1" />
-                          <span className="text-gray-900 truncate max-w-32">
-                            {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
-                          {getStatusIcon(load.status)}
-                          <span className="ml-1 capitalize">{(load.status || 'unknown').replace('_', ' ')}</span>
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <DollarSign className="h-4 w-4 text-gray-400 mr-1" />
-                        <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(load.budget)}
-                        </span>
-                      </div>
-                      {(load.bidsCount > 0 || load.bidCount > 0) && (
-                        <p className="text-xs text-gray-500">
-                          {load.bidsCount || load.bidCount || 0} bid{(load.bidsCount || load.bidCount || 0) !== 1 ? 's' : ''}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="space-y-1 text-sm">
-                        <div className="flex items-center">
-                          <Calendar className="h-4 w-4 text-gray-400 mr-1" />
-                          <span className="text-gray-900">
-                            {formatDate(load.pickupDate)}
-                          </span>
-                        </div>
-                        <div className="flex items-center">
-                          <Clock className="h-4 w-4 text-gray-400 mr-1" />
-                          <span className="text-gray-900">
-                            {formatDate(load.deliveryDate)}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => handleViewDetails(load._id)}
-                          className="text-blue-600 hover:text-blue-900 p-1 rounded-lg hover:bg-blue-50 transition-colors"
-                          title="View details"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleEditLoad(load._id)}
-                          className="text-gray-600 hover:text-gray-900 p-1 rounded-lg hover:bg-gray-50 transition-colors"
-                          title="Edit load"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        <div className="relative group">
-                          <select
-                            value={load.status}
-                            onChange={(e) => handleUpdateLoadStatus(load._id, e.target.value)}
-                            className="text-xs border-0 bg-transparent focus:ring-0 text-gray-600 hover:text-gray-900 cursor-pointer"
-                            title="Change status"
-                          >
-                            <option value="posted">Posted</option>
-                            <option value="receiving_bids">Receiving Bids</option>
-                            <option value="driver_assigned">Driver Assigned</option>
-                            <option value="assigned">Assigned</option>
-                            <option value="in_transit">In Transit</option>
-                            <option value="delivered">Delivered</option>
-                            <option value="not_available">Not Available</option>
-                            <option value="cancelled">Cancelled</option>
-                          </select>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteLoad(load._id)}
-                          className="text-red-600 hover:text-red-900 p-1 rounded-lg hover:bg-red-50 transition-colors"
-                          title="Delete load"
-                        >
-                          <XCircle className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
+                      {getStatusIcon(load.status)}
+                      {load.status?.replace('_', ' ').toUpperCase()}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center text-sm">
+                      <MapPin className="h-4 w-4 text-green-500 mr-2" />
+                      <span className="text-gray-600 mr-2">From:</span>
+                      <span className="text-gray-900 truncate">
+                        {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation}
+                      </span>
+                    </div>
+                    <div className="flex items-center text-sm">
+                      <ArrowRight className="h-4 w-4 text-blue-500 mr-2" />
+                      <span className="text-gray-600 mr-2">To:</span>
+                      <span className="text-gray-900 truncate">
+                        {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-500">Weight:</span>
+                      <span className="ml-1 text-gray-900">{load.weight} kg</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Budget:</span>
+                      <span className="ml-1 text-gray-900 font-medium">{formatCurrency(load.budget)}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 text-sm">
+                    <div className="flex items-center">
+                      <Calendar className="h-3 w-3 text-gray-400 mr-1" />
+                      <span className="text-gray-500">Pickup:</span>
+                      <span className="ml-1 text-gray-900">{formatDate(load.pickupDate)}</span>
+                    </div>
+                    <div className="flex items-center">
+                      <Clock className="h-3 w-3 text-gray-400 mr-1" />
+                      <span className="text-gray-500">Delivery:</span>
+                      <span className="ml-1 text-gray-900">{formatDate(load.deliveryDate)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+                    <div className="flex items-center space-x-3">
+                      <button
+                        onClick={() => handleViewDetails(load._id)}
+                        className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                      >
+                        View Details
+                      </button>
+                      <button
+                        onClick={() => handleEditLoad(load)}
+                        className="text-gray-600 hover:text-gray-700 text-sm font-medium"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    {load.status === 'posted' && (
+                      <button
+                        onClick={() => handleDeleteLoad(load._id)}
+                        className="text-red-600 hover:text-red-700 text-sm font-medium"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -931,36 +1103,31 @@ const LoadsTab = () => {
       {pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-700">
-              Page {pagination.page} of {pagination.totalPages}
-            </span>
-          </div>
-          <div className="flex items-center space-x-2">
             <button
               onClick={() => handlePageChange(pagination.page - 1)}
               disabled={pagination.page === 1}
-              className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >
+              <ChevronLeft className="h-4 w-4" />
               Previous
             </button>
             
-            {/* Page numbers */}
-            <div className="flex space-x-1">
-              {[...Array(Math.min(5, pagination.totalPages))].map((_, i) => {
-                const pageNum = Math.max(1, pagination.page - 2) + i;
-                if (pageNum > pagination.totalPages) return null;
+            <div className="flex items-center space-x-1">
+              {[...Array(Math.min(5, pagination.totalPages))].map((_, index) => {
+                const pageNumber = Math.max(1, pagination.page - 2) + index;
+                if (pageNumber > pagination.totalPages) return null;
                 
                 return (
                   <button
-                    key={pageNum}
-                    onClick={() => handlePageChange(pageNum)}
-                    className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                      pageNum === pagination.page
+                    key={pageNumber}
+                    onClick={() => handlePageChange(pageNumber)}
+                    className={`px-3 py-2 text-sm rounded-lg ${
+                      pageNumber === pagination.page
                         ? 'bg-blue-600 text-white'
-                        : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                        : 'bg-white border border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    {pageNum}
+                    {pageNumber}
                   </button>
                 );
               })}
@@ -969,194 +1136,31 @@ const LoadsTab = () => {
             <button
               onClick={() => handlePageChange(pagination.page + 1)}
               disabled={pagination.page === pagination.totalPages}
-              className="px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >
               Next
+              <ChevronLeft className="h-4 w-4 rotate-180" />
             </button>
+          </div>
+
+          <div className="text-sm text-gray-500">
+            Page {pagination.page} of {pagination.totalPages}
           </div>
         </div>
       )}
 
       {/* Load Form Modal */}
-      {showLoadForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-screen overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  {editingLoad ? 'Edit Load' : 'Post New Load'}
-                </h3>
-                <button
-                  onClick={() => setShowLoadForm(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <XCircle className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Load Title *
-                  </label>
-                  <input
-                    type="text"
-                    value={loadForm.title}
-                    onChange={(e) => setLoadForm({ ...loadForm, title: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Enter load title"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Description
-                  </label>
-                  <textarea
-                    value={loadForm.description}
-                    onChange={(e) => setLoadForm({ ...loadForm, description: e.target.value })}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Describe your cargo and any special requirements"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Pickup Location *
-                    </label>
-                    <input
-                      type="text"
-                      value={loadForm.pickupLocation}
-                      onChange={(e) => setLoadForm({ ...loadForm, pickupLocation: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      placeholder="Enter pickup location"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Delivery Location *
-                    </label>
-                    <input
-                      type="text"
-                      value={loadForm.deliveryLocation}
-                      onChange={(e) => setLoadForm({ ...loadForm, deliveryLocation: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      placeholder="Enter delivery location"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Weight (kg) *
-                    </label>
-                    <input
-                      type="number"
-                      value={loadForm.weight}
-                      onChange={(e) => setLoadForm({ ...loadForm, weight: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      placeholder="0"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Cargo Type *
-                    </label>
-                    <select
-                      value={loadForm.cargoType}
-                      onChange={(e) => setLoadForm({ ...loadForm, cargoType: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="other">Other</option>
-                      <option value="electronics">Electronics</option>
-                      <option value="furniture">Furniture</option>
-                      <option value="food_beverages">Food & Beverages</option>
-                      <option value="clothing">Clothing</option>
-                      <option value="machinery">Machinery</option>
-                      <option value="documents">Documents</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Budget (KES) *
-                    </label>
-                    <input
-                      type="number"
-                      value={loadForm.budget}
-                      onChange={(e) => setLoadForm({ ...loadForm, budget: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Pickup Date *
-                    </label>
-                    <input
-                      type="datetime-local"
-                      value={loadForm.pickupDate}
-                      onChange={(e) => setLoadForm({ ...loadForm, pickupDate: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Delivery Date
-                    </label>
-                    <input
-                      type="datetime-local"
-                      value={loadForm.deliveryDate}
-                      onChange={(e) => setLoadForm({ ...loadForm, deliveryDate: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center">
-                  <input
-                    type="checkbox"
-                    id="urgent"
-                    checked={loadForm.isUrgent}
-                    onChange={(e) => setLoadForm({ ...loadForm, isUrgent: e.target.checked })}
-                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                  />
-                  <label htmlFor="urgent" className="ml-2 text-sm text-gray-700">
-                    This is an urgent load
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-end space-x-3 pt-6">
-                  <button
-                    onClick={() => setShowLoadForm(false)}
-                    className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      
-                      setShowLoadForm(false);
-                    }}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    {editingLoad ? 'Update Load' : 'Post Load'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <LoadFormModal
+        isOpen={showLoadForm}
+        onClose={handleCloseModal}
+        onSubmit={submitLoad}
+        formData={loadForm}
+        setFormData={setLoadForm}
+        editingLoad={editingLoad}
+        loading={loading}
+        error={error}
+        user={user}
+      />
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, Bell, Settings, LogOut, Crown, CheckCircle2, AlertCircle, XCircle, Clock } from 'lucide-react';
+import { Package, Bell, Settings, LogOut, CheckCircle2, AlertCircle, XCircle, Clock } from 'lucide-react';
 
 const DashboardHeader = ({
   user,
@@ -50,7 +50,7 @@ const DashboardHeader = ({
 
     // Check for active premium plans
     if (subscription.status?.toLowerCase() === 'active' && subscription.planId !== 'basic') {
-      return { status: `${subscription.planName || 'Premium'} (Active)`, color: 'text-green-600', icon: CheckCircle2 };
+      return { status: `${subscription.planName || 'Premium'}`, color: 'text-green-600', icon: CheckCircle2 };
     }
 
     // Check for pending status
