@@ -1756,7 +1756,7 @@ router.get('/loads', adminAuth, [
 
     // Fetch data
     const loads = await Load.find(queryFilter)
-      .populate('postedBy', 'name email phone location isVerified')
+      .populate('createdBy', 'name email phone location isVerified')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -1786,9 +1786,9 @@ router.get('/loads', adminAuth, [
       createdAt: load.createdAt,
       updatedAt: load.updatedAt,
       daysSincePosted: Math.floor((Date.now() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
-      cargoOwnerName: load.postedBy?.name || 'Unknown',
-      cargoOwnerEmail: load.postedBy?.email || '',
-      cargoOwnerPhone: load.postedBy?.phone || '',
+      cargoOwnerName: load.contactPerson.name,
+      cargoOwnerEmail: load.contactPerson.email,
+      cargoOwnerPhone: load.contactPerson.phone,
       canEdit: true,
       canDelete: !['in_transit', 'delivered'].includes(load.status)
     }));

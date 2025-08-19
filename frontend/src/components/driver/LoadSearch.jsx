@@ -537,79 +537,70 @@ const LoadSearch = () => {
     }
   }, [successMessage]);
 
-  const fetchLoads = async (page = 1) => {
-    try {
-      setLoading(true);
-      setError('');
+  const fetchLoads = async () => {
+  try {
+    setLoading(true);
+    setError('');
 
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        status: 'available' 
-      });
+    const url = 'https://infinite-cargo-api.onrender.com/api/loads';
 
-      if (searchQuery?.trim()) {
-        params.append('search', searchQuery.trim());
-      }
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders()
+    };
 
-      Object.entries(filters).forEach(([key, value]) => {
-        if (String(value).trim()) {
-          params.append(key, value.toString());
-        }
-      });
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include'
+    });
 
-      const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-      
-      const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...getAuthHeaders()   
-      };
+    if (!response.ok) {
+      let serverError = 'Failed to fetch loads.';
+      try {
+        const resData = await response.json();
+        serverError = resData.message || serverError;
+      } catch (_) {}
+      throw new Error(`${serverError} (HTTP ${response.status})`);
+    }
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers,
-        credentials: 'include' 
-      });
+    const data = await response.json();
 
-      
+    if (data.status !== 'success') {
+      throw new Error(data.message || 'Unexpected server response.');
+    }
 
-      if (!response.ok) {
-        let serverError = 'Failed to fetch loads.';
-        try {
-          const resData = await response.json();
-          serverError = resData.message || serverError;
-        } catch (_) {}
-        throw new Error(`${serverError} (HTTP ${response.status})`);
-      }
+    // The backend might not return pagination if no params passed
+    // So we do a fallback here:
+    const { loads: loadsArr, pagination } = data.data;
 
-      const data = await response.json();
-      
-      if (data.status !== 'success') {
-        throw new Error(data.message || 'Unexpected server response.');
-      }
-
-      const { loads: loadsArr, pagination } = data.data;
-      console.log('LOAD DAAAATA',data.data)
-      
-      setLoads(loadsArr);
+    setLoads(loadsArr || []);
+    if (pagination) {
       setCurrentPage(pagination.currentPage);
       setTotalPages(pagination.totalPages);
       setTotalLoads(pagination.totalLoads);
-
-    } catch (err) {
-      console.error('Error loading loads:', err);
-      setError(
-        err.message === 'Failed to fetch'
-          ? 'Network error: Could not reach server.'
-          : err.message
-      );
-    } finally {
-      setLoading(false);
+    } else {
+      // fallback when pagination not present
+      setCurrentPage(1);
+      setTotalPages(1);
+      setTotalLoads(loadsArr.length);
     }
-  };
 
-  console.log('Loads fetched:', loads);
+  } catch (err) {
+    console.error('Error loading loads:', err);
+    setError(
+      err.message === 'Failed to fetch'
+        ? 'Network error: Could not reach server.'
+        : err.message
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
+
+  
 
   // Place bid function (Fixed)
 const handleBidSubmit = async (bidData) => {

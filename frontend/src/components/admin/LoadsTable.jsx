@@ -36,9 +36,6 @@ const LoadsTable = ({
       setLoading(false);
     }
   };
-
-  console.log('FETCHED LOADS', loads)
-
   useEffect(() => {
     fetchLoads(1);
   }, [statusFilter]);
@@ -87,7 +84,7 @@ const LoadsTable = ({
         <table className="min-w-full">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Load ID</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cargo Owner</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Destination</th>
@@ -102,8 +99,8 @@ const LoadsTable = ({
             ) : (
               loads.map((load) => (
                 <tr key={load._id}>
-                  <td className="px-4 py-3">{load.loadNumber || load._id}</td>
-                  <td className="px-4 py-3">{load.name || '-'}</td>
+                  <td className="px-4 py-3">{load.cargoType}</td>
+                  <td className="px-4 py-3">{load.cargoOwnerName|| '-'}</td>
                   <td className="px-4 py-3">{load.origin || '-'}</td>
                   <td className="px-4 py-3">{load.destination || '-'}</td>
                   <td className="px-4 py-3">

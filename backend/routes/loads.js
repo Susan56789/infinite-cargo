@@ -423,7 +423,7 @@ router.get('/analytics/dashboard',  auth, async (req, res) => {
       const activeLoads = await Load.countDocuments({ 
         postedBy: userId, 
         isActive: true, 
-        status: { $in: ['posted', 'receiving_bids', 'assigned', 'in_transit'] } 
+        status: { $in: ['posted','available', 'receiving_bids', 'assigned', 'in_transit'] } 
       });
       const completedLoads = await Load.countDocuments({ 
         postedBy: userId, 
@@ -555,7 +555,7 @@ router.get('/analytics/dashboard',  auth, async (req, res) => {
         totalLoads: await Load.countDocuments({ postedBy: userId }),
         activeLoads: await Load.countDocuments({ 
           postedBy: userId, 
-          status: { $in: ['posted', 'receiving_bids', 'assigned', 'in_transit'] } 
+          status: { $in: ['posted','available', 'receiving_bids', 'assigned', 'in_transit'] } 
         }),
         completedLoads: await Load.countDocuments({ 
           postedBy: userId, 
@@ -1012,20 +1012,18 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // FIXED: More flexible base query - don't restrict by date too much
+    
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
       isActive: { $ne: false }, // Allow true or undefined (null)
-      // REMOVED: restrictive date filter that was filtering out loads
-      // pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
     };
 
     // Add date filter only if we want future pickups
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     baseQuery.$or = [
-      { pickupDate: { $gte: oneDayAgo } }, // Future or recent pickups
-      { pickupDate: { $exists: false } },   // No pickup date specified
-      { pickupDate: null }                  // Null pickup date
+      { pickupDate: { $gte: oneDayAgo } }, 
+      { pickupDate: { $exists: false } },   
+      { pickupDate: null }                  
     ];
 
     // Text search with better regex handling
@@ -1040,7 +1038,7 @@ router.get('/', optionalAuth, [
           { pickupLocation: regex },
           { deliveryLocation: regex },
           { cargoOwnerName: regex },
-          { 'postedBy.name': regex }
+          { 'contactPerson.name': regex }
         ]
       });
     }
