@@ -1012,12 +1012,12 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // Base query
-    const baseQuery = {
-      status: { $in: ['posted', 'receiving_bids'] },
-      isActive: true,
-      pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // allow slight past tolerance
-    };
+    /// Base query
+const baseQuery = {
+  status: { $in: ['available', 'posted', 'receiving_bids'] },
+  isActive: true,
+  pickupDate: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+};
 
     // Text search
     if (search && search.trim()) {

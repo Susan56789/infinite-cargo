@@ -22,11 +22,9 @@ import {
 } from 'lucide-react';
 
 import { 
-  authManager, 
   isAuthenticated, 
   getUser, 
   getAuthHeader, 
-  getUserType,
   logout 
 } from '../../utils/auth';
 
@@ -547,6 +545,7 @@ const LoadSearch = () => {
       const params = new URLSearchParams({
         page: page.toString(),
         limit: limit.toString(),
+        status: 'available' 
       });
 
       if (searchQuery?.trim()) {
@@ -573,6 +572,8 @@ const LoadSearch = () => {
         credentials: 'include' 
       });
 
+      
+
       if (!response.ok) {
         let serverError = 'Failed to fetch loads.';
         try {
@@ -583,12 +584,14 @@ const LoadSearch = () => {
       }
 
       const data = await response.json();
+      console.log('Load fetch response:', data);
 
       if (data.status !== 'success') {
         throw new Error(data.message || 'Unexpected server response.');
       }
 
       const { loads: loadsArr, pagination } = data.data;
+      console.log('Fetched loads:', loadsArr);
       setLoads(loadsArr);
       setCurrentPage(pagination.currentPage);
       setTotalPages(pagination.totalPages);
