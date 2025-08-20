@@ -244,69 +244,20 @@ router.get('/', auth, [
 });
 
 
-// @route   PUT /api/notifications/:id/read
-// @desc    Mark notification as read
-// @access  Private
-router.put('/:id/read',  auth, async (req, res) => {
-  try {
-    // For now, just return success
-    // When you implement real notifications, update the notification in database
-    res.json({
-      status: 'success',
-      message: 'Notification marked as read',
-      data: {
-        notificationId: req.params.id,
-        isRead: true,
-        readAt: new Date()
-      }
-    });
-  } catch (error) {
-    console.error('Mark notification read error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error marking notification as read',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
+
 
 // @route   PUT /api/notifications/read-all
-// @desc    Mark all notifications as read
+// @desc    Mark all notifications as read (FIXED VERSION)
 // @access  Private
-router.put('/read-all',  auth, async (req, res) => {
+router.put('/read-all', auth, async (req, res) => {
   try {
-    // For now, just return success
-    // When you implement real notifications, update all user notifications in database
-    res.json({
-      status: 'success',
-      message: 'All notifications marked as read',
-      data: {
-        updatedCount: 4, // Mock count
-        readAt: new Date()
-      }
-    });
-  } catch (error) {
-    console.error('Mark all notifications read error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error marking all notifications as read',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   PUT /api/notifications/mark-all-read
-// @desc    Mark all notifications as read
-// @access  Private
-router.put('/mark-all-read',  auth, async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
 
     const result = await notificationsCollection.updateMany(
       { 
         userId: new mongoose.Types.ObjectId(req.user.id),
+        userType: req.user.userType,
         isRead: false
       },
       { 
@@ -320,63 +271,24 @@ router.put('/mark-all-read',  auth, async (req, res) => {
 
     res.json({
       status: 'success',
-      message: `${result.modifiedCount} notifications marked as read`
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        updatedCount: result.modifiedCount,
+        readAt: new Date()
+      }
     });
 
   } catch (error) {
     console.error('Mark all notifications read error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error marking notifications as read',
+      message: 'Server error marking all notifications as read',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// @route   DELETE /api/notifications/:id
-// @desc    Delete a notification
-// @access  Private
-router.delete('/:id',  auth, async (req, res) => {
-  try {
-    const { id } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid notification ID'
-      });
-    }
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const result = await notificationsCollection.deleteOne({
-      _id: new mongoose.Types.ObjectId(id),
-      userId: new mongoose.Types.ObjectId(req.user.id)
-    });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Notification not found or access denied'
-      });
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Notification deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete notification error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error deleting notification',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 // @route   POST /api/notifications/send
 // @desc    Send notification to user (admin only)
@@ -459,7 +371,152 @@ router.post('/send',  auth, [
     });
   }
 });
+// @route   DELETE /api/notifications/clear-all
+// @desc    Delete all notifications for user
+// @access  Private
+router.delete('/clear-all', auth, async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
 
+    const result = await notificationsCollection.deleteMany({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      userType: req.user.userType
+    });
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        deletedCount: result.deletedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Clear all notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error clearing notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/notifications/bulk-read
+// @desc    Mark multiple notifications as read
+// @access  Private
+router.put('/bulk-read', auth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.updateMany(
+      { 
+        _id: { $in: objectIds },
+        userId: new mongoose.Types.ObjectId(req.user.id),
+        userType: req.user.userType,
+        isRead: false
+      },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        requestedCount: notificationIds.length,
+        updatedCount: result.modifiedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Bulk read notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notifications as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/notifications/bulk-delete
+// @desc    Delete multiple notifications
+// @access  Private
+router.delete('/bulk-delete', auth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.deleteMany({
+      _id: { $in: objectIds },
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      userType: req.user.userType
+    });
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        requestedCount: notificationIds.length,
+        deletedCount: result.deletedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Bulk delete notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 // @route   POST /api/notifications/broadcast
 // @desc    Send notification to multiple users (admin only)
 // @access  Private (Admin only)
@@ -665,6 +722,125 @@ router.get('/summary',  auth, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching notification summary',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/notifications/:id
+// @desc    Delete a notification (ALREADY LOOKS CORRECT)
+// @access  Private
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.deleteOne({
+      _id: new mongoose.Types.ObjectId(id),
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      userType: req.user.userType // Add userType check for extra security
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found or access denied'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/notifications/:id/read
+// @desc    Mark notification as read
+// @access  Private
+router.put('/:id/read', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate notification ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Update the notification
+    const result = await notificationsCollection.updateOne(
+      { 
+        _id: new mongoose.Types.ObjectId(id),
+        userId: new mongoose.Types.ObjectId(req.user.id),
+        userType: req.user.userType
+      },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found or access denied'
+      });
+    }
+
+    if (result.modifiedCount === 0) {
+      // Notification was already read
+      return res.json({
+        status: 'success',
+        message: 'Notification was already marked as read',
+        data: {
+          notificationId: id,
+          isRead: true,
+          alreadyRead: true
+        }
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: {
+        notificationId: id,
+        isRead: true,
+        readAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notification as read',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
