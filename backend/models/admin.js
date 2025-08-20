@@ -110,6 +110,16 @@ const adminSchema = new mongoose.Schema({
     ref: 'Admin',
     default: null
   },
+  notifications: [
+  {
+    id: { type: String, default: () => new mongoose.Types.ObjectId().toString() },
+    message: String,
+    type: { type: String, enum: ['system', 'user', 'admin'], default: 'user' },
+    target: { type: String, enum: ['user', 'admin', 'all'], default: 'user' }, 
+    isRead: { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now }
+  }
+],
   profile: {
     avatar: {
       type: String,
