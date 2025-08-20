@@ -3,7 +3,7 @@ import {
   Plus, Crown, BarChart3, Package, Users, PieChart, 
   CheckCircle2, AlertCircle,XCircle, Clock, Loader2
 } from 'lucide-react';
-
+import { useNotifications, ToastContainer } from './NotificationUtils';
 
 // Import child components
 import DashboardHeader from './DashboardHeader';
@@ -59,6 +59,17 @@ const CargoOwnerDashboard = () => {
     isUrgent: false,
      user: getUser(),
   });
+
+  // notification hook
+  const {
+    notifications: liveNotifications,
+    unreadCount,
+    fetchNotifications: refreshNotifications,
+    addNotification,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification
+  } = useNotifications(user);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
@@ -123,6 +134,7 @@ const CargoOwnerDashboard = () => {
     window.addEventListener('authStateChanged', handleAuthChange);
     return () => window.removeEventListener('authStateChanged', handleAuthChange);
   }, []);
+
 
   // Check token expiration periodically
   useEffect(() => {
@@ -308,6 +320,54 @@ try {
       setLoading(false);
     }
   };
+
+  // Add notification handlers
+  const handleNotificationAction = async (notificationId, action) => {
+    switch (action) {
+      case 'mark_read':
+        await markAsRead(notificationId);
+        break;
+      case 'delete':
+        await deleteNotification(notificationId);
+        break;
+      default:
+        break;
+    }
+  };
+
+// Function to trigger notifications when loads are created/updated
+const triggerLoadNotifications = async (loadId, action, additionalData = {}) => {
+  try {
+    const authHeaders = getAuthHeaders();
+    
+    switch (action) {
+      case 'created':
+        // Show success toast
+        if (window.showToast) {
+          window.showToast('Load posted successfully! You\'ll be notified when drivers place bids.', 'success');
+        }
+        break;
+        
+      case 'bid_received':
+        // This would typically be triggered by the backend when a new bid is placed
+        if (window.showToast) {
+          window.showToast(`New bid received for your load: ${additionalData.loadTitle}`, 'info');
+        }
+        break;
+        
+      case 'status_updated':
+        if (window.showToast) {
+          window.showToast(`Load status updated to: ${additionalData.newStatus}`, 'info');
+        }
+        break;
+        
+      default:
+        break;
+    }
+  } catch (error) {
+    console.error('Error triggering notifications:', error);
+  }
+};
 
 const handleCreateLoad = async (e, formDataWithOwner = null) => {
   e.preventDefault();
@@ -520,6 +580,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     if (response.ok) {
       const actionText = editingLoad ? 'updated' : 'created';
       setSuccess(`Load ${actionText} successfully!`);
+      
+      // Trigger notification
+      await triggerLoadNotifications(data.data?._id, editingLoad ? 'updated' : 'created', {
+        loadTitle: currentLoadForm.title
+      });
       
       // Close modal and reset form
       setShowLoadForm(false);
@@ -1062,14 +1127,17 @@ const getSubscriptionStatus = (subscription) => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Toast Container for notifications */}
+      <ToastContainer />
       {/* Header */}
       <DashboardHeader 
         user={user}
         subscription={subscription}
-        notifications={notifications}
+        notifications={liveNotifications}
         onProfileClick={() => setShowProfileModal(true)}
         onLogout={handleLogout}
         getSubscriptionStatus={getSubscriptionStatus}
+        getAuthHeaders={getAuthHeaders}
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

@@ -134,12 +134,9 @@ const getNotificationTemplate = (type, data) => {
 };
 
 // @route   GET /api/notifications
-// @desc    Get notifications for current user
+// @desc    Get user notifications (REAL DATA - NOT DEMO)
 // @access  Private
-// @route   GET /api/notifications
-// @desc    Get user notifications
-// @access  Private
-router.get('/',  auth, [
+router.get('/', auth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50'),
   query('unread').optional().isBoolean().withMessage('Unread must be boolean')
@@ -160,80 +157,78 @@ router.get('/',  auth, [
       unread
     } = req.query;
 
-    // Mock notifications for now (replace with real database queries later)
-    const mockNotifications = [
-      {
-        _id: '1',
-        type: 'bid_received',
-        title: 'New Bid Received',
-        message: 'You received a new bid on your load "Furniture Transport"',
-        isRead: false,
-        createdAt: new Date(Date.now() - 1000 * 60 * 30), // 30 minutes ago
-        relatedLoad: '507f1f77bcf86cd799439011',
-        actionUrl: '/loads/507f1f77bcf86cd799439011'
-      },
-      {
-        _id: '2', 
-        type: 'load_assigned',
-        title: 'Load Assigned',
-        message: 'Your load "Electronics Delivery" has been assigned to a driver',
-        isRead: false,
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2), // 2 hours ago
-        relatedLoad: '507f1f77bcf86cd799439012',
-        actionUrl: '/loads/507f1f77bcf86cd799439012'
-      },
-      {
-        _id: '3',
-        type: 'load_delivered',
-        title: 'Load Delivered',
-        message: 'Your load "Construction Materials" has been successfully delivered',
-        isRead: true,
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24), // 1 day ago
-        relatedLoad: '507f1f77bcf86cd799439013',
-        actionUrl: '/loads/507f1f77bcf86cd799439013'
-      },
-      {
-        _id: '4',
-        type: 'subscription_reminder',
-        title: 'Subscription Reminder',
-        message: 'Your Pro plan will renew in 3 days',
-        isRead: true,
-        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2), // 2 days ago
-        actionUrl: '/dashboard/subscription'
-      }
-    ];
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
 
-    // Filter by unread status if specified
-    let filteredNotifications = mockNotifications;
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userType = req.user.userType;
+
+    // Build query filter
+    const matchQuery = {
+      userId: userId,
+      userType: userType
+    };
+
+    // Add unread filter if specified
     if (unread !== undefined) {
-      filteredNotifications = mockNotifications.filter(notif => 
-        unread === 'true' ? !notif.isRead : notif.isRead
-      );
+      matchQuery.isRead = unread === 'true' ? false : true;
     }
 
-    // Apply pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const paginatedNotifications = filteredNotifications.slice(skip, skip + parseInt(limit));
+    // Get total count for pagination
+    const totalNotifications = await notificationsCollection.countDocuments(matchQuery);
 
-    const totalNotifications = filteredNotifications.length;
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     const totalPages = Math.ceil(totalNotifications / parseInt(limit));
-    const unreadCount = mockNotifications.filter(n => !n.isRead).length;
+
+    // Fetch notifications with pagination and sorting
+    const notifications = await notificationsCollection
+      .find(matchQuery)
+      .sort({ createdAt: -1 }) // Most recent first
+      .skip(skip)
+      .limit(parseInt(limit))
+      .toArray();
+
+    // Get unread count
+    const unreadCount = await notificationsCollection.countDocuments({
+      userId: userId,
+      userType: userType,
+      isRead: false
+    });
+
+    // Format notifications for response
+    const formattedNotifications = notifications.map(notif => ({
+      _id: notif._id,
+      type: notif.type,
+      title: notif.title,
+      message: notif.message,
+      priority: notif.priority || 'medium',
+      icon: notif.icon || 'bell',
+      isRead: notif.isRead,
+      createdAt: notif.createdAt,
+      readAt: notif.readAt || null,
+      actionUrl: notif.actionUrl || null,
+      data: notif.data || {},
+      expiresAt: notif.expiresAt || null
+    }));
 
     res.json({
       status: 'success',
       data: {
-        notifications: paginatedNotifications,
+        notifications: formattedNotifications,
         pagination: {
           currentPage: parseInt(page),
           totalPages,
           totalNotifications,
           hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
         },
         summary: {
-          total: mockNotifications.length,
+          total: totalNotifications,
           unread: unreadCount,
-          read: mockNotifications.length - unreadCount
+          read: totalNotifications - unreadCount
         }
       }
     });

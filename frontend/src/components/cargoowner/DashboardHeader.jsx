@@ -1,5 +1,6 @@
 import React from 'react';
 import { Package, Bell, Settings, LogOut, CheckCircle2, AlertCircle, XCircle, Clock } from 'lucide-react';
+import NotificationAlerts from './NotificationAlerts';
 
 const DashboardHeader = ({
   user,
@@ -7,6 +8,7 @@ const DashboardHeader = ({
   notifications,
   onProfileClick,
   onLogout,
+  getAuthHeaders
 }) => {
   // Enhanced function to get user display name
   const getUserDisplayName = () => {
@@ -91,12 +93,10 @@ const DashboardHeader = ({
             </div>
 
             {/* Notifications */}
-            <button className="p-2 text-gray-400 hover:text-gray-500 relative">
-              <Bell className="h-5 w-5" />
-              {notifications && notifications.length > 0 && (
-                <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-400 transform translate-x-1/2 -translate-y-1/2"></span>
-              )}
-            </button>
+            <NotificationAlerts
+             user={user}
+              getAuthHeaders={getAuthHeaders}
+            />
 
             {/* User Info */}
             <div className="flex items-center space-x-3">
