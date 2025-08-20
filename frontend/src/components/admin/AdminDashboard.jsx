@@ -5,6 +5,7 @@ import DriversTable from './DriversTable';
 import CargoOwnersTable from './CargoOwnersTable';
 import LoadsTable from './LoadsTable';
 import SubscriptionsTable from './SubscriptionsTable';
+import AdminNotifications from './AdminNotifications';
 import AdminHeader from './AdminHeader';
 import AddAdminModal from './AddAdminModal';
 import { 
@@ -28,7 +29,7 @@ import {
   PieChart,
   LineChart
 } from 'lucide-react';
-import { authManager } from '../../utils/auth';
+import { authManager, isAuthenticated, getAuthHeader, getToken } from '../../utils/auth';
 
 const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
 
@@ -46,6 +47,7 @@ const AdminDashboard = () => {
   const [activityLoading, setActivityLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [isFullyAuthenticated, setIsFullyAuthenticated] = useState(false);
   
   // Add admin modal state
   const [showAddAdmin, setShowAddAdmin] = useState(false);
@@ -62,17 +64,16 @@ const AdminDashboard = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [dateRange, setDateRange] = useState('today');
 
-  
   const apiCall = async (endpoint, options = {}) => {
     try {
       // Check if admin is authenticated before making API call
-      if (!authManager.isAuthenticated(true)) {
+      if (!isAuthenticated(true)) {
         console.error('Admin not authenticated, redirecting to login');
         navigate('/admin/login');
         throw new Error('Authentication required');
       }
 
-      const authHeader = authManager.getAuthHeader(true);
+      const authHeader = getAuthHeader(true);
     
       const config = {
         headers: {
@@ -108,10 +109,11 @@ const AdminDashboard = () => {
   // Check authentication on component mount
   useEffect(() => {
     const checkAuth = () => {
-      if (!authManager.isAuthenticated(true)) {
+      if (!isAuthenticated(true)) {
         navigate('/admin/login');
         return false;
       }
+      setIsFullyAuthenticated(true);
       return true;
     };
 
@@ -1157,21 +1159,23 @@ const AdminDashboard = () => {
   );
 
   // Don't render if not authenticated
-  if (!authManager.isAuthenticated(true)) {
+  if (!isAuthenticated(true)) {
     return null;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6 max-w-7xl mx-auto">
-        {/* Header */}
-        {adminData && (
-          <AdminHeader
-            name={adminData.name}
-            role={adminData.role}
-            onLogout={handleLogout}
-          />
-        )}
+       {adminData && (
+  <AdminHeader
+    name={adminData.name}
+    role={adminData.role}
+    onLogout={handleLogout}
+    apiCall={apiCall}
+    onNotificationClick={() => setActiveTab('notifications')}
+    isAuthenticated={isAuthenticated(true)}
+  />
+)}
 
         {/* Super Admin Actions */}
         {adminData?.role === 'super_admin' && (
@@ -1222,6 +1226,7 @@ const AdminDashboard = () => {
                 { key: 'cargo-owners', label: 'Cargo Owners', icon: Package },
                 { key: 'loads', label: 'Loads', icon: Package },
                 { key: 'subscriptions', label: 'Subscriptions', icon: DollarSign },
+                { key: 'notifications', label: 'Notifications', icon: Bell },
                 { key: 'activity', label: 'Activity', icon: Activity },
                 { key: 'reports', label: 'Reports', icon: BarChart3 },
                 ...(adminData?.permissions?.systemSettings ? [{ key: 'settings', label: 'Settings', icon: Settings }] : [])
@@ -1314,6 +1319,16 @@ const AdminDashboard = () => {
               />
             </div>
           )}
+
+          {activeTab === 'notifications' && (
+  <div className="p-6">
+    <AdminNotifications
+      apiCall={apiCall}
+      showError={showError}
+      showSuccess={showSuccess}
+    />
+  </div>
+)}
 
           {activeTab === 'subscriptions' && (
             <div className="p-6">

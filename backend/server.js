@@ -45,6 +45,7 @@ const bookingRoutes = require('./routes/bookings');
 const cargoOwnerRoutes = require('./routes/cargo-owners');
 const notificationRoutes = require('./routes/notifications');
 const subscriptionRoutes = require('./routes/subscriptions');
+const adminNotificationsRoute= require('./routes/adminNotifications');
 
 // API Routes
 app.use('/api/auth', authRoutes);
