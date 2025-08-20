@@ -1,12 +1,14 @@
+// routes/adminNotifications.js
 const express = require('express');
 const router = express.Router();
-const { adminAuth} = require('../middleware/adminAuth');
+const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
+const { adminAuth } = require('../middleware/adminAuth');
 const User = require('../models/user');
 
-/**
- * GET /api/admin/notifications
- * Fetch all notifications addressed to admin
- */
+// ================================
+// GET / → Fetch all notifications addressed to admin
+// ================================
 router.get('/', adminAuth, async (req, res) => {
   try {
     const users = await User.find(
@@ -24,16 +26,15 @@ router.get('/', adminAuth, async (req, res) => {
         }))
     );
 
-    res.json({ status: 'success', count: notifications.length, notifications });
+    res.json({ notifications });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
-/**
- * GET /api/admin/notifications/summary
- * Fetch total + unread counts
- */
+// ================================
+// GET /summary → Count + unread
+// ================================
 router.get('/summary', adminAuth, async (req, res) => {
   try {
     const users = await User.find({ "notifications.target": "admin" }, { notifications: 1 });
@@ -50,38 +51,38 @@ router.get('/summary', adminAuth, async (req, res) => {
       });
     });
 
-    res.json({ status: 'success', total, unread });
+    res.json({ summary: { total, unread } });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
-/**
- * PATCH /api/admin/notifications/:userId/:notifId/read
- * Mark a single notification as read
- */
+// ================================
+// PATCH /:userId/:notifId/read → Mark single notification as read
+// ================================
 router.patch('/:userId/:notifId/read', adminAuth, async (req, res) => {
   try {
     const { userId, notifId } = req.params;
 
     const user = await User.findOneAndUpdate(
-      { _id: userId, "notifications.id": notifId },
+      { _id: userId, "notifications._id": notifId, "notifications.target": "admin" },
       { $set: { "notifications.$.isRead": true } },
       { new: true }
     );
 
-    if (!user) return res.status(404).json({ status: 'error', message: 'Notification not found' });
+    if (!user) {
+      return res.status(404).json({ message: 'Notification not found' });
+    }
 
-    res.json({ status: 'success', message: 'Notification marked as read' });
+    res.json({ message: 'Notification marked as read' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
-/**
- * PATCH /api/admin/notifications/mark-all-read
- * Mark all admin notifications as read
- */
+// ================================
+// PATCH /mark-all-read → Mark all as read
+// ================================
 router.patch('/mark-all-read', adminAuth, async (req, res) => {
   try {
     await User.updateMany(
@@ -90,60 +91,71 @@ router.patch('/mark-all-read', adminAuth, async (req, res) => {
       { arrayFilters: [{ "elem.target": "admin", "elem.isRead": false }] }
     );
 
-    res.json({ status: 'success', message: 'All notifications marked as read' });
+    res.json({ message: 'All notifications marked as read' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
-/**
- * DELETE /api/admin/notifications/:userId/:notifId
- * Delete a notification
- */
+// ================================
+// DELETE /:userId/:notifId → Delete one
+// ================================
 router.delete('/:userId/:notifId', adminAuth, async (req, res) => {
   try {
     const { userId, notifId } = req.params;
 
     const user = await User.findByIdAndUpdate(
       userId,
-      { $pull: { notifications: { id: notifId, target: "admin" } } },
+      { $pull: { notifications: { _id: notifId, target: 'admin' } } },
       { new: true }
     );
 
-    if (!user) return res.status(404).json({ status: 'error', message: 'Notification not found' });
-
-    res.json({ status: 'success', message: 'Notification deleted' });
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-/**
- * POST /api/admin/notifications/broadcast
- * Send a broadcast notification to all users
- */
-router.post('/broadcast', adminAuth, async (req, res) => {
-  try {
-    const { message } = req.body;
-    if (!message) {
-      return res.status(400).json({ status: 'error', message: 'Message is required' });
+    if (!user) {
+      return res.status(404).json({ message: 'Notification not found' });
     }
 
-    const notification = {
-      id: new Date().getTime().toString(),
-      message,
-      type: 'system',
-      target: 'user',
-      isRead: false,
-      createdAt: new Date()
-    };
-
-    await User.updateMany({}, { $push: { notifications: notification } });
-
-    res.json({ status: 'success', message: 'Broadcast sent to all users' });
+    res.json({ message: 'Notification deleted' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
+
+// ================================
+// POST /broadcast → Send to all admins
+// ================================
+router.post(
+  '/broadcast',
+  adminAuth,
+  body('message').notEmpty().withMessage('Message is required'),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      const { message } = req.body;
+
+      await User.updateMany(
+        {},
+        {
+          $push: {
+            notifications: {
+              _id: new mongoose.Types.ObjectId(),
+              message,
+              isRead: false,
+              target: 'admin',
+              createdAt: new Date()
+            }
+          }
+        }
+      );
+
+      res.json({ message: 'Broadcast sent to all admins' });
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
+  }
+);
 
 module.exports = router;

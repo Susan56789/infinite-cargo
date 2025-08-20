@@ -57,109 +57,93 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   });
 
   // Fetch notifications
-  const fetchNotifications = async (page = 1) => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: pagination.limit.toString(),
-        ...(filters.unread && { unread: 'true' }),
-        ...(filters.search && { search: filters.search })
-      });
+const fetchNotifications = async (page = 1) => {
+  try {
+    setLoading(true);
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: pagination.limit.toString(),
+      ...(filters.unread && { unread: 'true' }),
+      ...(filters.search && { search: filters.search })
+    });
 
-      const response = await apiCall(`/admin/notifications?${params}`);
-      
-      if (response.status === 'success') {
-        setNotifications(response.data.notifications);
-        setPagination(response.data.pagination);
-        setSummary(response.data.summary);
-      }
-    } catch (error) {
-      showError('Failed to fetch notifications');
-      console.error('Fetch notifications error:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const response = await apiCall(`/admin/notifications?${params}`);
 
-  // Fetch notification summary
-  const fetchNotificationSummary = async () => {
-    try {
-      const response = await apiCall('/admin/notifications/summary');
-      if (response.status === 'success') {
-        setSummary(response.data.summary);
-      }
-    } catch (error) {
-      console.error('Fetch summary error:', error);
+    // Adjusted to backend structure
+    setNotifications(response.notifications || []);
+    setPagination(response.pagination || { page: 1, limit: 10, total: response.notifications?.length || 0 });
+    if (response.summary) setSummary(response.summary);
+
+  } catch (error) {
+    showError('Failed to fetch notifications');
+    console.error('Fetch notifications error:', error);
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Fetch notification summary
+const fetchNotificationSummary = async () => {
+  try {
+    const response = await apiCall('/admin/notifications/summary');
+
+    // Adjusted to backend structure
+    if (response?.summary) {
+      setSummary(response.summary);
     }
-  };
+
+  } catch (error) {
+    console.error('Fetch summary error:', error);
+  }
+};
+
 
   useEffect(() => {
     fetchNotifications();
     fetchNotificationSummary();
   }, [filters.unread, filters.search]);
 
-  // Mark notification as read
-  const markAsRead = async (notificationId) => {
-    try {
-      await apiCall(`/admin/notifications/${notificationId}/read`, { method: 'PUT' });
-      
-      // Update local state
-      setNotifications(prev => prev.map(notif => 
-        notif._id === notificationId 
-          ? { ...notif, isRead: true, readAt: new Date() }
-          : notif
-      ));
-      
-      setSummary(prev => ({
-        ...prev,
-        unread: Math.max(0, prev.unread - 1),
-        read: prev.read + 1
-      }));
-      
-    } catch (error) {
-      showError('Failed to mark notification as read');
-    }
-  };
+  // Mark one notification as read
+const markAsRead = async (id) => {
+  try {
+    await apiCall(`/admin/notifications/${id}/read`, { method: 'PATCH' });
+    // Update UI locally
+    setNotifications(prev =>
+      prev.map(n => n._id === id ? { ...n, read: true } : n)
+    );
+    fetchNotificationSummary();
+  } catch (error) {
+    showError('Failed to mark as read');
+    console.error('Mark as read error:', error);
+  }
+};
 
-  // Mark all as read
-  const markAllAsRead = async () => {
-    try {
-      const response = await apiCall('/admin/notifications/read-all', { method: 'PUT' });
-      if (response.status === 'success') {
-        showSuccess(response.message);
-        setNotifications(prev => prev.map(notif => ({ 
-          ...notif, 
-          isRead: true, 
-          readAt: new Date() 
-        })));
-        setSummary(prev => ({
-          ...prev,
-          unread: 0,
-          read: prev.total
-        }));
-      }
-    } catch (error) {
-      showError('Failed to mark all notifications as read');
-    }
-  };
+// Mark all as read
+const markAllAsRead = async () => {
+  try {
+    await apiCall('/admin/notifications/mark-all-read', { method: 'PATCH' });
+    // Update UI locally
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    fetchNotificationSummary();
+  } catch (error) {
+    showError('Failed to mark all as read');
+    console.error('Mark all as read error:', error);
+  }
+};
 
-  // Delete notification
-  const deleteNotification = async (notificationId) => {
-    try {
-      await apiCall(`/admin/notifications/${notificationId}`, { method: 'DELETE' });
-      
-      setNotifications(prev => prev.filter(notif => notif._id !== notificationId));
-      setSummary(prev => ({
-        ...prev,
-        total: prev.total - 1
-      }));
-      
-      showSuccess('Notification deleted');
-    } catch (error) {
-      showError('Failed to delete notification');
-    }
-  };
+// Delete one notification
+const deleteNotification = async (id) => {
+  try {
+    await apiCall(`/admin/notifications/${id}`, { method: 'DELETE' });
+    // Remove locally
+    setNotifications(prev => prev.filter(n => n._id !== id));
+    fetchNotificationSummary();
+  } catch (error) {
+    showError('Failed to delete notification');
+    console.error('Delete notification error:', error);
+  }
+};
+
 
   // Bulk operations
   const handleBulkAction = async (action) => {
@@ -201,31 +185,19 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   };
 
   // Send broadcast notification
-  const sendBroadcastNotification = async (e) => {
-    e.preventDefault();
+  const sendBroadcastNotification = async (notificationData) => {
     try {
-      setLoading(true);
-      const response = await apiCall('/admin/notifications/broadcast', {
-        method: 'POST',
-        body: JSON.stringify(broadcastForm)
-      });
-      
-      if (response.status === 'success') {
-        showSuccess(response.message);
-        setShowBroadcastModal(false);
-        setBroadcastForm({
-          userType: 'all',
-          title: '',
-          message: '',
-          priority: 'medium',
-          type: 'system_announcement'
-        });
-      }
-    } catch (error) {
-      showError('Failed to send broadcast notification');
-    } finally {
-      setLoading(false);
-    }
+    await apiCall('/admin/notifications/broadcast', {
+      method: 'POST',
+      body: JSON.stringify(notificationData)
+    });
+    showSuccess('Notification broadcasted successfully');
+    fetchNotifications();
+    fetchNotificationSummary();
+  } catch (error) {
+    showError('Failed to broadcast notification');
+    console.error('Broadcast notification error:', error);
+  }
   };
 
   // Get notification icon
