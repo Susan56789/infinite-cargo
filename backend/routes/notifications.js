@@ -3,7 +3,6 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
-const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 
 const corsHandler = require('../middleware/corsHandler');

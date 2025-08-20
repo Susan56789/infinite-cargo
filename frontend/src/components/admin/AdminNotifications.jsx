@@ -67,7 +67,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         ...(filters.search && { search: filters.search })
       });
 
-      const response = await apiCall(`/notifications?${params}`);
+      const response = await apiCall(`/admin/notifications?${params}`);
       
       if (response.status === 'success') {
         setNotifications(response.data.notifications);
@@ -85,7 +85,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   // Fetch notification summary
   const fetchNotificationSummary = async () => {
     try {
-      const response = await apiCall('/notifications/summary');
+      const response = await apiCall('/admin/notifications/summary');
       if (response.status === 'success') {
         setSummary(response.data.summary);
       }
@@ -102,7 +102,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   // Mark notification as read
   const markAsRead = async (notificationId) => {
     try {
-      await apiCall(`/notifications/${notificationId}/read`, { method: 'PUT' });
+      await apiCall(`/admin/notifications/${notificationId}/read`, { method: 'PUT' });
       
       // Update local state
       setNotifications(prev => prev.map(notif => 
@@ -125,7 +125,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   // Mark all as read
   const markAllAsRead = async () => {
     try {
-      const response = await apiCall('/notifications/read-all', { method: 'PUT' });
+      const response = await apiCall('/admin/notifications/read-all', { method: 'PUT' });
       if (response.status === 'success') {
         showSuccess(response.message);
         setNotifications(prev => prev.map(notif => ({ 
@@ -147,7 +147,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
   // Delete notification
   const deleteNotification = async (notificationId) => {
     try {
-      await apiCall(`/notifications/${notificationId}`, { method: 'DELETE' });
+      await apiCall(`/admin/notifications/${notificationId}`, { method: 'DELETE' });
       
       setNotifications(prev => prev.filter(notif => notif._id !== notificationId));
       setSummary(prev => ({
@@ -170,7 +170,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
 
     try {
       if (action === 'read') {
-        await apiCall('/notifications/bulk-read', {
+        await apiCall('/admin/notifications/bulk-read', {
           method: 'PUT',
           body: JSON.stringify({ notificationIds: selectedNotifications })
         });
@@ -182,7 +182,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
             : notif
         ));
       } else if (action === 'delete') {
-        await apiCall('/notifications/bulk-delete', {
+        await apiCall('/admin/notifications/bulk-delete', {
           method: 'DELETE',
           body: JSON.stringify({ notificationIds: selectedNotifications })
         });
@@ -205,7 +205,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     e.preventDefault();
     try {
       setLoading(true);
-      const response = await apiCall('/notifications/broadcast', {
+      const response = await apiCall('/admin/notifications/broadcast', {
         method: 'POST',
         body: JSON.stringify(broadcastForm)
       });
