@@ -56,96 +56,124 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     type: 'system_announcement'
   });
 
-  // Fetch notifications
-const fetchNotifications = async (page = 1) => {
-  try {
-    setLoading(true);
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: pagination.limit.toString(),
-      ...(filters.unread && { unread: 'true' }),
-      ...(filters.search && { search: filters.search })
-    });
+  // Fetch notifications - Updated to match new API structure
+  const fetchNotifications = async (page = 1) => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: pagination.limit.toString(),
+        ...(filters.unread && { unread: 'true' }),
+        ...(filters.search && { search: filters.search }),
+        ...(filters.type !== 'all' && { type: filters.type })
+      });
 
-    const response = await apiCall(`/admin/notifications?${params}`);
+      const response = await apiCall(`/admin/notifications?${params}`);
 
-    // Adjusted to backend structure
-    setNotifications(response.notifications || []);
-    setPagination(response.pagination || { page: 1, limit: 10, total: response.notifications?.length || 0 });
-    if (response.summary) setSummary(response.summary);
+      // Updated to match backend response structure
+      if (response.status === 'success' && response.data) {
+        setNotifications(response.data.notifications || []);
+        setPagination(response.data.pagination || {
+          currentPage: 1,
+          totalPages: 1,
+          totalNotifications: 0,
+          limit: 20
+        });
+        if (response.data.summary) {
+          setSummary(response.data.summary);
+        }
+      } else {
+        // Fallback for older response format
+        setNotifications(response.notifications || []);
+        setPagination(response.pagination || { currentPage: 1, totalPages: 1, totalNotifications: 0, limit: 20 });
+        if (response.summary) setSummary(response.summary);
+      }
 
-  } catch (error) {
-    showError('Failed to fetch notifications');
-    console.error('Fetch notifications error:', error);
-  } finally {
-    setLoading(false);
-  }
-};
-
-// Fetch notification summary
-const fetchNotificationSummary = async () => {
-  try {
-    const response = await apiCall('/admin/notifications/summary');
-
-    // Adjusted to backend structure
-    if (response?.summary) {
-      setSummary(response.summary);
+    } catch (error) {
+      showError('Failed to fetch notifications');
+      console.error('Fetch notifications error:', error);
+    } finally {
+      setLoading(false);
     }
+  };
 
-  } catch (error) {
-    console.error('Fetch summary error:', error);
-  }
-};
+  // Fetch notification summary - Updated to match new API structure
+  const fetchNotificationSummary = async () => {
+    try {
+      const response = await apiCall('/admin/notifications/summary');
 
+      // Updated to match backend response structure
+      if (response.status === 'success' && response.data?.summary) {
+        setSummary(response.data.summary);
+      } else if (response.summary) {
+        // Fallback for older response format
+        setSummary(response.summary);
+      }
+
+    } catch (error) {
+      console.error('Fetch summary error:', error);
+    }
+  };
 
   useEffect(() => {
     fetchNotifications();
     fetchNotificationSummary();
-  }, [filters.unread, filters.search]);
+  }, [filters.unread, filters.search, filters.type]);
 
-  // Mark one notification as read
-const markAsRead = async (id) => {
-  try {
-    await apiCall(`/admin/notifications/${id}/read`, { method: 'PATCH' });
-    // Update UI locally
-    setNotifications(prev =>
-      prev.map(n => n._id === id ? { ...n, read: true } : n)
-    );
-    fetchNotificationSummary();
-  } catch (error) {
-    showError('Failed to mark as read');
-    console.error('Mark as read error:', error);
-  }
-};
+  // Mark one notification as read - Updated to match new API endpoint
+  const markAsRead = async (id) => {
+    try {
+      const response = await apiCall(`/admin/notifications/${id}/read`, { method: 'PUT' });
+      
+      if (response.status === 'success') {
+        // Update UI locally
+        setNotifications(prev =>
+          prev.map(n => n._id === id ? { ...n, isRead: true, readAt: new Date() } : n)
+        );
+        fetchNotificationSummary();
+        showSuccess('Notification marked as read');
+      }
+    } catch (error) {
+      showError('Failed to mark as read');
+      console.error('Mark as read error:', error);
+    }
+  };
 
-// Mark all as read
-const markAllAsRead = async () => {
-  try {
-    await apiCall('/admin/notifications/mark-all-read', { method: 'PATCH' });
-    // Update UI locally
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    fetchNotificationSummary();
-  } catch (error) {
-    showError('Failed to mark all as read');
-    console.error('Mark all as read error:', error);
-  }
-};
+  // Mark all as read - Updated to match new API endpoint
+  const markAllAsRead = async () => {
+    try {
+      const response = await apiCall('/admin/notifications/read-all', { method: 'PUT' });
+      
+      if (response.status === 'success') {
+        // Update UI locally
+        setNotifications(prev => prev.map(n => ({ ...n, isRead: true, readAt: new Date() })));
+        fetchNotificationSummary();
+        showSuccess(`${response.data.updatedCount} notifications marked as read`);
+      }
+    } catch (error) {
+      showError('Failed to mark all as read');
+      console.error('Mark all as read error:', error);
+    }
+  };
 
-// Delete one notification
-const deleteNotification = async (id) => {
-  try {
-    await apiCall(`/admin/notifications/${id}`, { method: 'DELETE' });
-    // Remove locally
-    setNotifications(prev => prev.filter(n => n._id !== id));
-    fetchNotificationSummary();
-  } catch (error) {
-    showError('Failed to delete notification');
-    console.error('Delete notification error:', error);
-  }
-};
+  // Delete one notification - Updated to match new API endpoint
+  const deleteNotification = async (id) => {
+    try {
+      const response = await apiCall(`/admin/notifications/${id}`, { method: 'DELETE' });
+      
+      if (response.status === 'success') {
+        // Remove locally
+        setNotifications(prev => prev.filter(n => n._id !== id));
+        fetchNotificationSummary();
+        showSuccess('Notification deleted successfully');
+      }
+    } catch (error) {
+      showError('Failed to delete notification');
+      console.error('Delete notification error:', error);
+    }
+  };
 
-
-  // Bulk operations
+  // Bulk operations - Updated to match new API endpoints
   const handleBulkAction = async (action) => {
     if (selectedNotifications.length === 0) {
       showError('Please select notifications first');
@@ -153,28 +181,41 @@ const deleteNotification = async (id) => {
     }
 
     try {
+      let response;
       if (action === 'read') {
-        await apiCall('/admin/notifications/bulk-read', {
+        response = await apiCall('/admin/notifications/bulk-read', {
           method: 'PUT',
-          body: JSON.stringify({ notificationIds: selectedNotifications })
+          body: JSON.stringify({ notificationIds: selectedNotifications }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
         });
-        showSuccess(`${selectedNotifications.length} notifications marked as read`);
         
-        setNotifications(prev => prev.map(notif => 
-          selectedNotifications.includes(notif._id) 
-            ? { ...notif, isRead: true, readAt: new Date() }
-            : notif
-        ));
+        if (response.status === 'success') {
+          showSuccess(`${response.data.updatedCount} notifications marked as read`);
+          
+          setNotifications(prev => prev.map(notif => 
+            selectedNotifications.includes(notif._id) 
+              ? { ...notif, isRead: true, readAt: new Date() }
+              : notif
+          ));
+        }
       } else if (action === 'delete') {
-        await apiCall('/admin/notifications/bulk-delete', {
+        response = await apiCall('/admin/notifications/bulk-delete', {
           method: 'DELETE',
-          body: JSON.stringify({ notificationIds: selectedNotifications })
+          body: JSON.stringify({ notificationIds: selectedNotifications }),
+          headers: {
+            'Content-Type': 'application/json'
+          }
         });
-        showSuccess(`${selectedNotifications.length} notifications deleted`);
         
-        setNotifications(prev => 
-          prev.filter(notif => !selectedNotifications.includes(notif._id))
-        );
+        if (response.status === 'success') {
+          showSuccess(`${response.data.deletedCount} notifications deleted`);
+          
+          setNotifications(prev => 
+            prev.filter(notif => !selectedNotifications.includes(notif._id))
+          );
+        }
       }
       
       setSelectedNotifications([]);
@@ -184,20 +225,38 @@ const deleteNotification = async (id) => {
     }
   };
 
-  // Send broadcast notification
-  const sendBroadcastNotification = async (notificationData) => {
+  // Send broadcast notification - Updated to match new API endpoint
+  const sendBroadcastNotification = async (e) => {
+    e.preventDefault();
     try {
-    await apiCall('/admin/notifications/broadcast', {
-      method: 'POST',
-      body: JSON.stringify(notificationData)
-    });
-    showSuccess('Notification broadcasted successfully');
-    fetchNotifications();
-    fetchNotificationSummary();
-  } catch (error) {
-    showError('Failed to broadcast notification');
-    console.error('Broadcast notification error:', error);
-  }
+      setLoading(true);
+      const response = await apiCall('/notifications/broadcast', {
+        method: 'POST',
+        body: JSON.stringify(broadcastForm),
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.status === 'success') {
+        showSuccess(`Notification sent to ${response.data.sentCount} users`);
+        setShowBroadcastModal(false);
+        setBroadcastForm({
+          userType: 'all',
+          title: '',
+          message: '',
+          priority: 'medium',
+          type: 'system_announcement'
+        });
+        fetchNotifications();
+        fetchNotificationSummary();
+      }
+    } catch (error) {
+      showError('Failed to broadcast notification');
+      console.error('Broadcast notification error:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Get notification icon
@@ -216,7 +275,11 @@ const deleteNotification = async (id) => {
       'security_alert': AlertTriangle,
       'rating_request': Star,
       'profile_update': Users,
-      'load_cancelled': X
+      'load_cancelled': X,
+      'subscription_request': DollarSign,
+      'subscription_approved': CheckCircle,
+      'subscription_rejected': X,
+      'system_announcement': Info
     };
 
     const IconComponent = iconMap[type] || Bell;
@@ -254,7 +317,7 @@ const deleteNotification = async (id) => {
         <div className="flex items-center gap-4">
           <h2 className="text-xl font-semibold flex items-center gap-2">
             <Bell className="w-6 h-6" />
-            Notifications
+            Admin Notifications
           </h2>
           <div className="flex items-center gap-2">
             <span className="px-2 py-1 bg-blue-100 text-blue-700 text-sm rounded-full">
@@ -316,6 +379,18 @@ const deleteNotification = async (id) => {
               {filters.unread ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               {filters.unread ? 'Show All' : 'Unread Only'}
             </button>
+
+            <select
+              value={filters.type}
+              onChange={(e) => setFilters(prev => ({ ...prev, type: e.target.value }))}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="all">All Types</option>
+              <option value="subscription_request">Subscription Requests</option>
+              <option value="verification_request">Verification Requests</option>
+              <option value="system_announcement">System Announcements</option>
+              <option value="security_alert">Security Alerts</option>
+            </select>
 
             <select
               value={filters.priority}
@@ -497,6 +572,26 @@ const deleteNotification = async (id) => {
 
                       <p className="text-gray-600 mb-3">{notification.message}</p>
 
+                      {/* Show user details if available */}
+                      {(notification.userName || notification.userEmail) && (
+                        <div className="bg-gray-50 p-3 rounded-lg mb-3">
+                          <div className="text-sm text-gray-600">
+                            {notification.userName && (
+                              <div><strong>User:</strong> {notification.userName}</div>
+                            )}
+                            {notification.userEmail && (
+                              <div><strong>Email:</strong> {notification.userEmail}</div>
+                            )}
+                            {notification.data?.planName && (
+                              <div><strong>Plan:</strong> {notification.data.planName}</div>
+                            )}
+                            {notification.data?.amount && (
+                              <div><strong>Amount:</strong> {notification.data.currency} {notification.data.amount}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4 text-sm text-gray-500">
                           <span className="flex items-center gap-1">
@@ -598,9 +693,10 @@ const deleteNotification = async (id) => {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 >
-                  <option value="all">All Users</option>
-                  <option value="driver">All Drivers</option>
-                  <option value="cargo_owner">All Cargo Owners</option>
+                  <option value="system_announcement">System Announcement</option>
+                  <option value="security_alert">Security Alert</option>
+                  <option value="system_maintenance">System Maintenance</option>
+                  <option value="policy_update">Policy Update</option>
                 </select>
               </div>
 
