@@ -59,6 +59,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/notifications',adminNotificationsRoute);
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
