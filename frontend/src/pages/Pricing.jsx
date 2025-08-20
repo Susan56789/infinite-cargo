@@ -24,7 +24,7 @@ const Pricing = () => {
       icon: Shield,
       popular: false,
       features: [
-        'Post up to 3 loads/month',
+        'Post 1 load/month',
         'Access verified driver list',
         'Basic email support',
         'Driver ratings & reviews',
@@ -48,7 +48,7 @@ const Pricing = () => {
       icon: Star,
       popular: true,
       features: [
-        'Unlimited load posting',
+        'Post 25 loads/month',
         'Priority driver matching',
         'In-app messaging system',
         'Real-time shipment tracking',
@@ -72,7 +72,7 @@ const Pricing = () => {
       icon: Building,
       popular: false,
       features: [
-        'Everything in Pro Plan',
+        'Post 100 Loads/month',
         'Dedicated account manager',
         '24/7 priority phone support',
         'Monthly performance reports',
