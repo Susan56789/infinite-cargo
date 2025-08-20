@@ -25,7 +25,7 @@ const SUBSCRIPTION_PLANS = {
   basic: {
     id: 'basic', 
     name: 'Basic Plan',
-    maxLoads: 3,
+    maxLoads: 1,
     features: ['Basic support', 'Load posting', 'Basic analytics'],
     price: 0,
     duration: 30 // days
@@ -286,7 +286,7 @@ router.get('/plans', auth, async (req, res) => {
         price: 0,
         currency: 'KES',
         interval: 'monthly',
-        maxLoads: 3,
+        maxLoads: 1,
         features: [
           'Post up to 3 loads per month',
           'Basic analytics',

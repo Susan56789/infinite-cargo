@@ -31,8 +31,8 @@ const createSuperAdminDirect = async () => {
     // Check if admin already exists
     const existingAdmin = await adminCollection.findOne({
       $or: [
-        { email: 'sue.neemoh@gmail.com' },
-        { phone: '0739456722' }
+        { email: 'infinitecargo254@gmail.com' },
+        { phone: '0722483468' }
       ]
     });
     
@@ -47,14 +47,14 @@ const createSuperAdminDirect = async () => {
     // Hash password
     console.log('🔐 Hashing password...');
     const salt = await bcrypt.genSalt(12);
-    const hashedPassword = await bcrypt.hash('Sue@Admin2030!', salt);
+    const hashedPassword = await bcrypt.hash('Admin@254Cargo!', salt);
     
     // Prepare admin document
     const adminDoc = {
-      name: 'Sue Neemoh',
-      email: 'sue.neemoh@gmail.com',
+      name: 'Dayib Gedi',
+      email: 'infinitecargo254@gmail.com',
       password: hashedPassword,
-      phone: '0739456722',
+      phone: '0722483468',
       role: 'super_admin',
       permissions: {
         manageUsers: true,
@@ -109,7 +109,7 @@ const createSuperAdminDirect = async () => {
     // Verify the creation
     console.log('🔍 Verifying admin creation...');
     const createdAdmin = await adminCollection.findOne({
-      email: 'sue.neemoh@gmail.com'
+      email: 'infinitecargo254@gmail.com'
     });
     
     if (createdAdmin) {
@@ -129,8 +129,8 @@ const createSuperAdminDirect = async () => {
       });
       
       console.log('\n🔑 Login Credentials:');
-      console.log('   Email: sue.neemoh@gmail.com');
-      console.log('   Password: Sue@Admin2030!');
+      console.log('   Email: infinitecargo254@gmail.com');
+      console.log('   Password: Admin@254Cargo!');
       
     } else {
       console.log('❌ Failed to verify admin creation');
@@ -163,7 +163,7 @@ const testAdminLogin = async () => {
     
     // Find admin
     const admin = await adminCollection.findOne({
-      email: 'sue.neemoh@gmail.com'
+      email: 'infinitecargo254@gmail.com'
     });
     
     if (!admin) {
@@ -172,7 +172,7 @@ const testAdminLogin = async () => {
     }
     
     // Test password
-    const passwordMatch = await bcrypt.compare('Sue@Admin2030!', admin.password);
+    const passwordMatch = await bcrypt.compare('Admin@254Cargo!', admin.password);
     console.log(`Password test: ${passwordMatch ? '✅ Pass' : '❌ Fail'}`);
     
     // Test admin properties
