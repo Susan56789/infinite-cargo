@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  Search, RefreshCw, Package, Plus, Eye, Ban, 
+  Search, RefreshCw, Package, Eye, Ban, 
   MapPin, ArrowRight, ChevronLeft, Calendar, Clock, 
   Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
-  AlertCircle, CheckCircle, XCircle, MoreVertical,
-  Download, ChevronRight, Trash2, Edit2, MoreHorizontal,
-  Play, Pause, Square, CheckCircle2, AlertTriangle,
-  X, Save
+  AlertCircle, CheckCircle, XCircle,
+  Download, ChevronRight, Trash2, Edit2,
+   Pause,  CheckCircle2, 
+  X, Save, Settings
 } from 'lucide-react';
 
 import {getAuthHeader, logout, getUser} from '../../utils/auth'; 
 
-const LoadsTab = ({ onNavigateToLoadDetail }) => {
+const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   // State management
   const [filters, setFilters] = useState({
     search: '',
@@ -30,44 +30,19 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
   
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [showLoadForm, setShowLoadForm] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [error, setError] = useState('');
   const [selectedLoads, setSelectedLoads] = useState(new Set());
   const [loads, setLoads] = useState([]);
-  const [editingLoad, setEditingLoad] = useState(null);
   const [user, setUser] = useState(null);
-  const [subscriptionStatus, setSubscriptionStatus] = useState(null);
   const [dropdownOpenId, setDropdownOpenId] = useState(null);
-  const [loadForm, setLoadForm] = useState({
-    title: '',
-    description: '',
-    pickupLocation: '',
-    deliveryLocation: '',
-    pickupAddress: '',
-    deliveryAddress: '',
-    weight: '',
-    cargoType: 'other',
-    vehicleType: 'small_truck',
-    vehicleCapacityRequired: '',
-    budget: '',
-    pickupDate: '',
-    deliveryDate: '',
-    specialInstructions: '',
-    isUrgent: false
-  });
+  const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
+  const [statusUpdateData, setStatusUpdateData] = useState({ loadId: '', newStatus: '', reason: '' });
   const [pagination, setPagination] = useState({
     page: 1,
     limit: 10,
     total: 0,
     totalPages: 0
-  });
-  const [summary, setSummary] = useState({
-    totalLoads: 0,
-    activeLoads: 0,
-    completedLoads: 0,
-    totalBudget: 0,
-    avgBudget: 0
   });
 
   // API Configuration
@@ -79,28 +54,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
       ...authHeader,
       'Content-Type': 'application/json'
     };
-  };
-
-  // Load form reset function
-  const resetForm = () => {
-    setLoadForm({
-      title: '',
-      description: '',
-      pickupLocation: '',
-      deliveryLocation: '',
-      pickupAddress: '',
-      deliveryAddress: '',
-      weight: '',
-      cargoType: 'other',
-      vehicleType: 'small_truck',
-      vehicleCapacityRequired: '',
-      budget: '',
-      pickupDate: '',
-      deliveryDate: '',
-      specialInstructions: '',
-      isUrgent: false,
-      user: getUser(),
-    });
   };
 
   // Status configuration with icons and colors
@@ -115,7 +68,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
       label: 'Receiving Bids',
       icon: <Clock className="h-3 w-3" />,
       color: 'bg-yellow-100 text-yellow-800',
-      nextStates: ['assigned', 'not_available', 'cancelled']
+      nextStates: ['assigned', 'driver_assigned', 'not_available', 'cancelled']
     },
     assigned: {
       label: 'Assigned',
@@ -167,24 +120,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     }
   };
 
-  // Fetch subscription status
-  const fetchSubscriptionStatus = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/loads/subscription-status`, {
-        method: 'GET',
-        headers: getAuthHeaders()
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === 'success') {
-          setSubscriptionStatus(data.data);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching subscription status:', err);
-    }
-  }, [API_BASE_URL]);
+  
 
   const fetchUserProfile = () => {
     const user = getUser();
@@ -214,6 +150,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     setUser({ displayName: 'Anonymous Cargo Owner', ...user });
   };
 
+  // Fixed API endpoint to use the correct route
   const fetchLoads = useCallback(
     async (page = 1, customFilters = null) => {
       try {
@@ -225,7 +162,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         setError('');
 
         const currentFilters = customFilters || filters;
-
         const queryParams = new URLSearchParams();
 
         queryParams.append('page', page.toString());
@@ -241,19 +177,11 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           queryParams.append('status', currentFilters.status);
         }
 
-        if (
-          currentFilters.minBudget !== undefined &&
-          currentFilters.minBudget !== null &&
-          currentFilters.minBudget !== ''
-        ) {
+        if (currentFilters.minBudget !== undefined && currentFilters.minBudget !== null && currentFilters.minBudget !== '') {
           queryParams.append('minBudget', String(currentFilters.minBudget));
         }
 
-        if (
-          currentFilters.maxBudget !== undefined &&
-          currentFilters.maxBudget !== null &&
-          currentFilters.maxBudget !== ''
-        ) {
+        if (currentFilters.maxBudget !== undefined && currentFilters.maxBudget !== null && currentFilters.maxBudget !== '') {
           queryParams.append('maxBudget', String(currentFilters.maxBudget));
         }
 
@@ -261,6 +189,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           queryParams.append('urgentOnly', 'true');
         }
 
+        // Use the correct endpoint from the API - user/my-loads
         const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
         const headers = getAuthHeaders();
 
@@ -274,10 +203,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           }
           if (response.status === 403) {
             setError('Access denied. Only cargo owners can view loads.');
-            return;
-          }
-          if (response.status === 500) {
-            setError('Server error. Please try again later.');
             return;
           }
 
@@ -299,153 +224,33 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
               totalPages: data.data.pagination.totalPages
             });
           }
-
-          if (data.data?.summary) {
-            setSummary(data.data.summary);
-          }
-
-          if (data.fallback) {
-            setError(
-              'Data loaded successfully, but some features may be limited due to server issues.'
-            );
-          }
         } else {
           throw new Error(data.message || 'Failed to fetch loads.');
         }
       } catch (err) {
         console.error('Error fetching loads:', err);
-
-        if (err.message.includes('Network') || err.name === 'TypeError') {
-          setError('Network error. Please check your connection and try again.');
-        } else if (
-          err.message.includes('Authentication') ||
-          err.message.includes('Session expired')
-        ) {
-          setError('Please log in to view your loads.');
-        } else {
-          setError(err.message || 'Failed to load data. Please try again.');
-        }
-
+        setError(err.message || 'Failed to load data. Please try again.');
         setLoads([]);
       } finally {
         setLoading(false);
         setInitialLoading(false);
       }
     },
-    [filters, sortConfig, pagination.limit, API_BASE_URL]
+    [filters, sortConfig, pagination.limit]
   );
 
-  // Create or update load
-  const submitLoad = async (e, formDataWithOwner) => {
-    e.preventDefault();
-    
+  // Update load status with modal confirmation
+  const updateLoadStatus = async () => {
     try {
       setLoading(true);
       setError('');
 
-      // Validation
-      if (!formDataWithOwner.title?.trim()) {
-        throw new Error('Load title is required');
-      }
-      if (!formDataWithOwner.pickupLocation?.trim()) {
-        throw new Error('Pickup location is required');
-      }
-      if (!formDataWithOwner.deliveryLocation?.trim()) {
-        throw new Error('Delivery location is required');
-      }
-      if (!formDataWithOwner.weight || parseFloat(formDataWithOwner.weight) <= 0) {
-        throw new Error('Valid weight is required');
-      }
-      if (!formDataWithOwner.budget || parseFloat(formDataWithOwner.budget) < 100) {
-        throw new Error('Budget must be at least KES 100');
-      }
-      if (!formDataWithOwner.pickupDate) {
-        throw new Error('Pickup date is required');
-      }
-      if (!formDataWithOwner.deliveryDate) {
-        throw new Error('Delivery date is required');
-      }
-      if (!formDataWithOwner.vehicleCapacityRequired || parseFloat(formDataWithOwner.vehicleCapacityRequired) <= 0) {
-        throw new Error('Vehicle capacity is required');
-      }
-
-      // Date validation
-      const pickupDate = new Date(formDataWithOwner.pickupDate);
-      const deliveryDate = new Date(formDataWithOwner.deliveryDate);
-      const now = new Date();
-
-      if (pickupDate < now) {
-        throw new Error('Pickup date cannot be in the past');
-      }
-
-      if (pickupDate >= deliveryDate) {
-        throw new Error('Delivery date must be after pickup date');
-      }
-
-      const method = editingLoad ? 'PUT' : 'POST';
-      const endpoint = editingLoad 
-        ? `${API_BASE_URL}/loads/${editingLoad}`
-        : `${API_BASE_URL}/loads`;
-
-
-      const response = await fetch(endpoint, {
-        method,
-        headers: getAuthHeaders(),
-        body: JSON.stringify(formDataWithOwner)
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to save load';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.message || errorMessage;
-          
-          if (errorData.errors && Array.isArray(errorData.errors)) {
-            const errorMessages = errorData.errors.map(err => err.message || err.msg).join(', ');
-            errorMessage = errorMessages;
-          }
-        } catch (parseError) {
-          const errorText = await response.text();
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-      
-      if (data.status === 'success') {
-        setShowLoadForm(false);
-        resetForm();
-        setEditingLoad(null);
-        // Refresh the loads list
-        await fetchLoads(pagination.page);
-        // Also refresh subscription status to update usage
-        await fetchSubscriptionStatus();
-      } else {
-        throw new Error(data.message || 'Failed to save load');
-      }
-
-    } catch (err) {
-      console.error('Error submitting load:', err);
-      setError(err.message || 'Failed to save load');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Update load status
-  const updateLoadStatus = async (loadId, newStatus, reason = '') => {
-    try {
-      setLoading(true);
-      setError('');
-      setDropdownOpenId(null); // Close dropdown after selection
-
-      const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
+      const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({ 
-          status: newStatus,
-          reason: reason || `Status changed to ${statusConfig[newStatus]?.label || newStatus}`
+          status: statusUpdateData.newStatus,
+          reason: statusUpdateData.reason || `Status changed to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`
         })
       });
 
@@ -464,7 +269,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           const errorText = await response.text();
           errorMessage = errorText || errorMessage;
         }
-
         throw new Error(errorMessage);
       }
 
@@ -474,14 +278,15 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         // Update the load in the local state
         setLoads(prevLoads => 
           prevLoads.map(load =>
-            load._id === loadId ? { 
+            load._id === statusUpdateData.loadId ? { 
               ...load, 
-              status: newStatus,
+              status: statusUpdateData.newStatus,
               updatedAt: new Date().toISOString()
             } : load
           )
         );
-
+        setShowStatusUpdateModal(false);
+        setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
       } else {
         throw new Error(data.message || 'Failed to update load status');
       }
@@ -520,19 +325,12 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
       const data = await response.json();
       
       if (data.status === 'success') {
-        // Remove from local state
         setLoads(loads.filter(load => load._id !== loadId));
         setSelectedLoads(prev => {
           const newSet = new Set(prev);
           newSet.delete(loadId);
           return newSet;
         });
-        
-        // Update summary
-        setSummary(prev => ({
-          ...prev,
-          totalLoads: prev.totalLoads - 1
-        }));
       } else {
         throw new Error(data.message || 'Failed to delete load');
       }
@@ -549,7 +347,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     const initializeData = async () => {
       await Promise.all([
         fetchUserProfile(),
-        fetchSubscriptionStatus(),
         fetchLoads(1)
       ]);
     };
@@ -622,11 +419,11 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
   };
 
   const canEditLoad = (load) => {
-    return ['posted', 'receiving_bids'].includes(load.status);
+    return ['posted','available', 'receiving_bids', 'not_available'].includes(load.status);
   };
 
   const canDeleteLoad = (load) => {
-    return ['posted', 'receiving_bids', 'not_available'].includes(load.status);
+    return ['posted','available', 'receiving_bids', 'not_available'].includes(load.status);
   };
 
   const canChangeStatus = (load) => {
@@ -642,47 +439,16 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     });
   };
 
-  const handlePostLoadClick = () => {
-    // Check subscription limits
-    if (subscriptionStatus && subscriptionStatus.usage) {
-      const { maxLoads, remainingLoads } = subscriptionStatus.usage;
-      
-      if (maxLoads !== -1 && remainingLoads <= 0) {
-        setError(`You've reached your monthly limit of ${maxLoads} loads. Upgrade your plan to post more loads.`);
-        return;
-      }
-    }
-
-    setEditingLoad(null);
-    resetForm();
-    setShowLoadForm(true);
-  };
-
   const handleEditLoad = (load) => {
     if (!canEditLoad(load)) {
       setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
       return;
     }
 
-    setEditingLoad(load._id);
-    setLoadForm({
-      title: load.title || '',
-      description: load.description || '',
-      pickupLocation: load.pickupLocation?.address || load.pickupAddress || load.pickupLocation || '',
-      deliveryLocation: load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation || '',
-      pickupAddress: load.pickupAddress || '',
-      deliveryAddress: load.deliveryAddress || '',
-      weight: load.weight?.toString() || '',
-      cargoType: load.cargoType || 'other',
-      vehicleType: load.vehicleType || 'small_truck',
-      vehicleCapacityRequired: load.vehicleCapacityRequired?.toString() || '',
-      budget: load.budget?.toString() || '',
-      pickupDate: load.pickupDate ? new Date(load.pickupDate).toISOString().slice(0, 16) : '',
-      deliveryDate: load.deliveryDate ? new Date(load.deliveryDate).toISOString().slice(0, 16) : '',
-      specialInstructions: load.specialInstructions || '',
-      isUrgent: load.isUrgent || load.urgent || false
-    });
-    setShowLoadForm(true);
+    // Call the parent's onEditLoad function if provided
+    if (onEditLoad) {
+      onEditLoad(load);
+    }
   };
 
   const onRefresh = () => {
@@ -701,7 +467,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
       const loadIds = Array.from(selectedLoads);
 
       if (action === 'export') {
-        // Create a simple CSV export
         const selectedLoadData = loads.filter(load => selectedLoads.has(load._id));
         const csvContent = [
           'Title,Description,Pickup Location,Delivery Location,Weight (kg),Budget (KES),Status,Created Date',
@@ -728,11 +493,9 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         document.body.removeChild(a);
         
       } else if (action === 'cancel') {
-        // Bulk cancel selected loads
-        const promises = loadIds.map(loadId => 
-          updateLoadStatus(loadId, 'cancelled', 'Bulk cancellation')
-        );
-        await Promise.all(promises);
+        for (const loadId of loadIds) {
+          await updateLoadStatusById(loadId, 'cancelled', 'Bulk cancellation');
+        }
       }
       
       setSelectedLoads(new Set());
@@ -741,6 +504,28 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const updateLoadStatusById = async (loadId, newStatus, reason = '') => {
+    const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ status: newStatus, reason })
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update status');
+    }
+
+    setLoads(prevLoads => 
+      prevLoads.map(load =>
+        load._id === loadId ? { 
+          ...load, 
+          status: newStatus,
+          updatedAt: new Date().toISOString()
+        } : load
+      )
+    );
   };
 
   const toggleLoadSelection = (loadId) => {
@@ -771,30 +556,24 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     if (onNavigateToLoadDetail) {
       onNavigateToLoadDetail(loadId);
     } else {
-      // Fallback navigation - you might want to use React Router here
       window.location.href = `/loads/${loadId}`;
     }
   };
 
-  const handleUpdateLoadStatus = async (loadId, newStatus) => {
-    const confirmMessage = `Are you sure you want to change the status to "${getStatusLabel(newStatus)}"?`;
-    
-    if (window.confirm(confirmMessage)) {
-      await updateLoadStatus(loadId, newStatus);
-    }
+  const handleUpdateLoadStatus = (loadId, newStatus) => {
+    setStatusUpdateData({
+      loadId,
+      newStatus,
+      reason: ''
+    });
+    setShowStatusUpdateModal(true);
+    setDropdownOpenId(null);
   };
 
   const handleDeleteLoad = async (loadId) => {
     if (window.confirm('Are you sure you want to delete this load? This action cannot be undone.')) {
       await deleteLoad(loadId);
     }
-  };
-
-  const handleCloseModal = () => {
-    setShowLoadForm(false);
-    setEditingLoad(null);
-    resetForm();
-    setError(''); // Clear any form errors
   };
 
   const clearFilters = () => {
@@ -827,8 +606,9 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           }}
           className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
           disabled={loading}
+          title="Update Status"
         >
-          <MoreVertical className="h-4 w-4" />
+          <Settings className="h-4 w-4" />
         </button>
         
         {isOpen && (
@@ -857,287 +637,72 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
     );
   };
 
-  // Load Form Modal Component
-  const LoadFormModal = ({ isOpen, onClose, onSubmit, formData, setFormData, loading, editing, error, user }) => {
-    if (!isOpen) return null;
-
-    const handleSubmit = (e) => {
-      const formDataWithOwner = {
-        ...formData,
-        user: user
-      };
-      onSubmit(e, formDataWithOwner);
-    };
-
-    const handleInputChange = (field, value) => {
-      setFormData(prev => ({
-        ...prev,
-        [field]: value
-      }));
-    };
+  // Status Update Modal
+  const StatusUpdateModal = () => {
+    if (!showStatusUpdateModal) return null;
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between p-6 border-b">
-            <h2 className="text-xl font-semibold text-gray-900">
-              {editing ? 'Edit Load' : 'Post New Load'}
-            </h2>
+        <div className="bg-white rounded-lg max-w-md w-full p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Update Load Status</h3>
             <button
-              onClick={onClose}
+              onClick={() => setShowStatusUpdateModal(false)}
               className="text-gray-400 hover:text-gray-600"
-              disabled={loading}
             >
               <X className="h-6 w-6" />
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="p-6 space-y-6">
-            {error && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <div className="flex items-center">
-                  <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
-                  <span className="text-red-800">{error}</span>
-                </div>
-              </div>
-            )}
+          <div className="mb-4">
+            <p className="text-sm text-gray-600 mb-2">
+              Change status to:
+            </p>
+            <span className={`inline-flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium ${getStatusColor(statusUpdateData.newStatus)}`}>
+              {getStatusIcon(statusUpdateData.newStatus)}
+              {getStatusLabel(statusUpdateData.newStatus)}
+            </span>
+          </div>
 
-            {/* Load Title */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Load Title <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.title}
-                onChange={(e) => handleInputChange('title', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Enter a descriptive title for your load"
-                required
-              />
-            </div>
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Reason (optional)
+            </label>
+            <textarea
+              value={statusUpdateData.reason}
+              onChange={(e) => setStatusUpdateData(prev => ({ ...prev, reason: e.target.value }))}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Enter reason for status change..."
+            />
+          </div>
 
-            {/* Description */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Description
-              </label>
-              <textarea
-                value={formData.description}
-                onChange={(e) => handleInputChange('description', e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Describe your cargo and any special requirements"
-              />
-            </div>
-
-            {/* Pickup and Delivery Locations */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Pickup Location <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.pickupLocation}
-                  onChange={(e) => handleInputChange('pickupLocation', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="e.g., Nairobi, Kenya"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Delivery Location <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.deliveryLocation}
-                  onChange={(e) => handleInputChange('deliveryLocation', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="e.g., Mombasa, Kenya"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Weight and Cargo Type */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Weight (kg) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  value={formData.weight}
-                  onChange={(e) => handleInputChange('weight', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="Enter weight in kg"
-                  min="0.1"
-                  step="0.1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Cargo Type
-                </label>
-                <select
-                  value={formData.cargoType}
-                  onChange={(e) => handleInputChange('cargoType', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="other">Other</option>
-                  <option value="electronics">Electronics</option>
-                  <option value="furniture">Furniture</option>
-                  <option value="clothing">Clothing</option>
-                  <option value="food">Food Items</option>
-                  <option value="industrial">Industrial</option>
-                  <option value="automotive">Automotive</option>
-                  <option value="construction">Construction Materials</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Vehicle Type and Capacity */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Vehicle Type
-                </label>
-                <select
-                  value={formData.vehicleType}
-                  onChange={(e) => handleInputChange('vehicleType', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="small_truck">Small Truck (1-3 tons)</option>
-                  <option value="medium_truck">Medium Truck (3-8 tons)</option>
-                  <option value="large_truck">Large Truck (8+ tons)</option>
-                  <option value="van">Van</option>
-                  <option value="pickup">Pickup Truck</option>
-                  <option value="trailer">Trailer</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Vehicle Capacity Required (tons) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  value={formData.vehicleCapacityRequired}
-                  onChange={(e) => handleInputChange('vehicleCapacityRequired', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="Minimum capacity needed"
-                  min="0.1"
-                  step="0.1"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Budget */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Budget (KES) <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="number"
-                value={formData.budget}
-                onChange={(e) => handleInputChange('budget', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Enter your budget in Kenyan Shillings"
-                min="100"
-                required
-              />
-            </div>
-
-            {/* Pickup and Delivery Dates */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Pickup Date & Time <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="datetime-local"
-                  value={formData.pickupDate}
-                  onChange={(e) => handleInputChange('pickupDate', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  min={new Date().toISOString().slice(0, 16)}
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Delivery Date & Time <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="datetime-local"
-                  value={formData.deliveryDate}
-                  onChange={(e) => handleInputChange('deliveryDate', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  min={formData.pickupDate || new Date().toISOString().slice(0, 16)}
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Special Instructions */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Special Instructions
-              </label>
-              <textarea
-                value={formData.specialInstructions}
-                onChange={(e) => handleInputChange('specialInstructions', e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="Any special handling requirements, access restrictions, or additional notes"
-              />
-            </div>
-
-            {/* Urgent Checkbox */}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="urgent"
-                checked={formData.isUrgent}
-                onChange={(e) => handleInputChange('isUrgent', e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="urgent" className="ml-2 text-sm text-gray-700">
-                This is an urgent delivery
-              </label>
-            </div>
-
-            {/* Form Actions */}
-            <div className="flex items-center justify-end space-x-4 pt-6 border-t">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    {editing ? 'Updating...' : 'Creating...'}
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4" />
-                    {editing ? 'Update Load' : 'Post Load'}
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
+          <div className="flex items-center justify-end space-x-4">
+            <button
+              onClick={() => setShowStatusUpdateModal(false)}
+              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={updateLoadStatus}
+              disabled={loading}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  Update Status
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1161,108 +726,12 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         </div>
       )}
 
-      {/* Header with Summary Stats */}
+      {/* Header */}
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">My Loads</h2>
-            <p className="text-gray-600">Manage and track your freight loads</p>
-          </div>
-          <button
-            onClick={handlePostLoadClick}
-            disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" />
-            Post New Load
-          </button>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">My Loads</h2>
+          <p className="text-gray-600">Manage and track your freight loads</p>
         </div>
-
-        {/* Summary Cards */}
-        {summary && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-white p-4 rounded-lg border border-gray-200">
-              <div className="flex items-center">
-                <Package className="h-8 w-8 text-blue-600" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Total Loads</p>
-                  <p className="text-2xl font-bold text-gray-900">{summary.totalLoads || 0}</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-4 rounded-lg border border-gray-200">
-              <div className="flex items-center">
-                <Clock className="h-8 w-8 text-yellow-600" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Active Loads</p>
-                  <p className="text-2xl font-bold text-gray-900">{summary.activeLoads || 0}</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-4 rounded-lg border border-gray-200">
-              <div className="flex items-center">
-                <CheckCircle className="h-8 w-8 text-green-600" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Completed</p>
-                  <p className="text-2xl font-bold text-gray-900">{summary.completedLoads || 0}</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-4 rounded-lg border border-gray-200">
-              <div className="flex items-center">
-                <Package className="h-8 w-8 text-purple-600" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Avg Budget</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {formatCurrency(summary.avgBudget || 0)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Subscription Usage Warning */}
-        {subscriptionStatus && subscriptionStatus.usage && subscriptionStatus.usage.maxLoads !== -1 && (
-          <div className={`p-4 rounded-lg ${
-            subscriptionStatus.usage.remainingLoads <= 0 
-              ? 'bg-red-50 border border-red-200' 
-              : subscriptionStatus.usage.remainingLoads <= 2
-              ? 'bg-yellow-50 border border-yellow-200'
-              : 'bg-blue-50 border border-blue-200'
-          }`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className={`text-sm font-medium ${
-                  subscriptionStatus.usage.remainingLoads <= 0 
-                    ? 'text-red-800' 
-                    : subscriptionStatus.usage.remainingLoads <= 2
-                    ? 'text-yellow-800'
-                    : 'text-blue-800'
-                }`}>
-                  Monthly Usage: {subscriptionStatus.usage.loadsThisMonth} / {subscriptionStatus.usage.maxLoads} loads
-                </p>
-                <p className={`text-xs ${
-                  subscriptionStatus.usage.remainingLoads <= 0 
-                    ? 'text-red-600' 
-                    : subscriptionStatus.usage.remainingLoads <= 2
-                    ? 'text-yellow-600'
-                    : 'text-blue-600'
-                }`}>
-                  {subscriptionStatus.usage.remainingLoads > 0 
-                    ? `${subscriptionStatus.usage.remainingLoads} loads remaining this month`
-                    : 'Monthly limit reached - upgrade to post more loads'
-                  }
-                </p>
-              </div>
-              {subscriptionStatus.usage.remainingLoads <= 2 && (
-                <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
-                  Upgrade Plan
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Filters */}
@@ -1331,17 +800,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                   type="number"
                   value={filters.minBudget}
                   onChange={(e) => setFilters({ ...filters, minBudget: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="0"
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget (KES)</label>
-                <input
-                  type="number"
-                  value={filters.maxBudget}
-                  onChange={(e) => setFilters({ ...filters, maxBudget: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="999999"
                   min="0"
@@ -1421,24 +879,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         ))}
       </div>
 
-      {/* Results Summary */}
-      <div className="flex items-center justify-between">
-        <p className="text-gray-600">
-          Showing {loads.length > 0 ? ((pagination.page - 1) * pagination.limit) + 1 : 0} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} loads
-        </p>
-        {loads.length > 0 && (
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={selectedLoads.size === loads.length && loads.length > 0}
-              onChange={selectAllLoads}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-            />
-            <label className="text-sm text-gray-700">Select all</label>
-          </div>
-        )}
-      </div>
-
       {/* Loads Display */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         {initialLoading ? (
@@ -1453,23 +893,15 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
             <p className="text-gray-500 mb-6 text-center max-w-md">
               {Object.values(filters).some(filter => filter && filter !== false)
                 ? 'No loads match your current filters. Try adjusting your search criteria.'
-                : 'You haven\'t posted any loads yet. Create your first load to get started.'
+                : 'You haven\'t posted any loads yet.'
               }
             </p>
-            {Object.values(filters).some(filter => filter && filter !== false) ? (
+            {Object.values(filters).some(filter => filter && filter !== false) && (
               <button
                 onClick={clearFilters}
                 className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
               >
                 Clear Filters
-              </button>
-            ) : (
-              <button
-                onClick={handlePostLoadClick}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
-              >
-                <Plus className="h-4 w-4" />
-                Post Your First Load
               </button>
             )}
           </div>
@@ -1541,11 +973,11 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                               </p>
                             )}
                             <div className="flex items-center mt-1 text-xs text-gray-500">
-                              <span>{load.weight} kg</span>
+                              <span>{load?.weight} kg</span>
                               <span className="mx-1">•</span>
-                              <span className="capitalize">{load.cargoType?.replace('_', ' ')}</span>
+                              <span className="capitalize">{load?.cargoType?.replace('_', ' ')}</span>
                               <span className="mx-1">•</span>
-                              <span className="capitalize">{load.vehicleType?.replace('_', ' ')}</span>
+                              <span className="capitalize">{load?.vehicleType?.replace('_', ' ')}</span>
                             </div>
                           </div>
                         </div>
@@ -1604,9 +1036,9 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                             <Clock className="h-3 w-3 mr-1 flex-shrink-0" />
                             <span className="text-xs">Delivery: {formatDate(load.deliveryDate)}</span>
                           </div>
-                          {load.daysSincePosted !== undefined && (
+                          {load.daysActive !== undefined && (
                             <div className="text-xs text-gray-400">
-                              Posted {load.daysSincePosted} day{load.daysSincePosted !== 1 ? 's' : ''} ago
+                              Posted {load.daysActive} day{load.daysActive !== 1 ? 's' : ''} ago
                             </div>
                           )}
                         </div>
@@ -1638,7 +1070,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                               <Trash2 className="h-4 w-4" />
                             </button>
                           )}
-                          <StatusDropdown load={load} />
+                          {canChangeStatus(load) && <StatusDropdown load={load} />}
                         </div>
                       </td>
                     </tr>
@@ -1747,7 +1179,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                             <Trash2 className="h-4 w-4" />
                           </button>
                         )}
-                        <StatusDropdown load={load} />
+                        {canChangeStatus(load) && <StatusDropdown load={load} />}
                       </div>
                     </div>
                   </div>
@@ -1786,17 +1218,15 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
               </p>
             </div>
             <div>
-              <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+              <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page <= 1 || loading}
                   className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  <span className="sr-only">Previous</span>
-                  <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+                  <ChevronLeft className="h-5 w-5" />
                 </button>
                 
-                {/* Page numbers */}
                 {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
                   let pageNum;
                   if (pagination.totalPages <= 5) {
@@ -1830,8 +1260,7 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
                   disabled={pagination.page >= pagination.totalPages || loading}
                   className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  <span className="sr-only">Next</span>
-                  <ChevronRight className="h-5 w-5" aria-hidden="true" />
+                  <ChevronRight className="h-5 w-5" />
                 </button>
               </nav>
             </div>
@@ -1839,21 +1268,8 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         </div>
       )}
 
-      {/* Load Form Modal */}
-      {showLoadForm && (
-        <LoadFormModal
-          isOpen={showLoadForm}
-          onClose={handleCloseModal}
-          onSubmit={submitLoad}
-          formData={loadForm}
-          setFormData={setLoadForm}
-          loading={loading}
-          editing={!!editingLoad}
-          error={error}
-          user={user}
-          subscriptionStatus={subscriptionStatus}
-        />
-      )}
+      {/* Status Update Modal */}
+      <StatusUpdateModal />
     </div>
   );
 };

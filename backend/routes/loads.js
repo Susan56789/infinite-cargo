@@ -99,134 +99,6 @@ function deg2rad(deg) {
 // =====================================================================
 // PROTECTED ROUTES FIRST (These need specific auth and route matching)
 // =====================================================================
-// @route   GET /api/loads/subscription-status
-// @desc    Get current user's subscription status
-// @access  Private
-router.get('/subscription-status', auth, async (req, res) => {
-  try {
-    console.log('Subscription status request for user:', req.user?.id);
-
-    // Check authentication
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'Unauthorized - no valid user session'
-      });
-    }
-
-    // Get user with subscription details
-    const User = require('../models/user');
-    const user = await User.findById(req.user.id)
-      .select('subscriptionPlan subscriptionStatus subscriptionFeatures billing name email')
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-
-    console.log('Found user:', { id: user._id, plan: user.subscriptionPlan, status: user.subscriptionStatus });
-
-    // Get current month's load count for usage calculation
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    let loadsThisMonth = 0;
-    try {
-      loadsThisMonth = await Load.countDocuments({
-        postedBy: req.user.id,
-        createdAt: { $gte: startOfMonth }
-      });
-    } catch (loadCountError) {
-      console.warn('Error counting loads:', loadCountError);
-      // Continue with 0 count
-    }
-
-    // Define subscription plans with fallbacks
-    const subscriptionPlans = {
-      basic: {
-        name: 'Basic Plan',
-        maxLoads: 1,
-        features: ['Basic support', 'Load posting', 'Basic analytics'],
-        price: 0
-      },
-      pro: {
-        name: 'Pro Plan', 
-        maxLoads: 25,
-        features: ['Priority support', 'Advanced analytics', 'Priority listings'],
-        price: 999
-      },
-      business: {
-        name: 'Business Plan',
-        maxLoads: 100, 
-        features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
-        price: 2499
-      },
-      unlimited: {
-        name: 'Unlimited Plan',
-        maxLoads: -1,
-        features: ['Premium support', 'Unlimited loads', 'Custom integrations'],
-        price: 4999
-      }
-    };
-
-    const currentPlan = user.subscriptionPlan || 'basic';
-    const planDetails = subscriptionPlans[currentPlan] || subscriptionPlans.basic;
-    const isActive = user.subscriptionStatus === 'active' || currentPlan === 'basic';
-    
-    const maxLoads = planDetails.maxLoads;
-    const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - loadsThisMonth);
-
-    const subscriptionData = {
-      plan: currentPlan,
-      planName: planDetails.name,
-      status: user.subscriptionStatus || (currentPlan === 'basic' ? 'active' : 'inactive'),
-      isActive,
-      features: {
-        maxLoads,
-        supportLevel: currentPlan === 'basic' ? 'basic' : currentPlan === 'pro' ? 'priority' : 'premium',
-        analyticsLevel: currentPlan === 'basic' ? 'basic' : 'advanced',
-        priorityListings: currentPlan !== 'basic'
-      },
-      usage: {
-        loadsThisMonth,
-        maxLoads,
-        remainingLoads,
-        usagePercentage: maxLoads === -1 ? 0 : Math.round((loadsThisMonth / maxLoads) * 100)
-      },
-      billing: {
-        nextBillingDate: user.billing?.nextBillingDate || null,
-        amount: planDetails.price,
-        currency: 'KES',
-        interval: 'monthly'
-      },
-      limits: {
-        canCreateLoads: maxLoads === -1 || loadsThisMonth < maxLoads,
-        canAccessAnalytics: true,
-        canContactSupport: true
-      }
-    };
-
-    console.log('Returning subscription data:', subscriptionData);
-
-    res.json({
-      status: 'success',
-      data: subscriptionData
-    });
-
-  } catch (error) {
-    console.error('Get subscription status error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching subscription status',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
 // @route   GET /api/loads/user/my-loads
 // @desc    Get cargo owner's loads with detailed information
 // @access  Private (Cargo owners only)
@@ -399,6 +271,137 @@ router.get('/user/my-loads', auth, [
     });
   }
 });
+
+
+// @route   GET /api/loads/subscription-status
+// @desc    Get current user's subscription status
+// @access  Private
+router.get('/subscription-status', auth, async (req, res) => {
+  try {
+    console.log('Subscription status request for user:', req.user?.id);
+
+    // Check authentication
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Unauthorized - no valid user session'
+      });
+    }
+
+    // Get user with subscription details
+    const User = require('../models/user');
+    const user = await User.findById(req.user.id)
+      .select('subscriptionPlan subscriptionStatus subscriptionFeatures billing name email')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    console.log('Found user:', { id: user._id, plan: user.subscriptionPlan, status: user.subscriptionStatus });
+
+    // Get current month's load count for usage calculation
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    let loadsThisMonth = 0;
+    try {
+      loadsThisMonth = await Load.countDocuments({
+        postedBy: req.user.id,
+        createdAt: { $gte: startOfMonth }
+      });
+    } catch (loadCountError) {
+      console.warn('Error counting loads:', loadCountError);
+      // Continue with 0 count
+    }
+
+    // Define subscription plans with fallbacks
+    const subscriptionPlans = {
+      basic: {
+        name: 'Basic Plan',
+        maxLoads: 1,
+        features: ['Basic support', 'Load posting', 'Basic analytics'],
+        price: 0
+      },
+      pro: {
+        name: 'Pro Plan', 
+        maxLoads: 25,
+        features: ['Priority support', 'Advanced analytics', 'Priority listings'],
+        price: 999
+      },
+      business: {
+        name: 'Business Plan',
+        maxLoads: 100, 
+        features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
+        price: 2499
+      },
+      unlimited: {
+        name: 'Unlimited Plan',
+        maxLoads: -1,
+        features: ['Premium support', 'Unlimited loads', 'Custom integrations'],
+        price: 4999
+      }
+    };
+
+    const currentPlan = user.subscriptionPlan || 'basic';
+    const planDetails = subscriptionPlans[currentPlan] || subscriptionPlans.basic;
+    const isActive = user.subscriptionStatus === 'active' || currentPlan === 'basic';
+    
+    const maxLoads = planDetails.maxLoads;
+    const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - loadsThisMonth);
+
+    const subscriptionData = {
+      plan: currentPlan,
+      planName: planDetails.name,
+      status: user.subscriptionStatus || (currentPlan === 'basic' ? 'active' : 'inactive'),
+      isActive,
+      features: {
+        maxLoads,
+        supportLevel: currentPlan === 'basic' ? 'basic' : currentPlan === 'pro' ? 'priority' : 'premium',
+        analyticsLevel: currentPlan === 'basic' ? 'basic' : 'advanced',
+        priorityListings: currentPlan !== 'basic'
+      },
+      usage: {
+        loadsThisMonth,
+        maxLoads,
+        remainingLoads,
+        usagePercentage: maxLoads === -1 ? 0 : Math.round((loadsThisMonth / maxLoads) * 100)
+      },
+      billing: {
+        nextBillingDate: user.billing?.nextBillingDate || null,
+        amount: planDetails.price,
+        currency: 'KES',
+        interval: 'monthly'
+      },
+      limits: {
+        canCreateLoads: maxLoads === -1 || loadsThisMonth < maxLoads,
+        canAccessAnalytics: true,
+        canContactSupport: true
+      }
+    };
+
+    console.log('Returning subscription data:', subscriptionData);
+
+    res.json({
+      status: 'success',
+      data: subscriptionData
+    });
+
+  } catch (error) {
+    console.error('Get subscription status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching subscription status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+
 
 // @route   GET /api/loads/analytics/dashboard
 // @desc    Get dashboard analytics for current user
@@ -1535,8 +1538,8 @@ router.put('/:id', auth, [
       });
     }
 
-    // Check if load can be edited (only posted and receiving_bids status)
-    if (!['posted', 'receiving_bids'].includes(load.status)) {
+    // Check if load can be edited 
+    if (!['posted','available', 'receiving_bids'].includes(load.status)) {
       return res.status(400).json({
         status: 'error',
         message: `Cannot edit load with status: ${load.status}. Only loads with 'posted' or 'receiving_bids' status can be edited.`
@@ -1961,7 +1964,7 @@ router.get('/:id',  optionalAuth, async (req, res) => {
 // @desc    Update load status (cargo owners only)
 // @access  Private
 router.patch('/:id/status', auth, [
-  body('status').isIn(['posted', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled']),
+  body('status').isIn(['posted','available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled']),
   body('reason').optional().trim().isLength({ min: 1, max: 500 })
 ], async (req, res) => {
   try {

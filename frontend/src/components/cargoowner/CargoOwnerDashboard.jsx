@@ -1234,23 +1234,23 @@ const getSubscriptionStatus = (subscription) => {
             )}
 
             {activeTab === 'loads' && (
-              <LoadsTab 
-                filters={filters}
-                setFilters={setFilters}
-                loading={loading}
-                filteredLoads={filteredLoads}
-                canPostLoads={canPostLoads}
-                getStatusColor={getStatusColor}
-                formatCurrency={formatCurrency}
-                formatDate={formatDate}
-                onPostLoad={handlePostLoad}
-                onViewDetails={handleViewDetails}
-                onEditLoad={handleEditLoad}
-                onUpdateLoadStatus={handleUpdateLoadStatus}
-                onRefresh={fetchDashboardData}
-                setError={setError}
-              />
-            )}
+  <LoadsTab 
+    filters={filters}
+    setFilters={setFilters}
+    loading={loading}
+    filteredLoads={filteredLoads}
+    canPostLoads={canPostLoads}
+    getStatusColor={getStatusColor}
+    formatCurrency={formatCurrency}
+    formatDate={formatDate}
+    onPostLoad={handlePostLoad}
+    onViewDetails={handleViewDetails}
+    onEditLoad={handleEditLoad}  
+    onUpdateLoadStatus={handleUpdateLoadStatus}
+    onRefresh={fetchDashboardData}
+    setError={setError}
+  />
+)}
 
             {activeTab === 'bids' && (
               <BidsTab 
