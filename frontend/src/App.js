@@ -32,6 +32,7 @@ import DriverProfile from './components/driver/DriverProfile';
 // Core Functionality Pages
 import LoadSearch from './components/driver/LoadSearch';
 import FindDrivers from './components/cargoowner/FindDrivers';
+import LoadDetail from './pages/LoadDetail';
 
 // Support & Info Pages (Consolidated)
 import Support from './pages/Support'; 
@@ -332,6 +333,21 @@ element ={
                       canonicalUrl="https://infinitecargo.co.ke/search-loads"
                     />
                     <LoadSearch />
+                  </>
+                } 
+              />
+
+              <Route 
+                path="/loads/:id" 
+                element={
+                  <>
+                    <SEOHelmet 
+                      title="Load Details"
+                      description="Browse available cargo loads across Kenya. Filter by location, weight, and transport type to find the perfect job for your vehicle."
+                      keywords="find cargo loads Kenya, available loads, truck loads, freight jobs Kenya"
+                      canonicalUrl="https://infinitecargo.co.ke/loads/:id"
+                    />
+                    <LoadDetail />
                   </>
                 } 
               />

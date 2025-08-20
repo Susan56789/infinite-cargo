@@ -387,7 +387,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
         ? `${API_BASE_URL}/loads/${editingLoad}`
         : `${API_BASE_URL}/loads`;
 
-      console.log('Submitting load:', { method, endpoint, data: formDataWithOwner });
 
       const response = await fetch(endpoint, {
         method,
@@ -483,8 +482,6 @@ const LoadsTab = ({ onNavigateToLoadDetail }) => {
           )
         );
 
-        // Show success message
-        console.log(`Load status updated to ${statusConfig[newStatus]?.label || newStatus}`);
       } else {
         throw new Error(data.message || 'Failed to update load status');
       }
