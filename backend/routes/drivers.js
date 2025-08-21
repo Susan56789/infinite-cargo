@@ -949,100 +949,6 @@ router.post('/bid', auth, [
   }
 });
 
-// @route   PUT /api/drivers/bid/:id
-// @desc    Update/withdraw a bid
-// @access  Private (Driver only)
-router.put('/bid/:id', auth, [
-  body('action').isIn(['update', 'withdraw']).withMessage('Action must be update or withdraw'),
-  body('bidAmount').optional().isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
-  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
-], async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only drivers can update bids'
-      });
-    }
-
-    const { id: bidId } = req.params;
-    const { action, bidAmount, message } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(bidId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid bid ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const bidsCollection = db.collection('bids');
-    const driverId = new mongoose.Types.ObjectId(req.user.id);
-
-    // Find the bid
-    const bid = await bidsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(bidId),
-      driverId
-    });
-
-    if (!bid) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Bid not found or not authorized'
-      });
-    }
-
-    // Check if bid can be modified
-    if (bid.status !== 'submitted') {
-      return res.status(400).json({
-        status: 'error',
-        message: `Cannot ${action} bid with status: ${bid.status}`
-      });
-    }
-
-    let updateData = { updatedAt: new Date() };
-
-    if (action === 'withdraw') {
-      updateData.status = 'withdrawn';
-      updateData.withdrawnAt = new Date();
-    } else if (action === 'update') {
-      if (bidAmount) updateData.bidAmount = parseFloat(bidAmount);
-      if (message !== undefined) updateData.message = message;
-    }
-
-    const result = await bidsCollection.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId(bidId) },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
-
-    res.json({
-      status: 'success',
-      message: `Bid ${action}d successfully`,
-      data: {
-        bid: result
-      }
-    });
-
-  } catch (error) {
-    console.error('Update bid error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error updating bid',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
 // @route   GET /api/drivers/earnings
 // @desc    Get detailed earnings data for driver
 // @access  Private (Driver only)
@@ -1158,6 +1064,102 @@ router.get('/earnings', auth, [
   }
 });
 
+// @route   PUT /api/drivers/bid/:id
+// @desc    Update/withdraw a bid
+// @access  Private (Driver only)
+router.put('/bid/:id', auth, [
+  body('action').isIn(['update', 'withdraw']).withMessage('Action must be update or withdraw'),
+  body('bidAmount').optional().isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
+  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can update bids'
+      });
+    }
+
+    const { id: bidId } = req.params;
+    const { action, bidAmount, message } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(bidId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid bid ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bidsCollection = db.collection('bids');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Find the bid
+    const bid = await bidsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(bidId),
+      driverId
+    });
+
+    if (!bid) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bid not found or not authorized'
+      });
+    }
+
+    // Check if bid can be modified
+    if (bid.status !== 'submitted') {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot ${action} bid with status: ${bid.status}`
+      });
+    }
+
+    let updateData = { updatedAt: new Date() };
+
+    if (action === 'withdraw') {
+      updateData.status = 'withdrawn';
+      updateData.withdrawnAt = new Date();
+    } else if (action === 'update') {
+      if (bidAmount) updateData.bidAmount = parseFloat(bidAmount);
+      if (message !== undefined) updateData.message = message;
+    }
+
+    const result = await bidsCollection.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(bidId) },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    res.json({
+      status: 'success',
+      message: `Bid ${action}d successfully`,
+      data: {
+        bid: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Update bid error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating bid',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+
 // @route   GET /api/drivers/:id
 // @desc    Get single driver by ID
 // @access  Public
@@ -1236,6 +1238,262 @@ router.get('/:id',  async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error fetching driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/drivers/jobs/:jobId/update-status
+// @desc    Update job status (driver can update their active job status)
+// @access  Private (Driver only)
+router.post('/jobs/:jobId/update-status', auth, [
+  body('status').isIn([
+    'confirmed', 'en_route_pickup', 'arrived_pickup', 'picked_up', 
+    'in_transit', 'arrived_delivery', 'delivered', 'completed'
+  ]).withMessage('Invalid status'),
+  body('location').optional().isObject(),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const { jobId } = req.params;
+    const { status, location, notes } = req.body;
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    // Find the job
+    const job = await bookingsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(jobId),
+      driverId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found or not assigned to you'
+      });
+    }
+
+    // Validate status transition
+    const validTransitions = {
+      'assigned': ['confirmed', 'en_route_pickup'],
+      'confirmed': ['en_route_pickup', 'arrived_pickup'],
+      'en_route_pickup': ['arrived_pickup'],
+      'arrived_pickup': ['picked_up'],
+      'picked_up': ['in_transit'],
+      'in_transit': ['arrived_delivery'],
+      'arrived_delivery': ['delivered'],
+      'delivered': ['completed']
+    };
+
+    const currentStatus = job.status;
+    if (!validTransitions[currentStatus]?.includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot transition from ${currentStatus} to ${status}`
+      });
+    }
+
+    // Update job status
+    const updateData = {
+      status,
+      updatedAt: new Date(),
+      [`${status}At`]: new Date() // e.g., confirmedAt, pickedUpAt, etc.
+    };
+
+    // Add location if provided
+    if (location) {
+      updateData.currentLocation = location;
+      updateData.locationHistory = job.locationHistory || [];
+      updateData.locationHistory.push({
+        ...location,
+        timestamp: new Date(),
+        status
+      });
+    }
+
+    // Add timeline entry
+    const timelineEntry = {
+      event: status,
+      timestamp: new Date(),
+      description: notes || `Status updated to ${status.replace(/_/g, ' ')}`,
+      location: location || undefined
+    };
+
+    updateData.timeline = job.timeline || [];
+    updateData.timeline.push(timelineEntry);
+
+    // Update the job
+    await bookingsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(jobId) },
+      { $set: updateData }
+    );
+
+    // If job is completed, also update the load status
+    if (status === 'completed') {
+      const Load = require('../models/load');
+      await Load.findByIdAndUpdate(job.loadId, {
+        status: 'delivered',
+        deliveredAt: new Date(),
+        completedAt: new Date()
+      });
+
+      // Update bid status as well
+      const Bid = require('../models/bid');
+      if (job.bidId) {
+        await Bid.findByIdAndUpdate(job.bidId, {
+          status: 'completed',
+          completedAt: new Date()
+        });
+      }
+    }
+
+    // Send notifications to cargo owner about status updates
+    try {
+      const {notificationUtils} = require('./notifications');
+      const statusMessages = {
+        'confirmed': 'Driver has confirmed the job',
+        'en_route_pickup': 'Driver is en route to pickup location',
+        'arrived_pickup': 'Driver has arrived at pickup location',
+        'picked_up': 'Cargo has been picked up',
+        'in_transit': 'Cargo is in transit',
+        'arrived_delivery': 'Driver has arrived at delivery location',
+        'delivered': 'Cargo has been delivered',
+        'completed': 'Job completed successfully'
+      };
+
+      await notificationUtils.createNotification({
+        userId: job.cargoOwnerId,
+        userType: 'cargo_owner',
+        type: 'job_status_update',
+        title: 'Job Status Update',
+        message: statusMessages[status] || `Job status updated to ${status}`,
+        priority: ['delivered', 'completed'].includes(status) ? 'high' : 'normal',
+        icon: 'truck',
+        data: {
+          jobId: job._id,
+          loadId: job.loadId,
+          status,
+          driverId: req.user.id
+        },
+        actionUrl: `/loads/${job.loadId}/tracking`
+      });
+    } catch (notificationError) {
+      console.error('Failed to send status update notification:', notificationError);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Job status updated successfully',
+      data: {
+        jobId,
+        newStatus: status,
+        timestamp: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Update job status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating job status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/jobs/:jobId/details
+// @desc    Get detailed information for a specific job
+// @access  Private (Driver only)
+router.get('/jobs/:jobId/details', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const { jobId } = req.params;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    const job = await bookingsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(jobId),
+      driverId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found or not assigned to you'
+      });
+    }
+
+    // Get additional details from load
+    const Load = require('../models/load');
+    const load = await Load.findById(job.loadId)
+      .populate('postedBy', 'name phone email location companyName');
+
+    // Get cargo owner details if not populated
+    let cargoOwner = load?.postedBy;
+    if (!cargoOwner && job.cargoOwnerId) {
+      const User = require('../models/user');
+      cargoOwner = await User.findById(job.cargoOwnerId)
+        .select('name phone email location companyName');
+    }
+
+    const detailedJob = {
+      ...job,
+      loadDetails: load ? {
+        title: load.title,
+        description: load.description,
+        pickupAddress: load.pickupAddress,
+        deliveryAddress: load.deliveryAddress,
+        specialInstructions: load.specialInstructions,
+        insuranceRequired: load.insuranceRequired,
+        cargoValue: load.cargoValue,
+        dimensions: load.dimensions
+      } : null,
+      cargoOwnerDetails: cargoOwner ? {
+        name: cargoOwner.name,
+        phone: cargoOwner.phone,
+        email: cargoOwner.email,
+        location: cargoOwner.location,
+        companyName: cargoOwner.companyName
+      } : job.cargoOwnerInfo || null
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        job: detailedJob
+      }
+    });
+
+  } catch (error) {
+    console.error('Get job details error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching job details',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1751,10 +2009,10 @@ function getNestedValue(obj, path) {
   }, obj);
 }
 
-// @route   GET /api/driver/active-jobs
-// @desc    Get active jobs for current driver
+// @route   GET /api/drivers/active-jobs
+// @desc    Get active jobs for current driver (Enhanced Version)
 // @access  Private (Driver only)
-router.get('/driver/active-jobs', auth, async (req, res) => {
+router.get('/active-jobs', auth, async (req, res) => {
   try {
     if (req.user.userType !== 'driver') {
       return res.status(403).json({
@@ -1766,35 +2024,236 @@ router.get('/driver/active-jobs', auth, async (req, res) => {
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
     const bookingsCollection = db.collection('bookings');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
 
+    // Comprehensive status matching - covers all possible active job states
+    const activeStatuses = [
+      // From bid acceptance process
+      'accepted', 'assigned', 'driver_assigned',
+      // Job progression states
+      'confirmed', 'in_progress', 'started',
+      // Pickup and transport states  
+      'en_route_pickup', 'arrived_pickup', 'picked_up', 'loading',
+      'in_transit', 'en_route_delivery', 'on_route',
+      // Near completion (but still active)
+      'arrived_delivery', 'unloading'
+    ];
+
+    // Get active jobs from bookings collection
     const activeJobs = await bookingsCollection.find({
-      driverId: new mongoose.Types.ObjectId(req.user.id),
-      status: { $in: ['assigned', 'in_progress', 'picked_up', 'in_transit'] }
-    }).sort({ assignedAt: -1 }).toArray();
+      driverId,
+      status: { $in: activeStatuses }
+    })
+    .sort({ 
+      createdAt: -1, 
+      assignedAt: -1,
+      acceptedAt: -1 
+    })
+    .toArray();
 
-    // Format jobs for frontend
-    const formattedJobs = activeJobs.map(job => ({
-      _id: job._id,
-      title: job.title,
-      pickupLocation: job.pickupLocation,
-      deliveryLocation: job.deliveryLocation,
-      pickupDate: job.pickupDate,
-      deliveryDate: job.deliveryDate,
-      cargoType: job.cargoType,
-      weight: job.weight,
-      budget: job.agreedAmount,
-      price: job.agreedAmount,
-      currency: job.currency,
-      status: job.status,
-      assignedAt: job.assignedAt,
-      createdAt: job.createdAt
-    }));
+    console.log(`Found ${activeJobs.length} active jobs for driver ${req.user.id}`);
+
+    // If no jobs found in bookings, also check bids collection for recently accepted bids
+    if (activeJobs.length === 0) {
+      const Bid = require('../models/bid');
+      const recentlyAcceptedBids = await Bid.find({
+        driver: driverId,
+        status: 'accepted',
+        acceptedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+      })
+      .populate('load')
+      .populate('cargoOwner', 'name phone email')
+      .sort({ acceptedAt: -1 });
+
+      console.log(`Found ${recentlyAcceptedBids.length} recently accepted bids`);
+
+      // Convert accepted bids to job format if no booking exists yet
+      for (const bid of recentlyAcceptedBids) {
+        if (bid.load) {
+          const jobFromBid = {
+            _id: bid._id, // Use bid ID as job ID temporarily
+            title: bid.load.title || 'Transport Job',
+            pickupLocation: bid.load.pickupLocation,
+            deliveryLocation: bid.load.deliveryLocation,
+            pickupDate: bid.proposedPickupDate || bid.load.pickupDate,
+            deliveryDate: bid.proposedDeliveryDate || bid.load.deliveryDate,
+            cargoType: bid.load.cargoType,
+            weight: bid.load.weight,
+            totalAmount: bid.bidAmount,
+            agreedAmount: bid.bidAmount,
+            currency: bid.currency || 'KES',
+            status: 'assigned', // Normalize status
+            assignedAt: bid.acceptedAt,
+            createdAt: bid.createdAt,
+            cargoOwnerId: bid.cargoOwner._id,
+            loadId: bid.load._id,
+            bidId: bid._id,
+            // Additional metadata
+            source: 'bid', // Indicates this came from bid, not booking
+            cargoOwnerInfo: {
+              name: bid.cargoOwner.name,
+              phone: bid.cargoOwner.phone,
+              email: bid.cargoOwner.email
+            },
+            instructions: bid.load.specialInstructions
+          };
+          
+          activeJobs.push(jobFromBid);
+        }
+      }
+    }
+
+    // Format jobs for frontend with comprehensive field mapping
+    const formattedJobs = activeJobs.map(job => {
+      // Handle different date field possibilities
+      const getDate = (dateField) => {
+        return job[dateField] || job.scheduledPickupDate || job.startDate || null;
+      };
+
+      const pickupDate = getDate('pickupDate');
+      const deliveryDate = getDate('deliveryDate') || getDate('scheduledDeliveryDate') || getDate('endDate');
+
+      // Calculate derived fields
+      const now = new Date();
+      const isUrgent = job.urgency === 'urgent' || job.isUrgent || 
+                     (pickupDate && new Date(pickupDate) <= new Date(now.getTime() + 24 * 60 * 60 * 1000));
+      const isOverdue = deliveryDate ? new Date(deliveryDate) < now : false;
+      const timeToPickup = pickupDate ? Math.max(0, Math.ceil((new Date(pickupDate) - now) / (1000 * 60 * 60 * 24))) : null;
+
+      // Normalize status for frontend
+      const normalizeStatus = (status) => {
+        const statusMap = {
+          'driver_assigned': 'assigned',
+          'en_route_pickup': 'en_route',
+          'arrived_pickup': 'at_pickup',
+          'en_route_delivery': 'in_transit',
+          'arrived_delivery': 'at_delivery'
+        };
+        return statusMap[status] || status;
+      };
+
+      return {
+        _id: job._id,
+        title: job.title || job.loadTitle || job.description || 'Transport Job',
+        pickupLocation: job.pickupLocation || job.origin || job.fromLocation || 'Pickup Location',
+        deliveryLocation: job.deliveryLocation || job.destination || job.toLocation || 'Delivery Location',
+        pickupDate,
+        deliveryDate,
+        cargoType: job.cargoType || job.loadType || job.type || 'General Cargo',
+        weight: job.weight || job.cargoWeight || job.estimatedWeight,
+        
+        // Financial details
+        budget: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
+        price: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
+        agreedAmount: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
+        currency: job.currency || 'KES',
+        
+        // Status and timing
+        status: normalizeStatus(job.status),
+        originalStatus: job.status, // Keep original for backend reference
+        assignedAt: job.assignedAt || job.acceptedAt || job.createdAt,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        
+        // Related IDs
+        cargoOwnerId: job.cargoOwnerId,
+        loadId: job.loadId,
+        bidId: job.bidId,
+        
+        // Contact information
+        cargoOwnerInfo: job.cargoOwnerInfo || job.clientInfo,
+        contactPhone: job.contactPhone || job.cargoOwnerInfo?.phone,
+        
+        // Job details
+        trackingUpdates: job.trackingUpdates || [],
+        timeline: job.timeline || [],
+        estimatedDistance: job.estimatedDistance,
+        estimatedDuration: job.estimatedDuration,
+        instructions: job.instructions || job.specialInstructions || job.load?.specialInstructions,
+        
+        // Driver-specific info
+        paymentMethod: job.paymentMethod,
+        paymentTiming: job.paymentTiming,
+        
+        // Derived fields for better UX
+        isUrgent,
+        isOverdue,
+        timeToPickup,
+        
+        // Priority calculation
+        priority: isUrgent ? 'high' : isOverdue ? 'critical' : timeToPickup <= 1 ? 'high' : 'normal',
+        
+        // Source tracking
+        source: job.source || 'booking',
+        
+        // Status display helpers
+        statusDisplay: normalizeStatus(job.status).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        canStartJob: ['assigned', 'confirmed'].includes(normalizeStatus(job.status)),
+        canUpdateLocation: ['in_progress', 'picked_up', 'in_transit', 'en_route'].includes(normalizeStatus(job.status)),
+        canCompletePickup: ['assigned', 'confirmed', 'en_route', 'at_pickup'].includes(normalizeStatus(job.status)),
+        canCompleteDelivery: ['in_transit', 'at_delivery'].includes(normalizeStatus(job.status))
+      };
+    });
+
+    // Enhanced sorting logic
+    formattedJobs.sort((a, b) => {
+      // Critical/overdue jobs first
+      if (a.priority === 'critical' && b.priority !== 'critical') return -1;
+      if (a.priority !== 'critical' && b.priority === 'critical') return 1;
+      
+      // Urgent jobs next
+      if (a.isUrgent && !b.isUrgent) return -1;
+      if (!a.isUrgent && b.isUrgent) return 1;
+      
+      // Jobs starting today
+      const aToday = a.timeToPickup === 0;
+      const bToday = b.timeToPickup === 0;
+      if (aToday && !bToday) return -1;
+      if (!aToday && bToday) return 1;
+      
+      // Then by pickup date (soonest first)
+      if (a.pickupDate && b.pickupDate) {
+        return new Date(a.pickupDate) - new Date(b.pickupDate);
+      }
+      if (a.pickupDate && !b.pickupDate) return -1;
+      if (!a.pickupDate && b.pickupDate) return 1;
+      
+      // Finally by creation date (newest first)
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    // Calculate summary statistics
+    const summary = {
+      total: formattedJobs.length,
+      urgent: formattedJobs.filter(job => job.isUrgent).length,
+      overdue: formattedJobs.filter(job => job.isOverdue).length,
+      today: formattedJobs.filter(job => 
+        job.pickupDate && 
+        new Date(job.pickupDate).toDateString() === new Date().toDateString()
+      ).length,
+      thisWeek: formattedJobs.filter(job => {
+        if (!job.pickupDate) return false;
+        const pickupDate = new Date(job.pickupDate);
+        const now = new Date();
+        const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        return pickupDate >= now && pickupDate <= weekFromNow;
+      }).length,
+      byStatus: formattedJobs.reduce((acc, job) => {
+        acc[job.status] = (acc[job.status] || 0) + 1;
+        return acc;
+      }, {}),
+      totalEarnings: formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0)
+    };
+
+    console.log('Active jobs summary:', summary);
 
     res.json({
       status: 'success',
       data: {
         activeJobs: formattedJobs,
-        total: formattedJobs.length
+        total: formattedJobs.length,
+        summary,
+        message: formattedJobs.length === 0 ? 'No active jobs found. Check for new load opportunities!' : undefined
       }
     });
 
@@ -1807,6 +2266,7 @@ router.get('/driver/active-jobs', auth, async (req, res) => {
     });
   }
 });
+
 
 // @route   GET /api/drivers/stats
 // @desc    Get driver statistics (own stats only) - FIXED VERSION

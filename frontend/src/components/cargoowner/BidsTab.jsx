@@ -1,7 +1,8 @@
 import React from 'react';
 import { 
   RefreshCw, Users, User, DollarSign, Truck, Star, 
-  Phone, MapPin, CheckCircle2, XCircle, Loader2 
+  Phone, MapPin, CheckCircle2, XCircle, Loader2, Clock,
+  AlertCircle, MessageSquare, Calendar
 } from 'lucide-react';
 
 const BidsTab = ({
@@ -11,12 +12,160 @@ const BidsTab = ({
   formatDate,
   onAcceptBid,
   onRejectBid,
-  onRefresh
+  onRefresh,
+  API_BASE_URL, 
+  getAuthHeaders 
 }) => {
+  // Enhanced bid acceptance handler with direct API call
+  const handleAcceptBid = async (bid) => {
+    const confirmMessage = `Are you sure you want to accept this bid?\n\nDriver: ${bid.driverInfo?.name}\nAmount: ${formatCurrency(bid.bidAmount)}\n\nThis will:\n• Assign the load to this driver\n• Create an active job\n• Reject all other bids\n• Notify the driver`;
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        // Show loading state
+        const acceptButton = document.querySelector(`[data-bid-id="${bid._id}"] .accept-btn`);
+        if (acceptButton) {
+          acceptButton.disabled = true;
+          acceptButton.innerHTML = '<span class="animate-spin">⏳</span> Accepting...';
+        }
+
+        const response = await fetch(`${API_BASE_URL}/bids/${bid._id}/accept`, {
+          method: 'POST',
+          headers: getAuthHeaders()
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to accept bid');
+        }
+
+        const result = await response.json();
+        
+        // Show success message with job details
+        if (window.showToast) {
+          window.showToast(
+            `✅ Bid accepted successfully!\n\n${bid.driverInfo?.name} has been assigned to your load "${bid.loadInfo?.title || bid.load?.title}".\n\nActive job created and driver notified.`, 
+            'success',
+            5000
+          );
+        }
+
+        // Call the parent's refresh function to update the UI
+        await onRefresh();
+        
+        // Optionally call the original handler for any additional logic
+        if (onAcceptBid) {
+          await onAcceptBid(bid._id);
+        }
+
+      } catch (error) {
+        console.error('Error accepting bid:', error);
+        if (window.showToast) {
+          window.showToast(`❌ Failed to accept bid: ${error.message}`, 'error');
+        } else {
+          alert(`Failed to accept bid: ${error.message}`);
+        }
+      } finally {
+        // Reset button state
+        const acceptButton = document.querySelector(`[data-bid-id="${bid._id}"] .accept-btn`);
+        if (acceptButton) {
+          acceptButton.disabled = false;
+          acceptButton.innerHTML = '✓ Accept';
+        }
+      }
+    }
+  };
+
+  // Enhanced bid rejection handler with reason
+  const handleRejectBid = async (bid) => {
+    const reason = window.prompt(
+      `Please provide a reason for rejecting ${bid.driverInfo?.name}'s bid (optional):\n\nThis will help improve our platform and provide feedback to the driver.`
+    );
+    
+    if (reason !== null) { // null means user cancelled
+      try {
+        // Show loading state
+        const rejectButton = document.querySelector(`[data-bid-id="${bid._id}"] .reject-btn`);
+        if (rejectButton) {
+          rejectButton.disabled = true;
+          rejectButton.innerHTML = '<span class="animate-spin">⏳</span> Rejecting...';
+        }
+
+        const response = await fetch(`${API_BASE_URL}/bids/${bid._id}/reject`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ reason: reason.trim() || 'No reason provided' })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to reject bid');
+        }
+
+        // Show success message
+        if (window.showToast) {
+          window.showToast(
+            `Bid from ${bid.driverInfo?.name} has been rejected${reason ? ` (Reason: ${reason.substring(0, 50)}${reason.length > 50 ? '...' : ''})` : ''}.`, 
+            'success'
+          );
+        }
+
+        // Refresh the bids list
+        await onRefresh();
+        
+        // Optionally call the original handler
+        if (onRejectBid) {
+          await onRejectBid(bid._id, reason);
+        }
+
+      } catch (error) {
+        console.error('Error rejecting bid:', error);
+        if (window.showToast) {
+          window.showToast(`❌ Failed to reject bid: ${error.message}`, 'error');
+        } else {
+          alert(`Failed to reject bid: ${error.message}`);
+        }
+      } finally {
+        // Reset button state
+        const rejectButton = document.querySelector(`[data-bid-id="${bid._id}"] .reject-btn`);
+        if (rejectButton) {
+          rejectButton.disabled = false;
+          rejectButton.innerHTML = '✗ Reject';
+        }
+      }
+    }
+  };
+
+  // Calculate time since bid submitted
+  const getTimeSinceBid = (createdAt) => {
+    const now = new Date();
+    const bidTime = new Date(createdAt);
+    const diffInHours = Math.floor((now - bidTime) / (1000 * 60 * 60));
+    
+    if (diffInHours < 1) return 'Just now';
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays}d ago`;
+  };
+
+  // Get priority level based on bid status and timing
+  const getBidPriority = (bid) => {
+    if (bid.status === 'counter_offered') return 'high';
+    if (bid.status === 'shortlisted') return 'medium';
+    const hoursSinceBid = (new Date() - new Date(bid.createdAt)) / (1000 * 60 * 60);
+    if (hoursSinceBid > 24) return 'low';
+    return 'normal';
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-900">Received Bids</h3>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Received Bids</h3>
+          <p className="text-sm text-gray-600 mt-1">
+            {bids.length > 0 ? `${bids.length} bid${bids.length !== 1 ? 's' : ''} received` : 'No bids received yet'}
+          </p>
+        </div>
         <button
           onClick={onRefresh}
           className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-2 transition-colors"
@@ -26,6 +175,30 @@ const BidsTab = ({
           Refresh
         </button>
       </div>
+
+      {/* Quick Stats */}
+      {bids.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-blue-50 p-4 rounded-lg">
+            <div className="text-2xl font-bold text-blue-600">{bids.filter(b => b.status === 'pending' || b.status === 'submitted').length}</div>
+            <div className="text-sm text-blue-700">Pending Review</div>
+          </div>
+          <div className="bg-green-50 p-4 rounded-lg">
+            <div className="text-2xl font-bold text-green-600">{bids.filter(b => b.status === 'accepted').length}</div>
+            <div className="text-sm text-green-700">Accepted</div>
+          </div>
+          <div className="bg-red-50 p-4 rounded-lg">
+            <div className="text-2xl font-bold text-red-600">{bids.filter(b => b.status === 'rejected').length}</div>
+            <div className="text-sm text-red-700">Rejected</div>
+          </div>
+          <div className="bg-purple-50 p-4 rounded-lg">
+            <div className="text-2xl font-bold text-purple-600">
+              {bids.length > 0 ? formatCurrency(bids.reduce((sum, bid) => sum + bid.bidAmount, 0) / bids.length) : formatCurrency(0)}
+            </div>
+            <div className="text-sm text-purple-700">Avg Bid</div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-4">
         {loading ? (
@@ -38,84 +211,267 @@ const BidsTab = ({
             <Users className="mx-auto h-12 w-12 text-gray-400" />
             <h3 className="mt-2 text-sm font-medium text-gray-900">No bids yet</h3>
             <p className="mt-1 text-sm text-gray-500">Bids from drivers will appear here when they're submitted.</p>
+            <p className="mt-2 text-xs text-gray-400">Make sure your load is posted and visible to drivers.</p>
           </div>
         ) : (
-          bids.map(bid => (
-            <div key={bid._id} className="border border-gray-200 rounded-lg p-6 hover:border-gray-300 transition-colors">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h4 className="text-lg font-semibold text-gray-900">{bid.load?.title}</h4>
-                    <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                      bid.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                      bid.status === 'accepted' ? 'bg-green-100 text-green-800' :
-                      bid.status === 'rejected' ? 'bg-red-100 text-red-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
-                      {bid.status}
-                    </span>
+          // Sort bids by priority and status
+          [...bids]
+            .sort((a, b) => {
+              // Pending bids first
+              if (a.status === 'pending' && b.status !== 'pending') return -1;
+              if (a.status !== 'pending' && b.status === 'pending') return 1;
+              
+              // Then by creation date (newest first)
+              return new Date(b.createdAt) - new Date(a.createdAt);
+            })
+            .map(bid => {
+              const priority = getBidPriority(bid);
+              const timeSince = getTimeSinceBid(bid.createdAt);
+              
+              return (
+                <div 
+                  key={bid._id} 
+                  className={`border rounded-lg p-6 transition-all hover:shadow-md ${
+                    priority === 'high' ? 'border-red-200 bg-red-50' :
+                    priority === 'medium' ? 'border-yellow-200 bg-yellow-50' :
+                    'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      {/* Header with Load Title and Status */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <h4 className="text-lg font-semibold text-gray-900">{bid.load?.title || bid.loadInfo?.title}</h4>
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          bid.status === 'pending' || bid.status === 'submitted' ? 'bg-yellow-100 text-yellow-800' :
+                          bid.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                          bid.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                          bid.status === 'shortlisted' ? 'bg-blue-100 text-blue-800' :
+                          bid.status === 'counter_offered' ? 'bg-purple-100 text-purple-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {bid.status === 'submitted' ? 'pending' : bid.status}
+                        </span>
+                        <span className="text-xs text-gray-500 flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {timeSince}
+                        </span>
+                      </div>
+
+                      {/* Driver Info Row */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                        <div className="flex items-center gap-2">
+                          <User className="h-4 w-4 text-gray-400" />
+                          <div>
+                            <span className="text-sm font-medium text-gray-900">{bid.driverInfo?.name || 'Unknown Driver'}</span>
+                            {bid.driverInfo?.isVerified && (
+                              <CheckCircle2 className="h-3 w-3 text-green-500 inline ml-1" />
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm font-semibold text-gray-900">{formatCurrency(bid.bidAmount)}</span>
+                          {bid.currency && bid.currency !== 'KES' && (
+                            <span className="text-xs text-gray-500">({bid.currency})</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Truck className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm text-gray-600">
+                            {bid.vehicleDetails?.type || bid.driverInfo?.vehicleType || 'N/A'}
+                            {bid.vehicleDetails?.capacity && (
+                              <span className="text-xs text-gray-500 ml-1">
+                                ({bid.vehicleDetails.capacity}T)
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Star className="h-4 w-4 text-yellow-400" />
+                          <span className="text-sm text-gray-600">
+                            {bid.driverInfo?.rating || 'No rating'} 
+                            {bid.driverInfo?.totalTrips && (
+                              <span className="text-xs text-gray-500 ml-1">
+                                ({bid.driverInfo.totalTrips} trips)
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Contact Info */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div className="flex items-center gap-2">
+                          <Phone className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm text-gray-600">{bid.driverInfo?.phone || 'No phone provided'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm text-gray-600">{bid.driverInfo?.location || 'Location not specified'}</span>
+                        </div>
+                      </div>
+
+                      {/* Proposed Dates */}
+                      {(bid.proposedPickupDate || bid.proposedDeliveryDate) && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                          {bid.proposedPickupDate && (
+                            <div className="flex items-center gap-2">
+                              <Calendar className="h-4 w-4 text-gray-400" />
+                              <div>
+                                <span className="text-xs text-gray-500">Proposed Pickup:</span>
+                                <span className="text-sm text-gray-700 ml-1">{formatDate(bid.proposedPickupDate)}</span>
+                              </div>
+                            </div>
+                          )}
+                          {bid.proposedDeliveryDate && (
+                            <div className="flex items-center gap-2">
+                              <Calendar className="h-4 w-4 text-gray-400" />
+                              <div>
+                                <span className="text-xs text-gray-500">Proposed Delivery:</span>
+                                <span className="text-sm text-gray-700 ml-1">{formatDate(bid.proposedDeliveryDate)}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Bid Message */}
+                      {bid.message && (
+                        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center gap-2 mb-1">
+                            <MessageSquare className="h-4 w-4 text-gray-500" />
+                            <span className="text-xs font-medium text-gray-600">Driver's Message:</span>
+                          </div>
+                          <p className="text-sm text-gray-700">{bid.message}</p>
+                        </div>
+                      )}
+
+                      {/* Cover Letter */}
+                      {bid.coverLetter && (
+                        <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                          <div className="flex items-center gap-2 mb-1">
+                            <MessageSquare className="h-4 w-4 text-blue-500" />
+                            <span className="text-xs font-medium text-blue-600">Cover Letter:</span>
+                          </div>
+                          <p className="text-sm text-gray-700">{bid.coverLetter}</p>
+                        </div>
+                      )}
+
+                      {/* Counter Offer Info */}
+                      {bid.status === 'counter_offered' && bid.counterOffer && (
+                        <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            <AlertCircle className="h-4 w-4 text-purple-500" />
+                            <span className="text-sm font-medium text-purple-700">Counter Offer Pending</span>
+                          </div>
+                          <div className="text-sm text-purple-600">
+                            <p>Amount: {formatCurrency(bid.counterOffer.amount)}</p>
+                            {bid.counterOffer.message && (
+                              <p className="mt-1">Message: {bid.counterOffer.message}</p>
+                            )}
+                            <p className="text-xs text-purple-500 mt-1">
+                              Sent: {formatDate(bid.counterOffer.createdAt)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Additional Services */}
+                      {bid.additionalServices && bid.additionalServices.length > 0 && (
+                        <div className="mb-4">
+                          <h5 className="text-sm font-medium text-gray-700 mb-2">Additional Services:</h5>
+                          <div className="flex flex-wrap gap-2">
+                            {bid.additionalServices.map((service, index) => (
+                              <span key={index} className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                {service.service || service}
+                                {service.cost && <span className="ml-1">+{formatCurrency(service.cost)}</span>}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Terms */}
+                      {bid.terms && (
+                        <div className="mb-4 text-sm text-gray-600">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {bid.terms.paymentMethod && (
+                              <div>
+                                <span className="font-medium">Payment:</span> {bid.terms.paymentMethod}
+                              </div>
+                            )}
+                            {bid.terms.paymentTiming && (
+                              <div>
+                                <span className="font-medium">Timing:</span> {bid.terms.paymentTiming.replace(/_/g, ' ')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-500">
+                          Bid submitted: {formatDate(bid.createdAt)}
+                        </p>
+                        
+                        {/* Pricing Breakdown Button */}
+                        {bid.pricingBreakdown && (
+                          <button 
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                            onClick={() => {
+                              const breakdown = bid.pricingBreakdown;
+                              alert(`Pricing Breakdown:\nBase Fare: ${formatCurrency(breakdown.baseFare || 0)}\nDistance Fare: ${formatCurrency(breakdown.distanceFare || 0)}\nWeight Surcharge: ${formatCurrency(breakdown.weightSurcharge || 0)}\nService Fees: ${formatCurrency(breakdown.serviceFees || 0)}\nTotal: ${formatCurrency(breakdown.totalAmount || bid.bidAmount)}`);
+                            }}
+                          >
+                            View Pricing Breakdown
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    {(bid.status === 'pending' || bid.status === 'submitted' || bid.status === 'viewed' || bid.status === 'shortlisted') && (
+                      <div className="flex items-center gap-2 ml-4" data-bid-id={bid._id}>
+                        <button
+                          onClick={() => handleAcceptBid(bid)}
+                          className="accept-btn px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1 shadow-sm"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => handleRejectBid(bid)}
+                          className="reject-btn px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1 shadow-sm"
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Reject
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Status-specific info */}
+                    {bid.status === 'accepted' && (
+                      <div className="ml-4 text-right">
+                        <div className="text-green-600 font-medium text-sm">✓ Accepted</div>
+                        <div className="text-xs text-gray-500">
+                          {formatDate(bid.acceptedAt || bid.updatedAt)}
+                        </div>
+                      </div>
+                    )}
+
+                    {bid.status === 'rejected' && (
+                      <div className="ml-4 text-right">
+                        <div className="text-red-600 font-medium text-sm">✗ Rejected</div>
+                        <div className="text-xs text-gray-500">
+                          {formatDate(bid.rejectedAt || bid.updatedAt)}
+                        </div>
+                      </div>
+                    )}
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm text-gray-600">{bid.driver?.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <DollarSign className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm font-semibold text-gray-900">{formatCurrency(bid.bidAmount)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Truck className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm text-gray-600">{bid.driver?.vehicleType}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Star className="h-4 w-4 text-yellow-400" />
-                      <span className="text-sm text-gray-600">{bid.driver?.rating || 'N/A'} rating</span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div className="flex items-center gap-2">
-                      <Phone className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm text-gray-600">{bid.driver?.phone || 'N/A'}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm text-gray-600">{bid.driver?.location || 'N/A'}</span>
-                    </div>
-                  </div>
-
-                  {bid.message && (
-                    <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-                      <p className="text-sm text-gray-700">{bid.message}</p>
-                    </div>
-                  )}
-
-                  <p className="text-xs text-gray-500">Bid submitted: {formatDate(bid.createdAt)}</p>
                 </div>
-
-                {bid.status === 'pending' && (
-                  <div className="flex items-center gap-2 ml-4">
-                    <button
-                      onClick={() => onAcceptBid(bid._id)}
-                      className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      Accept
-                    </button>
-                    <button
-                      onClick={() => onRejectBid(bid._id)}
-                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1"
-                    >
-                      <XCircle className="h-4 w-4" />
-                      Reject
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
+              );
+            })
         )}
       </div>
     </div>

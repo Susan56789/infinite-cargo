@@ -817,54 +817,149 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   };
 
   const handleAcceptBid = async (bidId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/bids/${bidId}/accept`, {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
+  try {
+    setLoading(true);
+    setError('');
 
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization) {
+      setError('Authentication required. Please refresh the page and log in again.');
+      return;
+    }
+
+    console.log('Accepting bid:', bidId);
+
+    const response = await fetch(`${API_BASE_URL}/bids/${bidId}/accept`, {
+      method: 'POST',
+      headers: authHeaders
+    });
+
+    console.log('Accept bid response status:', response.status);
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to accept bid';
+      
       if (response.status === 401) {
-        handleLogout();
+        errorMessage = 'Session expired. Please refresh the page and log in again.';
+        // Don't logout automatically - let user decide
+        setError(errorMessage);
         return;
       }
 
-      if (response.ok) {
-        setSuccess('Bid accepted successfully!');
-        await fetchDashboardData();
-      } else {
-        const data = await response.json();
-        setError(data.message || 'Failed to accept bid');
-      }
-    } catch (error) {
-      console.error('Error accepting bid:', error);
-      setError(`Failed to accept bid: ${error.message}`);
-    }
-  };
-
-  const handleRejectBid = async (bidId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/bids/${bidId}/reject`, {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
-
-      if (response.status === 401) {
-        handleLogout();
+      if (response.status === 403) {
+        errorMessage = 'You don\'t have permission to accept this bid.';
+        setError(errorMessage);
         return;
       }
 
-      if (response.ok) {
-        setSuccess('Bid rejected successfully!');
-        await fetchDashboardData();
-      } else {
-        const data = await response.json();
-        setError(data.message || 'Failed to reject bid');
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorMessage;
+      } catch (parseError) {
+        console.error('Error parsing response:', parseError);
       }
-    } catch (error) {
-      console.error('Error rejecting bid:', error);
-      setError(`Failed to reject bid: ${error.message}`);
+
+      throw new Error(errorMessage);
     }
-  };
+
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      setSuccess('Bid accepted successfully! An active job has been created for the driver.');
+      
+      // Refresh all dashboard data to show updated states
+      await fetchDashboardData();
+      
+      // Also refresh bids specifically
+      await fetchBids();
+      
+      // Trigger auth state change event
+      window.dispatchEvent(new Event('authStateChanged'));
+      
+    } else {
+      setError(data.message || 'Failed to accept bid');
+    }
+
+  } catch (error) {
+    console.error('Error accepting bid:', error);
+    setError(`Failed to accept bid: ${error.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
+
+  const handleRejectBid = async (bidId, reason = null) => {
+  try {
+    setLoading(true);
+    setError('');
+
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization) {
+      setError('Authentication required. Please refresh the page and log in again.');
+      return;
+    }
+
+    console.log('Rejecting bid:', bidId, 'with reason:', reason);
+
+    const response = await fetch(`${API_BASE_URL}/bids/${bidId}/reject`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ 
+        reason: reason || 'No reason provided' 
+      })
+    });
+
+    console.log('Reject bid response status:', response.status);
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to reject bid';
+      
+      if (response.status === 401) {
+        errorMessage = 'Session expired. Please refresh the page and log in again.';
+        setError(errorMessage);
+        return;
+      }
+
+      if (response.status === 403) {
+        errorMessage = 'You don\'t have permission to reject this bid.';
+        setError(errorMessage);
+        return;
+      }
+
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorMessage;
+      } catch (parseError) {
+        console.error('Error parsing response:', parseError);
+      }
+
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      setSuccess('Bid rejected successfully.');
+      
+      // Refresh bids data
+      await fetchBids();
+      
+      // Also refresh dashboard data if needed
+      await fetchDashboardData();
+      
+    } else {
+      setError(data.message || 'Failed to reject bid');
+    }
+
+  } catch (error) {
+    console.error('Error rejecting bid:', error);
+    setError(`Failed to reject bid: ${error.message}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleSubscribe = async (planId, paymentMethod) => {
     const selectedPlan = subscriptionPlans?.[planId];
@@ -1307,16 +1402,18 @@ const getSubscriptionStatus = (subscription) => {
 )}
 
             {activeTab === 'bids' && (
-              <BidsTab 
-                bids={bids}
-                loading={loading}
-                formatCurrency={formatCurrency}
-                formatDate={formatDate}
-                onAcceptBid={handleAcceptBid}
-                onRejectBid={handleRejectBid}
-                onRefresh={fetchBids}
-              />
-            )}
+  <BidsTab 
+    bids={bids}
+    loading={loading}
+    formatCurrency={formatCurrency}
+    formatDate={formatDate}
+    onAcceptBid={handleAcceptBid}
+    onRejectBid={handleRejectBid}
+    onRefresh={fetchBids}
+    API_BASE_URL={API_BASE_URL} 
+    getAuthHeaders={getAuthHeaders} 
+  />
+)}
 
             {activeTab === 'subscription' && (
               <SubscriptionTab 
