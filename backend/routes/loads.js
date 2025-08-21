@@ -106,7 +106,7 @@ function deg2rad(deg) {
 router.get('/user/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('status').optional().isIn(['posted','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled']),
+  query('status').optional().isIn(['posted','available','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled']),
   query('sortBy').optional().isIn(['createdAt','budget','title','status']),
   query('sortOrder').optional().isIn(['asc','desc'])
 ], async (req, res) => {
@@ -209,7 +209,7 @@ router.get('/user/my-loads', auth, [
         deliveryLocation: l.deliveryLocation || '',
         // ... other fields ...
         budget: l.budget || 0,
-        status: l.status || 'posted',
+        status: l.status || 'posted'||'available',
         createdAt: l.createdAt,
         isUrgent: l.isUrgent || false,
         bidCount: bidMap[l._id.toString()] || 0,
@@ -230,7 +230,7 @@ router.get('/user/my-loads', auth, [
           $group: {
             _id: null,
             totalLoads: { $sum: 1 },
-            activeLoads: { $sum: { $cond: [{ $in: ['$status',['posted','receiving_bids', 'assigned','in_transit']]}, 1, 0] } },
+            activeLoads: { $sum: { $cond: [{ $in: ['$status',['posted','available','receiving_bids', 'assigned','in_transit']]}, 1, 0] } },
             completedLoads: { $sum: { $cond: [{ $eq: ['$status','delivered']}, 1, 0] } },
             totalBudget: { $sum: '$budget' },
             avgBudget: { $avg: '$budget' }
@@ -1657,7 +1657,7 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     // Check if load can be deleted (only certain statuses)
-    const deletableStatuses = ['posted', 'receiving_bids', 'not_available', 'cancelled'];
+    const deletableStatuses = ['posted','available', 'receiving_bids', 'not_available', 'cancelled'];
     if (!deletableStatuses.includes(load.status)) {
       return res.status(400).json({
         status: 'error',
@@ -1813,7 +1813,7 @@ router.get('/:id',  optionalAuth, async (req, res) => {
     }
 
     // Check if load is publicly viewable
-    if (!load.isActive || !['posted', 'receiving_bids'].includes(load.status)) {
+    if (!load.isActive || !['posted','available', 'receiving_bids'].includes(load.status)) {
       return res.status(404).json({
         status: 'error',
         message: 'Load not available'
@@ -2017,7 +2017,7 @@ router.patch('/:id/status', auth, [
 
     // Define valid status transitions
     const statusTransitions = {
-      posted: ['receiving_bids', 'not_available', 'cancelled'],
+      posted: ['receiving_bids', 'not_available', 'cancelled','available'],
       receiving_bids: ['assigned', 'driver_assigned', 'not_available', 'cancelled'],
       assigned: ['in_transit', 'on_hold', 'cancelled'],
       driver_assigned: ['in_transit', 'on_hold', 'cancelled'],
@@ -2025,7 +2025,7 @@ router.patch('/:id/status', auth, [
       on_hold: ['in_transit', 'cancelled'],
       delivered: ['completed'],
       completed: [], // Final state
-      not_available: ['posted'],
+      not_available: ['posted','available'],
       cancelled: [] // Final state
     };
 
@@ -2101,7 +2101,7 @@ router.get('/:userId/my-loads',  auth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
   query('status').optional().isIn([
-    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired'
+    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired','available'
   ]).withMessage('Invalid status'),
   query('search').optional().trim()
 ], async (req, res) => {
@@ -2201,7 +2201,7 @@ router.get('/:userId/my-loads',  auth, [
     // Calculate summary statistics
     const summary = {
       totalLoads,
-      activeLoads: loads.filter(l => l.isActive && ['posted', 'receiving_bids'].includes(l.status)).length,
+      activeLoads: loads.filter(l => l.isActive && ['available','posted', 'receiving_bids'].includes(l.status)).length,
       completedLoads: loads.filter(l => l.status === 'delivered').length,
       inTransitLoads: loads.filter(l => l.status === 'in_transit').length,
       totalBids: Object.values(bidCountMap).reduce((sum, count) => sum + count, 0)
@@ -2374,7 +2374,7 @@ router.post('/:id/bid',  auth, [
       });
     }
 
-    if (!load.isActive || !['posted', 'receiving_bids'].includes(load.status)) {
+    if (!load.isActive || !['posted','available', 'receiving_bids'].includes(load.status)) {
       return res.status(400).json({
         status: 'error',
         message: 'This load is no longer accepting bids'
