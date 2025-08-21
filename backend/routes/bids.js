@@ -842,8 +842,6 @@ router.post('/:id/accept', auth, async (req, res) => {
         },
         { session }
       );
-
-
       // Commit the transaction
       await session.commitTransaction();
 

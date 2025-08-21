@@ -16,7 +16,7 @@ const BidsTab = ({
   API_BASE_URL, 
   getAuthHeaders 
 }) => {
-  // Enhanced bid acceptance handler with better error handling and logging
+  
   const handleAcceptBid = async (bid) => {
     const confirmMessage = `Are you sure you want to accept this bid?\n\nDriver: ${bid.driverInfo?.name}\nAmount: ${formatCurrency(bid.bidAmount)}\n\nThis will:\n• Assign the load to this driver\n• Create an active job\n• Reject all other bids\n• Notify the driver`;
     

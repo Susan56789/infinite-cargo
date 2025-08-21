@@ -821,69 +821,169 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     setLoading(true);
     setError('');
 
+    console.log('=== DASHBOARD BID ACCEPTANCE DEBUG ===');
+    console.log('Bid ID:', bidId);
+    console.log('User:', user);
+
     const authHeaders = getAuthHeaders();
+    console.log('Auth headers:', authHeaders);
     
     if (!authHeaders.Authorization) {
       setError('Authentication required. Please refresh the page and log in again.');
       return;
     }
 
-    console.log('Accepting bid:', bidId);
+    if (!bidId) {
+      setError('Bid ID is required');
+      return;
+    }
+
+    // Find the bid in the current bids array for confirmation
+    const bidToAccept = bids.find(b => b._id === bidId);
+    if (!bidToAccept) {
+      setError('Bid not found in current data. Please refresh and try again.');
+      return;
+    }
+
+    // Show confirmation dialog with bid details
+    const confirmMessage = `Are you sure you want to accept this bid?\n\nDriver: ${bidToAccept.driverInfo?.name || 'Unknown'}\nAmount: ${formatCurrency(bidToAccept.bidAmount || 0)}\n\nThis will:\n• Assign the load to this driver\n• Create an active job\n• Reject all other bids\n• Send notifications`;
+    
+    if (!window.confirm(confirmMessage)) {
+      setLoading(false);
+      return;
+    }
+
+    console.log('Making bid acceptance request...');
 
     const response = await fetch(`${API_BASE_URL}/bids/${bidId}/accept`, {
       method: 'POST',
-      headers: authHeaders
+      headers: {
+        ...authHeaders,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      // Add timeout
+      signal: AbortSignal.timeout(30000) // 30 second timeout
     });
 
-    console.log('Accept bid response status:', response.status);
+    console.log('Bid acceptance response:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries())
+    });
 
-    if (!response.ok) {
-      let errorMessage = 'Failed to accept bid';
-      
-      if (response.status === 401) {
-        errorMessage = 'Session expired. Please refresh the page and log in again.';
-        // Don't logout automatically - let user decide
-        setError(errorMessage);
-        return;
-      }
+    // Handle different HTTP status codes
+    if (response.status === 401) {
+      setError('Session expired. Please refresh the page and log in again.');
+      // Don't auto-logout, let user decide
+      return;
+    }
 
-      if (response.status === 403) {
-        errorMessage = 'You don\'t have permission to accept this bid.';
-        setError(errorMessage);
-        return;
-      }
+    if (response.status === 403) {
+      setError('You don\'t have permission to accept this bid. Make sure you own this load.');
+      return;
+    }
 
+    if (response.status === 404) {
+      setError('Bid or associated load not found. It may have been removed or already processed.');
+      return;
+    }
+
+    if (response.status === 400) {
+      // Try to get specific error message from server
       try {
         const errorData = await response.json();
-        errorMessage = errorData.message || errorMessage;
+        setError(errorData.message || 'Invalid request. The bid may no longer be available for acceptance.');
       } catch (parseError) {
-        console.error('Error parsing response:', parseError);
+        setError('Invalid request. The bid may no longer be available for acceptance.');
       }
-
-      throw new Error(errorMessage);
+      return;
     }
 
-    const data = await response.json();
+    if (response.status === 409) {
+      setError('This bid has already been processed or the load is no longer available.');
+      return;
+    }
+
+    // Parse response
+    let data;
+    try {
+      const responseText = await response.text();
+      console.log('Raw response text:', responseText);
+      
+      if (responseText.trim()) {
+        data = JSON.parse(responseText);
+      } else {
+        // Empty response body but OK status
+        data = { status: 'success', message: 'Bid accepted successfully' };
+      }
+    } catch (parseError) {
+      console.error('Error parsing response:', parseError);
+      if (response.ok) {
+        // If response was OK but parsing failed, treat as success
+        data = { status: 'success', message: 'Bid accepted successfully' };
+      } else {
+        setError(`Server returned invalid response. Status: ${response.status}`);
+        return;
+      }
+    }
+
+    console.log('Parsed response data:', data);
+
+    if (!response.ok) {
+      // Use server error message if available
+      const errorMessage = data?.message || data?.error || `Server error (${response.status}). Please try again.`;
+      setError(errorMessage);
+      return;
+    }
+
+    // Success handling
+    const successMessage = data?.message || 'Bid accepted successfully!';
     
-    if (data.status === 'success') {
-      setSuccess('Bid accepted successfully! An active job has been created for the driver.');
-      
-      // Refresh all dashboard data to show updated states
-      await fetchDashboardData();
-      
-      // Also refresh bids specifically
-      await fetchBids();
-      
-      // Trigger auth state change event
-      window.dispatchEvent(new Event('authStateChanged'));
-      
+    // Show success notification
+    if (window.showToast) {
+      window.showToast(
+        `✅ ${successMessage}\n\n${bidToAccept.driverInfo?.name || 'Driver'} has been assigned to your load "${bidToAccept.loadInfo?.title || bidToAccept.load?.title || 'your load'}".\n\nActive job created and notifications sent.`, 
+        'success',
+        6000
+      );
     } else {
-      setError(data.message || 'Failed to accept bid');
+      alert(`✅ ${successMessage}`);
     }
-
+    
+    // Refresh all dashboard data to show updated states
+    console.log('Refreshing dashboard data after successful bid acceptance...');
+    await fetchDashboardData();
+    
+    // Also refresh bids specifically to ensure UI is updated
+    if (activeTab === 'bids') {
+      await fetchBids();
+    }
+    
+    // Switch to loads tab to see the updated load status
+    if (setActiveTab) {
+      setTimeout(() => setActiveTab('loads'), 1000);
+    }
+    
   } catch (error) {
-    console.error('Error accepting bid:', error);
-    setError(`Failed to accept bid: ${error.message}`);
+    console.error('=== DASHBOARD BID ACCEPTANCE ERROR ===');
+    console.error('Error details:', error);
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    
+    let userFriendlyMessage = error.message;
+    
+    // Handle specific error types
+    if (error.name === 'AbortError') {
+      userFriendlyMessage = 'Request timed out. Please check your connection and try again.';
+    } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      userFriendlyMessage = 'Network error. Please check your internet connection and try again.';
+    } else if (error.message.includes('JSON')) {
+      userFriendlyMessage = 'Server communication error. Please try again or contact support if the issue persists.';
+    }
+    
+    setError(`Failed to accept bid: ${userFriendlyMessage}`);
+    
   } finally {
     setLoading(false);
   }
@@ -901,61 +1001,106 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
+    if (!bidId) {
+      setError('Bid ID is required');
+      return;
+    }
+
+    // If no reason provided, ask for one
+    if (reason === null) {
+      const bidToReject = bids.find(b => b._id === bidId);
+      reason = window.prompt(
+        `Please provide a reason for rejecting ${bidToReject?.driverInfo?.name || 'this'}'s bid (optional):\n\nThis will help improve our platform and provide feedback to the driver.`
+      );
+      
+      if (reason === null) {
+        // User cancelled
+        setLoading(false);
+        return;
+      }
+    }
+
     console.log('Rejecting bid:', bidId, 'with reason:', reason);
 
     const response = await fetch(`${API_BASE_URL}/bids/${bidId}/reject`, {
       method: 'POST',
-      headers: authHeaders,
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
       body: JSON.stringify({ 
-        reason: reason || 'No reason provided' 
-      })
+        reason: reason?.trim() || 'No reason provided' 
+      }),
+      signal: AbortSignal.timeout(15000) // 15 second timeout
     });
 
     console.log('Reject bid response status:', response.status);
 
+    if (response.status === 401) {
+      setError('Session expired. Please refresh the page and log in again.');
+      return;
+    }
+
+    if (response.status === 403) {
+      setError('You don\'t have permission to reject this bid.');
+      return;
+    }
+
+    if (response.status === 404) {
+      setError('Bid not found. It may have been withdrawn or already processed.');
+      return;
+    }
+
+    // Parse response
+    let data;
+    try {
+      const responseText = await response.text();
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse reject response:', parseError);
+      if (response.ok) {
+        data = { status: 'success', message: 'Bid rejected successfully' };
+      } else {
+        setError(`Server response error. Status: ${response.status}`);
+        return;
+      }
+    }
+
     if (!response.ok) {
-      let errorMessage = 'Failed to reject bid';
-      
-      if (response.status === 401) {
-        errorMessage = 'Session expired. Please refresh the page and log in again.';
-        setError(errorMessage);
-        return;
-      }
-
-      if (response.status === 403) {
-        errorMessage = 'You don\'t have permission to reject this bid.';
-        setError(errorMessage);
-        return;
-      }
-
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || errorMessage;
-      } catch (parseError) {
-        console.error('Error parsing response:', parseError);
-      }
-
-      throw new Error(errorMessage);
+      const errorMessage = data?.message || `Failed to reject bid (${response.status})`;
+      setError(errorMessage);
+      return;
     }
 
-    const data = await response.json();
+    // Success
+    const bidToReject = bids.find(b => b._id === bidId);
+    const successMessage = `Bid from ${bidToReject?.driverInfo?.name || 'driver'} has been rejected${reason ? ` (Reason: ${reason.substring(0, 50)}${reason.length > 50 ? '...' : ''})` : ''}.`;
     
-    if (data.status === 'success') {
-      setSuccess('Bid rejected successfully.');
-      
-      // Refresh bids data
-      await fetchBids();
-      
-      // Also refresh dashboard data if needed
-      await fetchDashboardData();
-      
+    if (window.showToast) {
+      window.showToast(successMessage, 'success');
     } else {
-      setError(data.message || 'Failed to reject bid');
+      alert(`✅ ${successMessage}`);
     }
 
+    // Refresh data
+    await fetchBids();
+    await fetchDashboardData();
+    
   } catch (error) {
-    console.error('Error rejecting bid:', error);
-    setError(`Failed to reject bid: ${error.message}`);
+    console.error('=== BID REJECTION ERROR ===');
+    console.error('Error details:', error);
+    
+    let userFriendlyMessage = error.message;
+    
+    if (error.name === 'AbortError') {
+      userFriendlyMessage = 'Request timed out. Please try again.';
+    } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      userFriendlyMessage = 'Network error. Please check your internet connection and try again.';
+    }
+    
+    setError(`Failed to reject bid: ${userFriendlyMessage}`);
+    
   } finally {
     setLoading(false);
   }
