@@ -501,6 +501,12 @@ LoadSchema.pre('save', async function(next) {
         this.canReceiveBids = true;
         break;
         
+        case 'available':
+      case 'receiving_bids':
+        this.isActive = true;
+        this.canReceiveBids = true;
+        break;
+        
       case 'assigned':
         this.isActive = true;
         this.canReceiveBids = false;
@@ -656,7 +662,7 @@ LoadSchema.pre('findOneAndUpdate', function() {
 
 // Instance methods
 LoadSchema.methods.canReceiveBids = function() {
-  return this.isActive && ['posted', 'receiving_bids'].includes(this.status);
+  return this.isActive && ['posted','available', 'receiving_bids'].includes(this.status);
 };
 
 LoadSchema.methods.isOwnedBy = function(userId) {
