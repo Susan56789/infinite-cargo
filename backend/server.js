@@ -46,6 +46,7 @@ const cargoOwnerRoutes = require('./routes/cargo-owners');
 const notificationRoutes = require('./routes/notifications');
 const subscriptionRoutes = require('./routes/subscriptions');
 const adminNotificationsRoute= require('./routes/adminNotifications');
+const jobsRoute=require('./routes/jobs.js')
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -60,6 +61,7 @@ app.use('/api/drivers', driverRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/notifications',adminNotificationsRoute);
+app.use('/api/jobs',jobsRoute);
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));

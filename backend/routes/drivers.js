@@ -1587,6 +1587,64 @@ function getNestedValue(obj, path) {
   }, obj);
 }
 
+// @route   GET /api/driver/active-jobs
+// @desc    Get active jobs for current driver
+// @access  Private (Driver only)
+router.get('/driver/active-jobs', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    const activeJobs = await bookingsCollection.find({
+      driverId: new mongoose.Types.ObjectId(req.user.id),
+      status: { $in: ['assigned', 'in_progress', 'picked_up', 'in_transit'] }
+    }).sort({ assignedAt: -1 }).toArray();
+
+    // Format jobs for frontend
+    const formattedJobs = activeJobs.map(job => ({
+      _id: job._id,
+      title: job.title,
+      pickupLocation: job.pickupLocation,
+      deliveryLocation: job.deliveryLocation,
+      pickupDate: job.pickupDate,
+      deliveryDate: job.deliveryDate,
+      cargoType: job.cargoType,
+      weight: job.weight,
+      budget: job.agreedAmount,
+      price: job.agreedAmount,
+      currency: job.currency,
+      status: job.status,
+      assignedAt: job.assignedAt,
+      createdAt: job.createdAt
+    }));
+
+    res.json({
+      status: 'success',
+      data: {
+        activeJobs: formattedJobs,
+        total: formattedJobs.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Get active jobs error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching active jobs',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
 // @access  Private (Driver only)

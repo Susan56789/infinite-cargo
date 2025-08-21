@@ -8,8 +8,23 @@ const Bid = require('../models/bid');
 const Load = require('../models/load');
 const auth = require('../middleware/auth');
 const corsHandler = require('../middleware/corsHandler');
+const {notificationUtils} = require('./notifications')
 
 router.use(corsHandler);
+
+//Payment timimng
+const mapPaymentTiming = (frontendValue) => {
+  const mapping = {
+    'advance': '50_50_split',
+    'weekly': 'on_delivery',
+    'upfront': 'upfront',
+    'on_pickup': 'on_pickup', 
+    'on_delivery': 'on_delivery',
+    '50_50_split': '50_50_split'
+  };
+  
+  return mapping[frontendValue] || 'on_delivery';
+};
 
 // Rate limiting for bid operations
 const bidLimiter = rateLimit({
@@ -41,8 +56,13 @@ const bidValidation = [
   ]).withMessage('Invalid vehicle type'),
   body('vehicleDetails.capacity').optional().isFloat({ min: 0.1 }).withMessage('Vehicle capacity must be at least 0.1 tonnes'),
   body('additionalServices').optional().isArray().withMessage('Additional services must be an array'),
-  body('terms.paymentMethod').optional().isIn(['cash', 'bank_transfer', 'mobile_money', 'check']).withMessage('Invalid payment method'),
-  body('terms.paymentTiming').optional().isIn(['upfront', 'on_pickup', 'on_delivery', '50_50_split']).withMessage('Invalid payment timing'),
+  body('terms.paymentMethod').optional().isIn(['cash', 'bank_transfer', 'mobile_money', 'check', 'cheque']).withMessage('Invalid payment method'),
+  
+  // Fixed: Accept both schema and frontend values
+  body('terms.paymentTiming').optional().isIn([
+    'upfront', 'on_pickup', 'on_delivery', '50_50_split', // Schema values
+    'advance', 'weekly' // Frontend values that will be mapped
+  ]).withMessage('Invalid payment timing'),
   
   // Custom validation for date logic
   body('proposedDeliveryDate').custom((value, { req }) => {
@@ -172,17 +192,15 @@ router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
         totalAmount: req.body.pricingBreakdown?.totalAmount || req.body.bidAmount
       },
 
-      // Terms (matching your schema enum values)
-      terms: {
-        paymentMethod: req.body.terms?.paymentMethod || 'cash',
-        paymentTiming: req.body.terms?.paymentTiming === 'advance' ? '50_50_split' : 
-                      req.body.terms?.paymentTiming === 'weekly' ? 'on_delivery' :
-                      req.body.terms?.paymentTiming || 'on_delivery',
-        cancellationPolicy: req.body.terms?.cancellationPolicy,
-        specialTerms: req.body.terms?.additionalTerms
-      },
+      // Terms 
+terms: {
+  paymentMethod: req.body.terms?.paymentMethod || 'cash',
+  paymentTiming: mapPaymentTiming(req.body.terms?.paymentTiming),
+  cancellationPolicy: req.body.terms?.cancellationPolicy,
+  specialTerms: req.body.terms?.additionalTerms
+},
 
-      // Driver info snapshot (matching your schema)
+      // Driver info snapshot 
       driverInfo: {
         name: driver.name,
         phone: driver.phone,
@@ -273,8 +291,25 @@ router.post('/', auth, bidLimiter, bidValidation, async (req, res) => {
       }
     });
 
-    // TODO: Send notification to cargo owner
-    // await sendBidNotification(load.postedBy, bid);
+    // Send notification to cargo owner
+try {
+  await notificationUtils.sendNewBidNotification(
+    load.postedBy, // cargo owner ID
+    {
+      bidId: bid._id,
+      driverId: req.user.id,
+      driverName: driver.name,
+      bidAmount: `${bid.currency} ${bid.bidAmount.toLocaleString()}`
+    },
+    {
+      loadId: load._id,
+      title: load.title
+    }
+  );
+} catch (notificationError) {
+  console.error('Failed to send bid notification:', notificationError);
+  // Don't fail the bid creation if notification fails
+}
 
   } catch (error) {
     console.error('Create bid error:', error);
@@ -609,9 +644,8 @@ router.post('/:id/withdraw',  auth, async (req, res) => {
 });
 
 // @route   POST /api/bids/:id/accept
-// @desc    Accept bid (cargo owner only)
-// @access  Private (Cargo owner only)
-router.post('/:id/accept',  auth, async (req, res) => {
+// @desc    Accept bid (cargo owner only) - ENHANCED VERSION
+router.post('/:id/accept', auth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -629,7 +663,7 @@ router.post('/:id/accept',  auth, async (req, res) => {
       });
     }
 
-    const bid = await Bid.findById(id).populate('load');
+    const bid = await Bid.findById(id).populate('load').populate('driver');
 
     if (!bid) {
       return res.status(404).json({
@@ -659,7 +693,7 @@ router.post('/:id/accept',  auth, async (req, res) => {
 
     // Update the load
     const load = bid.load;
-    load.assignedDriver = bid.driver;
+    load.assignedDriver = bid.driver._id;
     load.assignedDate = new Date();
     load.status = 'driver_assigned';
     load.acceptedBid = {
@@ -669,6 +703,63 @@ router.post('/:id/accept',  auth, async (req, res) => {
     };
     await load.save();
 
+    // CREATE ACTIVE JOB/BOOKING RECORD
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    
+    const activeJob = {
+      loadId: load._id,
+      bidId: bid._id,
+      driverId: bid.driver._id,
+      cargoOwnerId: req.user.id,
+      
+      // Job details from load
+      title: load.title,
+      pickupLocation: load.pickupLocation,
+      deliveryLocation: load.deliveryLocation,
+      pickupDate: bid.proposedPickupDate,
+      deliveryDate: bid.proposedDeliveryDate,
+      
+      // Cargo details
+      cargoType: load.cargoType,
+      weight: load.weight,
+      dimensions: load.dimensions,
+      specialInstructions: load.specialInstructions,
+      
+      // Financial details
+      agreedAmount: bid.bidAmount,
+      currency: bid.currency,
+      paymentMethod: bid.terms.paymentMethod,
+      paymentTiming: bid.terms.paymentTiming,
+      
+      // Status tracking
+      status: 'assigned', // assigned -> in_progress -> delivered -> completed
+      assignedAt: new Date(),
+      
+      // Driver and vehicle info
+      driverInfo: {
+        name: bid.driverInfo.name,
+        phone: bid.driverInfo.phone,
+        rating: bid.driverInfo.rating,
+        vehicleType: bid.vehicleDetails.type,
+        vehicleCapacity: bid.vehicleDetails.capacity
+      },
+      
+      // Timeline
+      timeline: [{
+        event: 'job_assigned',
+        timestamp: new Date(),
+        description: `Job assigned to ${bid.driverInfo.name}`
+      }],
+      
+      // Created/updated timestamps
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const jobResult = await bookingsCollection.insertOne(activeJob);
+    
     // Reject all other bids for this load
     await Bid.updateMany(
       { 
@@ -686,6 +777,41 @@ router.post('/:id/accept',  auth, async (req, res) => {
       }
     );
 
+    // Send notifications
+    try {
+      // Notify driver
+      await notificationUtils.sendBidAcceptedNotification(
+        bid.driver._id,
+        {
+          bidId: bid._id,
+          bidAmount: `${bid.currency} ${bid.bidAmount.toLocaleString()}`
+        },
+        {
+          loadId: load._id,
+          title: load.title
+        }
+      );
+
+      // Notify cargo owner
+      await notificationUtils.createNotification({
+        userId: req.user.id,
+        userType: 'cargo_owner',
+        type: 'load_assigned',
+        title: 'Driver Assigned',
+        message: `${bid.driverInfo.name} has been assigned to your load "${load.title}"`,
+        priority: 'high',
+        icon: 'truck',
+        data: {
+          jobId: jobResult.insertedId,
+          loadId: load._id,
+          driverId: bid.driver._id
+        },
+        actionUrl: `/loads/${load._id}/tracking`
+      });
+    } catch (notificationError) {
+      console.error('Failed to send acceptance notifications:', notificationError);
+    }
+
     // Populate updated bid
     await bid.populate([
       { path: 'driver', select: 'name phone email location rating vehicleType vehicleCapacity' },
@@ -697,7 +823,11 @@ router.post('/:id/accept',  auth, async (req, res) => {
       message: 'Bid accepted successfully',
       data: {
         bid,
-        load
+        load,
+        activeJob: {
+          id: jobResult.insertedId,
+          status: 'assigned'
+        }
       }
     });
 
