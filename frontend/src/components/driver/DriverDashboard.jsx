@@ -74,7 +74,6 @@ const DriverDashboard = () => {
   // Handle API errors
   const handleApiError = useCallback(async (response, context = '') => {
     if (response.status === 401) {
-      console.log(`Authentication failed in ${context}`);
       handleLogout();
       return true;
     }
@@ -286,7 +285,6 @@ const DriverDashboard = () => {
         console.error('Failed to fetch notifications:', response.status);
       }
     } catch (error) {
-      console.log('Notifications not available:', error);
       setNotifications([]);
     }
   }, [getAuthHeaders, handleApiError]);
@@ -399,7 +397,6 @@ const DriverDashboard = () => {
       setNotifications(data.notifications || []);
 
     } else {
-      console.log('Dashboard endpoint failed, using individual calls');
       // Fallback to individual API calls
       await Promise.all([
         fetchUserProfile(),
@@ -740,6 +737,8 @@ const placeBid = async (bidData) => {
         notifications={notifications}
         onRefresh={handleRefresh}
         refreshing={refreshing}
+        getAuthHeaders={getAuthHeaders}
+
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

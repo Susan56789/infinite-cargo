@@ -1,12 +1,14 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { Bell, Settings, Loader } from 'lucide-react';
+import { Settings, Loader } from 'lucide-react';
+import NotificationDropdown from './NotificationDropdown';
 
-const DashboardHeader = ({ 
-  user, 
-  toggleAvailability, 
+const DashboardHeader = ({
+  user,
+  toggleAvailability,
   availabilityUpdating,
-  notifications = [] 
+  onRefresh,
+  refreshing,
+  getAuthHeaders
 }) => {
   return (
     <div className="bg-white shadow-sm border-b">
@@ -20,6 +22,7 @@ const DashboardHeader = ({
               Here's what's happening with your transport business today.
             </p>
           </div>
+          
           <div className="flex items-center space-x-4">
             {/* Availability Toggle */}
             <div className="flex items-center space-x-3">
@@ -41,23 +44,34 @@ const DashboardHeader = ({
                 )}
               </button>
             </div>
-            
-            <button className="relative p-2 text-gray-600 hover:text-gray-900 transition-colors">
-              <Bell size={20} />
-              {notifications.length > 0 && (
-                <span className="absolute top-0 right-0 h-5 w-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                  {notifications.length}
-                </span>
-              )}
+
+            {/* Refresh Button */}
+            <button
+              onClick={onRefresh}
+              disabled={refreshing}
+              className="p-2 text-gray-600 hover:text-gray-900 transition-colors"
+              title="Refresh dashboard"
+            >
+              <Settings 
+                size={20} 
+                className={refreshing ? 'animate-spin' : ''}
+              />
             </button>
-            
-            <Link
-              to="/driver/profile"
+
+            {/* Notification Dropdown */}
+            <NotificationDropdown 
+              getAuthHeaders={getAuthHeaders}
+              user={user}
+            />
+
+            {/* Profile Settings Link */}
+            <a
+              href="/driver/profile"
               className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
               <Settings size={16} className="mr-2" />
-              Settings
-            </Link>
+              Profile
+            </a>
           </div>
         </div>
       </div>
