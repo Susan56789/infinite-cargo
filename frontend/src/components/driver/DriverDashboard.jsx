@@ -497,48 +497,86 @@ const DriverDashboard = () => {
   }, [fetchDashboardData]);
 
   // Toggle driver availability
-  const toggleAvailability = async () => {
-    if (!user) return;
-    
-    setAvailabilityUpdating(true);
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/availability', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          isAvailable: !user.driverProfile?.isAvailable
-        })
-      });
+const toggleAvailability = async () => {
+  if (!user) return;
 
-      if (await handleApiError(response, 'toggleAvailability')) return;
+  const currentAvailability = user.driverProfile?.isAvailable ?? false;
+  const newAvailability = !currentAvailability;
 
-      if (response.ok) {
-        const data = await response.json();
-        const updatedUser = {
-          ...user,
-          driverProfile: {
-            ...user.driverProfile,
-            isAvailable: data.data.isAvailable
-          }
-        };
-        
-        setUser(updatedUser);
-        authManager.setAuth(
-          authManager.getToken(), 
-          updatedUser, 
-          localStorage.getItem('infiniteCargoRememberMe') === 'true'
-        );
-      } else {
-        const errorData = await response.json();
-        setError(`Failed to update availability: ${errorData.message}`);
-      }
-    } catch (error) {
-      console.error('Error updating availability:', error);
-      setError('Failed to update availability');
-    } finally {
-      setAvailabilityUpdating(false);
+  setAvailabilityUpdating(true);
+  setError(null); // Clear previous errors
+
+  // Optimistically update the UI
+  const previousUser = user;
+  setUser({
+    ...user,
+    driverProfile: {
+      ...user.driverProfile,
+      isAvailable: newAvailability
     }
-  };
+  });
+
+  try {
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/availability', {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json' // Ensure backend parses JSON
+      },
+      body: JSON.stringify({ isAvailable: newAvailability })
+    });
+
+    // Check for server errors
+    if (!response.ok) {
+      const text = await response.text(); // Log raw backend response for debugging
+      console.error('Backend response:', text);
+
+      let errorMessage = `Failed to update availability (status ${response.status})`;
+      try {
+        const data = JSON.parse(text);
+        errorMessage = data?.message || errorMessage;
+      } catch (err) {
+        // Ignore JSON parse error
+      }
+
+      // Rollback optimistic update
+      setUser(previousUser);
+      setError(errorMessage);
+      return;
+    }
+
+    const data = await response.json();
+
+    // Ensure response structure is correct
+    if (!data?.data?.isAvailable) {
+      console.warn('Unexpected backend response:', data);
+    }
+
+    // Update authManager storage
+    const updatedUser = {
+      ...user,
+      driverProfile: {
+        ...user.driverProfile,
+        isAvailable: data.data.isAvailable
+      }
+    };
+    setUser(updatedUser);
+    authManager.setAuth(
+      authManager.getToken(),
+      updatedUser,
+      localStorage.getItem('infiniteCargoRememberMe') === 'true'
+    );
+
+  } catch (error) {
+    console.error('Error updating availability:', error);
+    // Rollback optimistic update
+    setUser(previousUser);
+    setError('Failed to update availability. Please try again.');
+  } finally {
+    setAvailabilityUpdating(false);
+  }
+};
+
 
   // Place a bid on a load
 const placeBid = async (bidData) => {

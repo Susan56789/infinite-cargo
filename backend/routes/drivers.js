@@ -2552,70 +2552,87 @@ router.post('/rate/:driverId', auth, [
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
 // @access  Private (Driver only)
-router.post('/availability',  auth, [
-  body('isAvailable').isBoolean().withMessage('isAvailable must be a boolean')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
+router.post(
+  '/availability',
+  auth,
+  [
+    body('isAvailable').isBoolean().withMessage('isAvailable must be a boolean')
+  ],
+  async (req, res) => {
+    try {
+      // Validate input
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
 
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only drivers can update availability'
-      });
-    }
+      // Check user type
+      if (req.user.userType !== 'driver') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Only drivers can update availability'
+        });
+      }
 
-    const { isAvailable } = req.body;
+      const { isAvailable } = req.body;
 
-    const db = mongoose.connection.db;
-    const collection = db.collection('drivers');
+      // Validate user ID
+      if (!mongoose.Types.ObjectId.isValid(req.user.id)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid driver ID'
+        });
+      }
 
-    const result = await collection.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId(req.user.id) },
-      { 
-        $set: { 
-          'driverProfile.isAvailable': isAvailable,
-          'driverProfile.lastAvailabilityUpdate': new Date(),
-          updatedAt: new Date()
+      const db = mongoose.connection.db;
+      const collection = db.collection('drivers');
+
+      // Perform update
+      const result = await collection.findOneAndUpdate(
+        { _id: new mongoose.Types.ObjectId(req.user.id) },
+        {
+          $set: {
+            'driverProfile.isAvailable': isAvailable,
+            'driverProfile.lastAvailabilityUpdate': new Date(),
+            updatedAt: new Date()
+          },
+          $setOnInsert: { driverProfile: {} } // ensure driverProfile exists
+        },
+        {
+          returnDocument: 'after',
+          projection: { 'driverProfile.isAvailable': 1, name: 1 }
         }
-      },
-      { 
-        returnDocument: 'after',
-        projection: { 'driverProfile.isAvailable': 1, name: 1 }
-      }
-    );
+      );
 
-    if (!result) {
-      return res.status(404).json({
+      if (!result.value) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Driver not found'
+        });
+      }
+
+      res.json({
+        status: 'success',
+        message: `Availability ${isAvailable ? 'enabled' : 'disabled'} successfully`,
+        data: {
+          isAvailable: result.value.driverProfile?.isAvailable ?? false
+        }
+      });
+
+    } catch (error) {
+      console.error('Update availability error:', error);
+      res.status(500).json({
         status: 'error',
-        message: 'Driver not found'
+        message: 'Server error updating availability',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
-
-    res.json({
-      status: 'success',
-      message: `Availability ${isAvailable ? 'enabled' : 'disabled'} successfully`,
-      data: {
-        isAvailable: result.driverProfile.isAvailable
-      }
-    });
-
-  } catch (error) {
-    console.error('Update availability error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error updating availability',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
   }
-});
+);
 
 // @route   POST /api/drivers/location
 // @desc    Update driver location
