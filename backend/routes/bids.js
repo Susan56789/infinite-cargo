@@ -644,199 +644,321 @@ router.post('/:id/withdraw',  auth, async (req, res) => {
 });
 
 // @route   POST /api/bids/:id/accept
-// @desc    Accept bid (cargo owner only) - ENHANCED VERSION
+// @desc    Accept bid (cargo owner only) - 
 router.post('/:id/accept', auth, async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Validate bid ID format
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid bid ID'
+        message: 'Invalid bid ID format'
       });
     }
 
+    // Check user type
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
         message: 'Only cargo owners can accept bids'
       });
     }
-
-    const bid = await Bid.findById(id).populate('load').populate('driver');
+    // Find bid with populated data
+    const bid = await Bid.findById(id)
+      .populate('load')
+      .populate('driver', 'name phone email location rating vehicleType vehicleCapacity')
+      .populate('cargoOwner', 'name email');
 
     if (!bid) {
       return res.status(404).json({
         status: 'error',
-        message: 'Bid not found'
+        message: 'Bid not found or has been removed'
+      });
+    }
+    // Check if load exists
+    if (!bid.load) {
+      
+      return res.status(404).json({
+        status: 'error',
+        message: 'Associated load not found'
       });
     }
 
     // Check if user owns the load
-    if (bid.load.postedBy.toString() !== req.user.id) {
+    const loadOwnerId = bid.load.postedBy?.toString() || bid.cargoOwner?._id?.toString();
+    if (loadOwnerId !== req.user.id) {
+      
       return res.status(403).json({
         status: 'error',
-        message: 'Not authorized to accept this bid'
+        message: 'You are not authorized to accept this bid'
       });
     }
 
-    // Check if bid can be accepted
-    if (!bid.canAccept()) {
+    // Check if bid is in acceptable status
+    const acceptableStatuses = ['submitted', 'viewed', 'under_review', 'shortlisted', 'pending'];
+    if (!acceptableStatuses.includes(bid.status)) {
+      
       return res.status(400).json({
         status: 'error',
-        message: 'Bid cannot be accepted in its current state'
+        message: `Cannot accept bid in '${bid.status}' status. Only bids in ${acceptableStatuses.join(', ')} status can be accepted.`
       });
     }
 
-    // Accept the bid
-    await bid.accept(req.user.id);
+    // Check if load can still receive acceptances
+    if (bid.load.status === 'driver_assigned' || bid.load.status === 'completed' || bid.load.status === 'cancelled') {
+  
+      return res.status(400).json({
+        status: 'error',
+        message: 'This load is no longer accepting bids'
+      });
+    }
 
-    // Update the load
-    const load = bid.load;
-    load.assignedDriver = bid.driver._id;
-    load.assignedDate = new Date();
-    load.status = 'driver_assigned';
-    load.acceptedBid = {
-      bidId: bid._id,
-      amount: bid.bidAmount,
-      acceptedDate: new Date()
-    };
-    await load.save();
+    // Check if driver exists
+    if (!bid.driver) {
+     
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver associated with this bid not found'
+      });
+    }
 
-    // CREATE ACTIVE JOB/BOOKING RECORD
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-    
-    const activeJob = {
-      loadId: load._id,
-      bidId: bid._id,
-      driverId: bid.driver._id,
-      cargoOwnerId: req.user.id,
-      
-      // Job details from load
-      title: load.title,
-      pickupLocation: load.pickupLocation,
-      deliveryLocation: load.deliveryLocation,
-      pickupDate: bid.proposedPickupDate,
-      deliveryDate: bid.proposedDeliveryDate,
-      
-      // Cargo details
-      cargoType: load.cargoType,
-      weight: load.weight,
-      dimensions: load.dimensions,
-      specialInstructions: load.specialInstructions,
-      
-      // Financial details
-      agreedAmount: bid.bidAmount,
-      currency: bid.currency,
-      paymentMethod: bid.terms.paymentMethod,
-      paymentTiming: bid.terms.paymentTiming,
-      
-      // Status tracking
-      status: 'assigned', // assigned -> in_progress -> delivered -> completed
-      assignedAt: new Date(),
-      
-      // Driver and vehicle info
-      driverInfo: {
-        name: bid.driverInfo.name,
-        phone: bid.driverInfo.phone,
-        rating: bid.driverInfo.rating,
-        vehicleType: bid.vehicleDetails.type,
-        vehicleCapacity: bid.vehicleDetails.capacity
-      },
-      
-      // Timeline
-      timeline: [{
-        event: 'job_assigned',
-        timestamp: new Date(),
-        description: `Job assigned to ${bid.driverInfo.name}`
-      }],
-      
-      // Created/updated timestamps
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
 
-    const jobResult = await bookingsCollection.insertOne(activeJob);
-    
-    // Reject all other bids for this load
-    await Bid.updateMany(
-      { 
-        load: bid.load._id, 
-        _id: { $ne: bid._id },
-        status: { $in: ['submitted', 'viewed', 'under_review', 'shortlisted'] }
-      },
-      { 
-        status: 'rejected',
-        'response.status': 'rejected',
-        'response.message': 'Load was assigned to another driver',
-        'response.respondedAt': new Date(),
-        'response.respondedBy': req.user.id,
-        respondedAt: new Date()
-      }
-    );
 
-    // Send notifications
+    // Start database transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
-      // Notify driver
-      await notificationUtils.sendBidAcceptedNotification(
-        bid.driver._id,
-        {
-          bidId: bid._id,
-          bidAmount: `${bid.currency} ${bid.bidAmount.toLocaleString()}`
-        },
-        {
+      // Update the bid status
+      bid.status = 'accepted';
+      bid.acceptedAt = new Date();
+      bid.acceptedBy = req.user.id;
+      bid.response = {
+        status: 'accepted',
+        message: 'Bid accepted by cargo owner',
+        respondedAt: new Date(),
+        respondedBy: req.user.id
+      };
+      
+      await bid.save({ session });
+
+      
+
+      // Update the load
+      const load = bid.load;
+      load.assignedDriver = bid.driver._id;
+      load.assignedDate = new Date();
+      load.status = 'driver_assigned';
+      load.acceptedBid = {
+        bidId: bid._id,
+        amount: bid.bidAmount,
+        acceptedDate: new Date()
+      };
+      
+      await load.save({ session });
+
+    
+
+      // CREATE ACTIVE JOB/BOOKING RECORD
+      try {
+        const db = mongoose.connection.db;
+        const bookingsCollection = db.collection('bookings');
+        
+        const activeJob = {
           loadId: load._id,
-          title: load.title
-        }
+          bidId: bid._id,
+          driverId: bid.driver._id,
+          cargoOwnerId: req.user.id,
+          
+          // Job details from load
+          title: load.title,
+          pickupLocation: load.pickupLocation,
+          deliveryLocation: load.deliveryLocation,
+          pickupDate: bid.proposedPickupDate,
+          deliveryDate: bid.proposedDeliveryDate,
+          
+          // Cargo details
+          cargoType: load.cargoType,
+          weight: load.weight,
+          dimensions: load.dimensions,
+          specialInstructions: load.specialInstructions,
+          
+          // Financial details
+          agreedAmount: bid.bidAmount,
+          currency: bid.currency || 'KES',
+          paymentMethod: bid.terms?.paymentMethod || 'cash',
+          paymentTiming: bid.terms?.paymentTiming || 'on_delivery',
+          
+          // Status tracking
+          status: 'assigned', // assigned -> in_progress -> delivered -> completed
+          assignedAt: new Date(),
+          
+          // Driver and vehicle info
+          driverInfo: {
+            name: bid.driverInfo?.name || bid.driver.name,
+            phone: bid.driverInfo?.phone || bid.driver.phone,
+            rating: bid.driverInfo?.rating || bid.driver.rating || 0,
+            vehicleType: bid.vehicleDetails?.type || bid.driver.vehicleType,
+            vehicleCapacity: bid.vehicleDetails?.capacity || bid.driver.vehicleCapacity
+          },
+          
+          // Timeline
+          timeline: [{
+            event: 'job_assigned',
+            timestamp: new Date(),
+            description: `Job assigned to ${bid.driverInfo?.name || bid.driver.name}`,
+            userId: req.user.id
+          }],
+          
+          // Created/updated timestamps
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+
+        const jobResult = await bookingsCollection.insertOne(activeJob, { session });
+        
+      } catch (jobError) {
+        console.error('Error creating active job:', jobError);
+        // Don't fail the entire transaction for job creation error
+        // The main bid acceptance should still succeed
+      }
+
+      // Reject all other pending bids for this load
+      const otherBidsUpdate = await Bid.updateMany(
+        { 
+          load: bid.load._id, 
+          _id: { $ne: bid._id },
+          status: { $in: ['submitted', 'viewed', 'under_review', 'shortlisted', 'pending'] }
+        },
+        { 
+          status: 'rejected',
+          'response.status': 'rejected',
+          'response.message': 'Load was assigned to another driver',
+          'response.respondedAt': new Date(),
+          'response.respondedBy': req.user.id,
+          rejectedAt: new Date(),
+          rejectedBy: req.user.id
+        },
+        { session }
       );
 
-      // Notify cargo owner
-      await notificationUtils.createNotification({
-        userId: req.user.id,
-        userType: 'cargo_owner',
-        type: 'load_assigned',
-        title: 'Driver Assigned',
-        message: `${bid.driverInfo.name} has been assigned to your load "${load.title}"`,
-        priority: 'high',
-        icon: 'truck',
+
+      // Commit the transaction
+      await session.commitTransaction();
+
+      // Send notifications (don't fail if this errors)
+      try {
+        if (notificationUtils && typeof notificationUtils.sendBidAcceptedNotification === 'function') {
+          await notificationUtils.sendBidAcceptedNotification(
+            bid.driver._id,
+            {
+              bidId: bid._id,
+              bidAmount: `${bid.currency || 'KES'} ${bid.bidAmount?.toLocaleString() || '0'}`
+            },
+            {
+              loadId: load._id,
+              title: load.title
+            }
+          );
+        }
+
+        if (notificationUtils && typeof notificationUtils.createNotification === 'function') {
+          await notificationUtils.createNotification({
+            userId: req.user.id,
+            userType: 'cargo_owner',
+            type: 'load_assigned',
+            title: 'Driver Assigned',
+            message: `${bid.driverInfo?.name || bid.driver.name} has been assigned to your load "${load.title}"`,
+            priority: 'high',
+            icon: 'truck',
+            data: {
+              loadId: load._id,
+              driverId: bid.driver._id,
+              bidId: bid._id
+            },
+            actionUrl: `/loads/${load._id}/tracking`
+          });
+        }
+      } catch (notificationError) {
+        console.error('Failed to send acceptance notifications:', notificationError);
+        // Don't fail the response for notification errors
+      }
+
+      // Return success response
+      res.status(200).json({
+        status: 'success',
+        message: 'Bid accepted successfully',
         data: {
-          jobId: jobResult.insertedId,
-          loadId: load._id,
-          driverId: bid.driver._id
-        },
-        actionUrl: `/loads/${load._id}/tracking`
+          bid: {
+            _id: bid._id,
+            status: bid.status,
+            acceptedAt: bid.acceptedAt,
+            bidAmount: bid.bidAmount,
+            currency: bid.currency
+          },
+          load: {
+            _id: load._id,
+            status: load.status,
+            assignedDriver: load.assignedDriver,
+            assignedDate: load.assignedDate
+          },
+          driver: {
+            _id: bid.driver._id,
+            name: bid.driver.name,
+            phone: bid.driver.phone
+          }
+        }
       });
-    } catch (notificationError) {
-      console.error('Failed to send acceptance notifications:', notificationError);
+
+    } catch (transactionError) {
+      // Rollback transaction on any error
+      await session.abortTransaction();
+      console.error('Transaction error:', transactionError);
+      throw transactionError;
+    } finally {
+      // End session
+      await session.endSession();
     }
 
-    // Populate updated bid
-    await bid.populate([
-      { path: 'driver', select: 'name phone email location rating vehicleType vehicleCapacity' },
-      { path: 'load', select: 'title pickupLocation deliveryLocation weight budget status' }
-    ]);
-
-    res.json({
-      status: 'success',
-      message: 'Bid accepted successfully',
-      data: {
-        bid,
-        load,
-        activeJob: {
-          id: jobResult.insertedId,
-          status: 'assigned'
-        }
-      }
-    });
-
   } catch (error) {
-    console.error('Accept bid error:', error);
-    res.status(500).json({
+    console.error('=== BID ACCEPTANCE ERROR ===');
+    console.error('Error details:', error);
+    console.error('Stack trace:', error.stack);
+
+    // Handle specific error types
+    let statusCode = 500;
+    let errorMessage = 'Server error while accepting bid';
+
+    if (error.name === 'ValidationError') {
+      statusCode = 400;
+      errorMessage = 'Validation failed: ' + Object.values(error.errors).map(e => e.message).join(', ');
+    } else if (error.name === 'CastError') {
+      statusCode = 400;
+      errorMessage = 'Invalid ID format provided';
+    } else if (error.message.includes('duplicate key')) {
+      statusCode = 409;
+      errorMessage = 'This bid has already been processed';
+    } else if (error.message.includes('not found')) {
+      statusCode = 404;
+      errorMessage = error.message;
+    } else if (error.message.includes('authorization') || error.message.includes('permission')) {
+      statusCode = 403;
+      errorMessage = error.message;
+    } else if (error.code === 11000) {
+      statusCode = 409;
+      errorMessage = 'Duplicate operation detected';
+    }
+
+    // Return appropriate error response
+    res.status(statusCode).json({
       status: 'error',
-      message: 'Server error accepting bid',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 });
