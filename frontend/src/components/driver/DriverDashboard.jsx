@@ -114,82 +114,97 @@ const DriverDashboard = () => {
 
   // Fetch driver statistics
   const fetchDriverStats = useCallback(async () => {
-    setLoadingStates(prev => ({ ...prev, stats: true }));
-    
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/stats', {
-        headers: getAuthHeaders()
-      });
+  setLoadingStates(prev => ({ ...prev, stats: true }));
+  
+  try {
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/stats', {
+      headers: getAuthHeaders()
+    });
 
-      if (await handleApiError(response, 'fetchDriverStats')) return;
+    if (await handleApiError(response, 'fetchDriverStats')) return;
 
-      if (response.ok) {
-        const statsData = await response.json();
-        const stats = statsData.data?.stats || {};
-        const earnings = statsData.data?.earnings || {};
-        
-        setDashboardData(prev => ({
-          ...prev,
-          stats: {
-            totalJobs: stats.totalJobs || 0,
-            activeJobs: stats.activeJobs || 0,
-            completedJobs: stats.completedJobs || 0,
-            completionRate: stats.completionRate || stats.successRate || 0,
-            successRate: stats.successRate || 0,
-            rating: stats.rating || stats.averageRating || 0,
-            totalBids: stats.totalBids || 0,
-            acceptedBids: stats.acceptedBids || 0,
-            monthlyEarnings: stats.monthlyEarnings || 0
-          },
-          earnings: {
-            thisMonth: earnings.thisMonth || stats.monthlyEarnings || 0,
-            lastMonth: earnings.lastMonth || 0,
-            total: earnings.total || stats.totalEarnings || 0
-          }
-        }));
-      } else {
-        console.error('Failed to fetch driver stats:', response.status);
-      }
-    } catch (error) {
-      console.error('Error fetching driver stats:', error);
-    } finally {
-      setLoadingStates(prev => ({ ...prev, stats: false }));
+    if (response.ok) {
+      const statsData = await response.json();
+      const stats = statsData.data?.stats || {};
+      const earnings = statsData.data?.earnings || {};
+      
+      setDashboardData(prev => ({
+        ...prev,
+        stats: {
+          totalJobs: stats.totalJobs || 0,
+          activeJobs: stats.activeJobs || 0,
+          completedJobs: stats.completedJobs || 0,
+          completionRate: stats.completionRate || stats.successRate || 0,
+          successRate: stats.successRate || stats.completionRate || 0,
+          rating: Math.round((stats.rating || stats.averageRating || 0) * 10) / 10,
+          totalBids: stats.totalBids || 0,
+          acceptedBids: stats.acceptedBids || 0,
+          monthlyEarnings: stats.monthlyEarnings || earnings.thisMonth || 0
+        },
+        earnings: {
+          thisMonth: earnings.thisMonth || stats.monthlyEarnings || 0,
+          lastMonth: earnings.lastMonth || 0,
+          total: earnings.total || stats.totalEarnings || 0
+        }
+      }));
+    } else {
+      console.error('Failed to fetch driver stats:', response.status);
     }
-  }, [getAuthHeaders, handleApiError]);
+  } catch (error) {
+    console.error('Error fetching driver stats:', error);
+  } finally {
+    setLoadingStates(prev => ({ ...prev, stats: false }));
+  }
+}, [getAuthHeaders, handleApiError]);
 
   // Fetch driver bookings
   const fetchDriverBookings = useCallback(async () => {
-    setLoadingStates(prev => ({ ...prev, bookings: true }));
-    
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bookings/driver', {
-        headers: getAuthHeaders()
-      });
+  setLoadingStates(prev => ({ ...prev, bookings: true }));
+  
+  try {
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/bookings/driver', {
+      headers: getAuthHeaders()
+    });
 
-      if (await handleApiError(response, 'fetchDriverBookings')) return;
+    if (await handleApiError(response, 'fetchDriverBookings')) return;
 
-      if (response.ok) {
-        const bookingsData = await response.json();
-        const bookings = bookingsData.data?.bookings || bookingsData.bookings || [];
-        
-        setDashboardData(prev => ({
-          ...prev,
-          activeBookings: bookings.filter(booking => 
-            ['accepted', 'in_progress', 'driver_assigned'].includes(booking.status)
-          ).slice(0, 10),
-          completedBookings: bookings.filter(booking => 
-            booking.status === 'completed'
-          ).slice(0, 5)
-        }));
-      } else {
-        console.error('Failed to fetch driver bookings:', response.status);
-      }
-    } catch (error) {
-      console.error('Error fetching driver bookings:', error);
-    } finally {
-      setLoadingStates(prev => ({ ...prev, bookings: false }));
+    if (response.ok) {
+      const bookingsData = await response.json();
+      const bookings = bookingsData.data?.bookings || bookingsData.bookings || [];
+      
+      setDashboardData(prev => ({
+        ...prev,
+        activeBookings: bookings
+          .filter(booking => 
+            ['accepted', 'in_progress', 'driver_assigned', 'assigned', 'picked_up', 'in_transit'].includes(booking.status)
+          )
+          .slice(0, 10)
+          .map(booking => ({
+            _id: booking._id,
+            title: booking.title || booking.loadTitle || 'Transport Job',
+            pickupLocation: booking.pickupLocation || booking.origin || 'Pickup Location',
+            deliveryLocation: booking.deliveryLocation || booking.destination || 'Delivery Location',
+            cargoType: booking.cargoType || booking.loadType || 'General Cargo',
+            budget: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+            price: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+            status: booking.status,
+            pickupDate: booking.pickupDate || booking.scheduledPickupDate || booking.createdAt,
+            createdAt: booking.createdAt,
+            updatedAt: booking.updatedAt
+          })),
+        completedBookings: bookings
+          .filter(booking => booking.status === 'completed')
+          .slice(0, 5)
+      }));
+    } else {
+      console.error('Failed to fetch driver bookings:', response.status);
     }
-  }, [getAuthHeaders, handleApiError]);
+  } catch (error) {
+    console.error('Error fetching driver bookings:', error);
+  } finally {
+    setLoadingStates(prev => ({ ...prev, bookings: false }));
+  }
+}, [getAuthHeaders, handleApiError]);
 
   // Fetch available loads
   const fetchAvailableLoads = useCallback(async () => {
@@ -277,97 +292,157 @@ const DriverDashboard = () => {
   }, [getAuthHeaders, handleApiError]);
 
   // Comprehensive dashboard data fetch using the new dashboard endpoint
-  const fetchDashboardData = useCallback(async (showLoader = true) => {
-    if (showLoader) {
-      setLoading(true);
-    } else {
-      setRefreshing(true);
-    }
-    
-    setError('');
-    
-    try {
-      // Try to use the comprehensive dashboard endpoint first
-      const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
-        headers: getAuthHeaders()
-      });
+ const fetchDashboardData = useCallback(async (showLoader = true) => {
+  if (showLoader) {
+    setLoading(true);
+  } else {
+    setRefreshing(true);
+  }
+  
+  setError('');
+  
+  try {
+    // Try the comprehensive dashboard endpoint first
+    const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
+      headers: getAuthHeaders()
+    });
 
-      if (await handleApiError(dashboardResponse, 'fetchDashboardData')) return;
+    if (await handleApiError(dashboardResponse, 'fetchDashboardData')) return;
 
-      if (dashboardResponse.ok) {
-        const dashboardData = await dashboardResponse.json();
-        const data = dashboardData.data;
-        
-        // Update user info
-        if (data.driver) {
-          setUser(data.driver);
-          authManager.setAuth(
-            authManager.getToken(), 
-            data.driver, 
-            localStorage.getItem('infiniteCargoRememberMe') === 'true'
-          );
-        }
-
-        // Update dashboard data
-        setDashboardData(prev => ({
-          ...prev,
-          activeBookings: data.activeBookings || [],
-          availableLoads: data.availableLoads || [],
-          completedBookings: data.completedBookings || [],
-          myBids: data.myBids || [],
-          stats: {
-            ...prev.stats,
-            ...data.stats
-          }
-        }));
-
-        setNotifications(data.notifications || []);
-
-      } else {
-        // Fallback to individual API calls if dashboard endpoint doesn't exist
-        console.log('Dashboard endpoint not available, using individual calls');
-        await Promise.all([
-          fetchUserProfile(),
-          fetchDriverStats(),
-          fetchDriverBookings(),
-          fetchAvailableLoads(),
-          fetchDriverBids(),
-          fetchNotifications()
-        ]);
-      }
-
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      setError('Failed to load dashboard data');
+    if (dashboardResponse.ok) {
+      const dashboardData = await dashboardResponse.json();
+      const data = dashboardData.data;
       
-      // Try individual calls as fallback
-      try {
-        await Promise.all([
-          fetchUserProfile(),
-          fetchDriverStats(),
-          fetchDriverBookings(),
-          fetchAvailableLoads(),
-          fetchDriverBids(),
-          fetchNotifications()
-        ]);
-      } catch (fallbackError) {
-        console.error('Fallback fetch also failed:', fallbackError);
-        setError('Failed to load dashboard data');
+      // Update user info
+      if (data.driver) {
+        setUser(data.driver);
+        authManager.setAuth(
+          authManager.getToken(), 
+          data.driver, 
+          localStorage.getItem('infiniteCargoRememberMe') === 'true'
+        );
       }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+
+      // Update dashboard data with proper field mapping
+      setDashboardData(prev => ({
+        ...prev,
+        // Map active bookings with consistent field names
+        activeBookings: (data.activeBookings || []).map(booking => ({
+          _id: booking._id,
+          title: booking.title || booking.loadTitle || 'Transport Job',
+          pickupLocation: booking.pickupLocation || booking.origin || 'Pickup Location',
+          deliveryLocation: booking.deliveryLocation || booking.destination || 'Delivery Location',
+          cargoType: booking.cargoType || booking.loadType || 'General Cargo',
+          budget: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+          price: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+          status: booking.status,
+          pickupDate: booking.pickupDate || booking.scheduledPickupDate || booking.createdAt,
+          createdAt: booking.createdAt,
+          updatedAt: booking.updatedAt
+        })),
+        
+        // Map available loads
+        availableLoads: (data.availableLoads || []).map(load => ({
+          _id: load._id,
+          title: load.title || 'Transport Required',
+          pickupLocation: load.pickupLocation || load.origin || 'Pickup Location',
+          deliveryLocation: load.deliveryLocation || load.destination || 'Delivery Location',
+          cargoType: load.cargoType || load.loadType || 'General Cargo',
+          weight: load.weight || load.estimatedWeight || 0,
+          estimatedAmount: load.estimatedAmount || load.budget || 0,
+          pickupDate: load.pickupDate || load.scheduledPickupDate,
+          deliveryDate: load.deliveryDate || load.scheduledDeliveryDate,
+          description: load.description,
+          urgency: load.urgency || 'normal',
+          bidCount: load.bidCount || 0,
+          createdAt: load.createdAt
+        })),
+        
+        completedBookings: data.completedBookings || [],
+        
+        // Map bids data
+        myBids: (data.myBids || []).map(bid => ({
+          _id: bid._id,
+          loadId: bid.loadId,
+          bidAmount: bid.bidAmount,
+          status: bid.status,
+          message: bid.message,
+          createdAt: bid.createdAt,
+          updatedAt: bid.updatedAt,
+          loadTitle: bid.loadInfo?.title || bid.loadTitle || 'Load',
+          pickupLocation: bid.loadInfo?.pickupLocation || bid.pickupLocation,
+          deliveryLocation: bid.loadInfo?.deliveryLocation || bid.deliveryLocation,
+          estimatedAmount: bid.loadInfo?.estimatedAmount || bid.estimatedAmount
+        })),
+        
+        // Update stats with proper mapping
+        stats: {
+          totalJobs: data.stats?.totalJobs || 0,
+          activeJobs: data.stats?.activeJobs || 0,
+          completedJobs: data.stats?.completedJobs || 0,
+          completionRate: data.stats?.completionRate || data.stats?.successRate || 0,
+          successRate: data.stats?.successRate || data.stats?.completionRate || 0,
+          rating: data.stats?.rating || data.stats?.averageRating || 0,
+          totalBids: data.stats?.totalBids || 0,
+          acceptedBids: data.stats?.acceptedBids || 0,
+          monthlyEarnings: data.stats?.monthlyEarnings || data.earnings?.thisMonth || 0
+        },
+        
+        // Update earnings
+        earnings: {
+          thisMonth: data.earnings?.thisMonth || 0,
+          lastMonth: data.earnings?.lastMonth || 0,
+          total: data.earnings?.total || 0
+        }
+      }));
+
+      setNotifications(data.notifications || []);
+
+    } else {
+      console.log('Dashboard endpoint failed, using individual calls');
+      // Fallback to individual API calls
+      await Promise.all([
+        fetchUserProfile(),
+        fetchDriverStats(),
+        fetchDriverBookings(),
+        fetchAvailableLoads(),
+        fetchDriverBids(),
+        fetchNotifications()
+      ]);
     }
-  }, [
-    getAuthHeaders, 
-    handleApiError,
-    fetchUserProfile,
-    fetchDriverStats,
-    fetchDriverBookings,
-    fetchAvailableLoads,
-    fetchDriverBids,
-    fetchNotifications
-  ]);
+
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    setError('Failed to load dashboard data');
+    
+    // Try individual calls as fallback
+    try {
+      await Promise.all([
+        fetchUserProfile(),
+        fetchDriverStats(),
+        fetchDriverBookings(),
+        fetchAvailableLoads(),
+        fetchDriverBids(),
+        fetchNotifications()
+      ]);
+    } catch (fallbackError) {
+      console.error('Fallback fetch also failed:', fallbackError);
+      setError('Failed to load dashboard data');
+    }
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+}, [
+  getAuthHeaders, 
+  handleApiError,
+  fetchUserProfile,
+  fetchDriverStats,
+  fetchDriverBookings,
+  fetchAvailableLoads,
+  fetchDriverBids,
+  fetchNotifications
+]);
 
   // Initial load and auth setup
   useEffect(() => {

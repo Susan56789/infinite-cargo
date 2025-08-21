@@ -246,6 +246,182 @@ router.post('/',  auth, bookingLimiter, bookingValidation, async (req, res) => {
   }
 });
 
+// @route   GET /api/bookings/statistics/summary
+// @desc    Get booking statistics for current user
+// @access  Private
+router.get('/statistics/summary',  auth, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    let query = {};
+    
+    if (req.user.userType === 'driver') {
+      query.driverId = new mongoose.Types.ObjectId(req.user.id);
+    } else if (req.user.userType === 'cargo_owner') {
+      query.cargoOwnerId = new mongoose.Types.ObjectId(req.user.id);
+    } else {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Invalid user type for accessing booking statistics'
+      });
+    }
+
+    // Get statistics using aggregation
+    const stats = await bookingsCollection.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
+          accepted: { $sum: { $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0] } },
+          inProgress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          rejected: { $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] } },
+          totalRevenue: {
+            $sum: {
+              $cond: [
+                { $eq: ['$status', 'completed'] },
+                '$finalPrice',
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]).toArray();
+
+    const summary = stats[0] || {
+      total: 0,
+      pending: 0,
+      accepted: 0,
+      inProgress: 0,
+      completed: 0,
+      cancelled: 0,
+      rejected: 0,
+      totalRevenue: 0
+    };
+
+    // Get recent bookings
+    const recentBookings = await bookingsCollection.find(query)
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .toArray();
+
+    res.json({
+      status: 'success',
+      data: {
+        summary,
+        recentBookings,
+        userType: req.user.userType
+      }
+    });
+
+  } catch (error) {
+    console.error('Get booking statistics error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching booking statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/bookings/driver
+// @desc    Get bookings for current driver (Alternative endpoint)
+// @access  Private (Driver only)
+router.get('/bookings/driver', auth, [
+  query('status').optional().isIn(['all', 'active', 'completed', 'cancelled']),
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 100 })
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const { status = 'all', page = 1, limit = 20 } = req.query;
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    let query = { driverId };
+
+    // Filter by status
+    if (status === 'active') {
+      query.status = { 
+        $in: ['accepted', 'in_progress', 'driver_assigned', 'assigned', 'picked_up', 'in_transit'] 
+      };
+    } else if (status === 'completed') {
+      query.status = 'completed';
+    } else if (status === 'cancelled') {
+      query.status = 'cancelled';
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [bookings, totalCount] = await Promise.all([
+      bookingsCollection.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .toArray(),
+      bookingsCollection.countDocuments(query)
+    ]);
+
+    // Format bookings consistently
+    const formattedBookings = bookings.map(booking => ({
+      _id: booking._id,
+      title: booking.title || booking.loadTitle || 'Transport Job',
+      pickupLocation: booking.pickupLocation || booking.origin || 'Pickup Location',
+      deliveryLocation: booking.deliveryLocation || booking.destination || 'Delivery Location',
+      cargoType: booking.cargoType || booking.loadType || 'General Cargo',
+      budget: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+      price: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+      status: booking.status,
+      pickupDate: booking.pickupDate || booking.scheduledPickupDate,
+      deliveryDate: booking.deliveryDate || booking.scheduledDeliveryDate,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+      assignedAt: booking.assignedAt || booking.acceptedAt,
+      completedAt: booking.completedAt,
+      rating: booking.rating,
+      review: booking.review
+    }));
+
+    const totalPages = Math.ceil(totalCount / parseInt(limit));
+
+    res.json({
+      status: 'success',
+      data: {
+        bookings: formattedBookings,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalCount,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1
+        },
+        filter: status
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver bookings error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching bookings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   GET /api/bookings
 // @desc    Get bookings for current user
 // @access  Private
@@ -776,88 +952,6 @@ router.post('/:id/rate',  auth, [
   }
 });
 
-// @route   GET /api/bookings/statistics/summary
-// @desc    Get booking statistics for current user
-// @access  Private
-router.get('/statistics/summary',  auth, async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
 
-    let query = {};
-    
-    if (req.user.userType === 'driver') {
-      query.driverId = new mongoose.Types.ObjectId(req.user.id);
-    } else if (req.user.userType === 'cargo_owner') {
-      query.cargoOwnerId = new mongoose.Types.ObjectId(req.user.id);
-    } else {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Invalid user type for accessing booking statistics'
-      });
-    }
-
-    // Get statistics using aggregation
-    const stats = await bookingsCollection.aggregate([
-      { $match: query },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
-          accepted: { $sum: { $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0] } },
-          inProgress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
-          completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
-          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          rejected: { $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] } },
-          totalRevenue: {
-            $sum: {
-              $cond: [
-                { $eq: ['$status', 'completed'] },
-                '$finalPrice',
-                0
-              ]
-            }
-          }
-        }
-      }
-    ]).toArray();
-
-    const summary = stats[0] || {
-      total: 0,
-      pending: 0,
-      accepted: 0,
-      inProgress: 0,
-      completed: 0,
-      cancelled: 0,
-      rejected: 0,
-      totalRevenue: 0
-    };
-
-    // Get recent bookings
-    const recentBookings = await bookingsCollection.find(query)
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .toArray();
-
-    res.json({
-      status: 'success',
-      data: {
-        summary,
-        recentBookings,
-        userType: req.user.userType
-      }
-    });
-
-  } catch (error) {
-    console.error('Get booking statistics error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching booking statistics',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 module.exports = router;
