@@ -6,7 +6,7 @@ import {
   AlertCircle, CheckCircle, XCircle,
   Download, ChevronRight, Trash2, Edit2,
    Pause,  CheckCircle2, 
-  X, Save, Settings
+  X, Save, Settings, MoreVertical
 } from 'lucide-react';
 
 import {getAuthHeader, logout, getUser} from '../../utils/auth'; 
@@ -64,6 +64,12 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       color: 'bg-blue-100 text-blue-800',
       nextStates: ['receiving_bids', 'not_available', 'cancelled']
     },
+     available: {  
+    label: 'Available',
+    icon: <Package className="h-3 w-3" />,
+    color: 'bg-blue-100 text-blue-800',
+    nextStates: ['receiving_bids', 'not_available', 'cancelled']
+  },
     receiving_bids: {
       label: 'Receiving Bids',
       icon: <Clock className="h-3 w-3" />,
@@ -241,63 +247,102 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   // Update load status with modal confirmation
   const updateLoadStatus = async () => {
-    try {
-      setLoading(true);
-      setError('');
+  try {
+    setLoading(true);
+    setError('');
 
-      const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
-        method: 'PATCH',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ 
-          status: statusUpdateData.newStatus,
-          reason: statusUpdateData.reason || `Status changed to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`
-        })
-      });
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          setError('Session expired or not authorized. Please log in again.');
-          logout();
-          return;
-        }
-
-        let errorMessage = 'Failed to update load status';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.message || errorMessage;
-        } catch (parseError) {
-          const errorText = await response.text();
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-
-      if (data.status === 'success') {
-        // Update the load in the local state
-        setLoads(prevLoads => 
-          prevLoads.map(load =>
-            load._id === statusUpdateData.loadId ? { 
-              ...load, 
-              status: statusUpdateData.newStatus,
-              updatedAt: new Date().toISOString()
-            } : load
-          )
-        );
-        setShowStatusUpdateModal(false);
-        setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
-      } else {
-        throw new Error(data.message || 'Failed to update load status');
-      }
-
-    } catch (err) {
-      console.error('Error updating load status:', err);
-      setError(err.message || 'Failed to update load status');
-    } finally {
-      setLoading(false);
+    // Validate inputs before making request
+    if (!statusUpdateData.loadId || !statusUpdateData.newStatus) {
+      throw new Error('Load ID and status are required');
     }
-  };
+
+    // Get fresh auth headers
+    const authHeaders = getAuthHeaders();
+    
+    // Check if we have valid auth before making the request
+    if (!authHeaders.Authorization) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+
+    console.log('Updating load status:', {
+      loadId: statusUpdateData.loadId,
+      newStatus: statusUpdateData.newStatus,
+      reason: statusUpdateData.reason
+    });
+
+    const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ 
+        status: statusUpdateData.newStatus,
+        reason: statusUpdateData.reason || `Status changed to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`
+      })
+    });
+
+    console.log('Status update response:', response.status, response.statusText);
+
+    // Handle response without automatic logout
+    if (!response.ok) {
+      let errorMessage = 'Failed to update load status';
+      
+      if (response.status === 401) {
+        errorMessage = 'Session expired. Please refresh the page and log in again.';
+        // Don't call logout here - just show the error
+        setError(errorMessage);
+        return;
+      }
+      
+      if (response.status === 403) {
+        errorMessage = 'You don\'t have permission to update this load status.';
+        setError(errorMessage);
+        return;
+      }
+
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorMessage;
+      } catch (parseError) {
+        console.error('Error parsing error response:', parseError);
+        // Use the default error message
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log('Status update successful:', data);
+
+    if (data.status === 'success') {
+      // Update the load in the local state
+      setLoads(prevLoads => 
+        prevLoads.map(load =>
+          load._id === statusUpdateData.loadId ? { 
+            ...load, 
+            status: statusUpdateData.newStatus,
+            updatedAt: new Date().toISOString()
+          } : load
+        )
+      );
+      
+      // Close modal and reset
+      setShowStatusUpdateModal(false);
+      setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
+      
+      // Optional: Show success message
+      console.log(`Load status updated to ${statusUpdateData.newStatus}`);
+      
+    } else {
+      throw new Error(data.message || 'Failed to update load status');
+    }
+
+  } catch (err) {
+    console.error('Error updating load status:', err);
+    setError(err.message || 'Failed to update load status');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Delete load
   const deleteLoad = async (loadId) => {
@@ -440,17 +485,19 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   };
 
   const handleEditLoad = (load) => {
-    if (!canEditLoad(load)) {
-      setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
-      return;
-    }
+  if (!canEditLoad(load)) {
+    setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
+    return;
+  }
 
-    // Call the parent's onEditLoad function if provided
-    if (onEditLoad) {
-      onEditLoad(load);
-    }
-  };
-
+  // Call the parent's onEditLoad function if provided
+  if (onEditLoad) {
+    onEditLoad(load._id); // Pass the load ID to the parent
+  } else {
+    // Fallback behavior if no parent handler
+    console.warn('No onEditLoad handler provided');
+  }
+};
   const onRefresh = () => {
     fetchLoads(pagination.page);
   };
@@ -588,7 +635,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     });
   };
 
-  // Status dropdown component
+  // Improved Status dropdown component with better mobile responsiveness
   const StatusDropdown = ({ load }) => {
     const availableTransitions = getAvailableStatusTransitions(load.status);
     const isOpen = dropdownOpenId === load._id;
@@ -604,32 +651,94 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             e.stopPropagation();
             setDropdownOpenId(isOpen ? null : load._id);
           }}
-          className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+          className="inline-flex items-center justify-center w-8 h-8 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={loading}
           title="Update Status"
         >
-          <Settings className="h-4 w-4" />
+          <MoreVertical className="h-4 w-4" />
         </button>
         
         {isOpen && (
-          <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+          <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-64 overflow-y-auto">
             <div className="py-1">
               <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                Change Status To
+                Change Status
               </div>
-              {availableTransitions.map((status) => (
-                <button
-                  key={status}
-                  onClick={() => handleUpdateLoadStatus(load._id, status)}
-                  className="flex items-center w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                  disabled={loading}
-                >
-                  <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)}`}>
-                    {getStatusIcon(status)}
-                    {getStatusLabel(status)}
-                  </span>
-                </button>
-              ))}
+              <div className="p-1 space-y-1">
+                {availableTransitions.map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => handleUpdateLoadStatus(load._id, status)}
+                    className="w-full flex items-center px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-50 rounded-md transition-colors focus:outline-none focus:bg-gray-50"
+                    disabled={loading}
+                  >
+                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)} flex-shrink-0`}>
+                      {getStatusIcon(status)}
+                      {getStatusLabel(status)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  
+
+  // Separate Status Change Dropdown for loads that only have status changes available
+  const StatusChangeDropdown = ({ load }) => {
+    const availableTransitions = getAvailableStatusTransitions(load.status);
+    const isOpen = dropdownOpenId === `status-${load._id}`;
+
+    if (availableTransitions.length === 0) {
+      return null;
+    }
+
+    // Show remaining options (after first 3)
+    const remainingTransitions = availableTransitions.slice(3);
+
+    return (
+      <div className="relative dropdown-container">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setDropdownOpenId(isOpen ? null : `status-${load._id}`);
+          }}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-gray-600 border border-gray-300 hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+          disabled={loading}
+          title="More status options"
+        >
+          <Settings className="h-3 w-3" />
+          More...
+        </button>
+        
+        {isOpen && (
+          <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+            <div className="py-1">
+              <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                More Options
+              </div>
+              <div className="p-1 space-y-1">
+                {remainingTransitions.map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => {
+                      handleUpdateLoadStatus(load._id, status);
+                      setDropdownOpenId(null);
+                    }}
+                    className="w-full flex items-center px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-50 rounded-md transition-colors focus:outline-none focus:bg-gray-50"
+                    disabled={loading}
+                  >
+                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)} flex-shrink-0`}>
+                      {getStatusIcon(status)}
+                      {getStatusLabel(status)}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -672,7 +781,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
               value={statusUpdateData.reason}
               onChange={(e) => setStatusUpdateData(prev => ({ ...prev, reason: e.target.value }))}
               rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
               placeholder="Enter reason for status change..."
             />
           </div>
@@ -688,7 +797,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             <button
               onClick={updateLoadStatus}
               disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50"
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
             >
               {loading ? (
                 <>
@@ -709,16 +818,16 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Error Display */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex items-center">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
-            <span className="text-red-800">{error}</span>
+          <div className="flex items-start">
+            <AlertCircle className="h-5 w-5 text-red-600 mr-2 mt-0.5 flex-shrink-0" />
+            <span className="text-red-800 flex-1">{error}</span>
             <button
               onClick={() => setError('')}
-              className="ml-auto text-red-600 hover:text-red-800"
+              className="ml-2 text-red-600 hover:text-red-800 flex-shrink-0"
             >
               <XCircle className="h-4 w-4" />
             </button>
@@ -727,80 +836,93 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       )}
 
       {/* Header */}
-      <div className="space-y-4">
+      <div className="space-y-2 sm:space-y-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">My Loads</h2>
-          <p className="text-gray-600">Manage and track your freight loads</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900">My Loads</h2>
+          <p className="text-gray-600 text-sm sm:text-base">Manage and track your freight loads</p>
         </div>
       </div>
 
       {/* Filters */}
       <div className="space-y-4">
-        <div className="flex flex-col lg:flex-row gap-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
           <div className="flex-1">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4 sm:h-5 sm:w-5" />
               <input
                 type="text"
                 placeholder="Search loads by title, pickup, or delivery location..."
                 value={filters.search}
                 onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                className="pl-10 pr-4 py-2 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="pl-9 sm:pl-10 pr-4 py-2 sm:py-2.5 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
               />
             </div>
           </div>
           
-          <select
-            value={filters.status}
-            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="">All Status</option>
-            <option value="posted">Posted</option>
-            <option value="receiving_bids">Receiving Bids</option>
-            <option value="driver_assigned">Driver Assigned</option>
-            <option value="assigned">Assigned</option>
-            <option value="in_transit">In Transit</option>
-            <option value="on_hold">On Hold</option>
-            <option value="delivered">Delivered</option>
-            <option value="completed">Completed</option>
-            <option value="not_available">Not Available</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+          <div className="flex gap-2 sm:gap-3">
+            <select
+              value={filters.status}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+              className="px-3 sm:px-4 py-2 sm:py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base min-w-0 flex-1 sm:flex-initial"
+            >
+              <option value="">All Status</option>
+              <option value="posted">Posted</option>
+              <option value="receiving_bids">Receiving Bids</option>
+              <option value="driver_assigned">Driver Assigned</option>
+              <option value="assigned">Assigned</option>
+              <option value="in_transit">In Transit</option>
+              <option value="on_hold">On Hold</option>
+              <option value="delivered">Delivered</option>
+              <option value="completed">Completed</option>
+              <option value="not_available">Not Available</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
 
-          <button
-            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-            className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
-              showAdvancedFilters 
-                ? 'bg-blue-100 text-blue-700 border border-blue-200' 
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-            }`}
-          >
-            <Filter className="h-4 w-4" />
-            Filters
-          </button>
+            <button
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition-colors text-sm sm:text-base whitespace-nowrap ${
+                showAdvancedFilters 
+                  ? 'bg-blue-100 text-blue-700 border border-blue-200' 
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              <Filter className="h-4 w-4" />
+              <span className="hidden sm:inline">Filters</span>
+            </button>
 
-          <button
-            onClick={onRefresh}
-            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-2 transition-colors"
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+            <button
+              onClick={onRefresh}
+              className="px-3 sm:px-4 py-2 sm:py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-2 transition-colors text-sm sm:text-base"
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
         </div>
 
         {/* Advanced Filters */}
         {showAdvancedFilters && (
           <div className="bg-gray-50 rounded-lg p-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Min Budget (KES)</label>
                 <input
                   type="number"
                   value={filters.minBudget}
                   onChange={(e) => setFilters({ ...filters, minBudget: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
+                  placeholder="999999"
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget (KES)</label>
+                <input
+                  type="number"
+                  value={filters.maxBudget}
+                  onChange={(e) => setFilters({ ...filters, maxBudget: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
                   placeholder="999999"
                   min="0"
                 />
@@ -832,22 +954,22 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
       {/* Bulk Actions */}
       {selectedLoads.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-blue-700 font-medium">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <span className="text-blue-700 font-medium text-sm sm:text-base">
               {selectedLoads.size} load{selectedLoads.size !== 1 ? 's' : ''} selected
             </span>
             <div className="flex gap-2">
               <button
                 onClick={() => handleBulkAction('export')}
-                className="px-3 py-1 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
+                className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
               >
                 <Download className="h-3 w-3" />
                 Export CSV
               </button>
               <button
                 onClick={() => handleBulkAction('cancel')}
-                className="px-3 py-1 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
+                className="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
               >
                 <Ban className="h-3 w-3" />
                 Cancel Selected
@@ -858,7 +980,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       )}
 
       {/* Sort Controls */}
-      <div className="flex items-center gap-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-sm">
         <span className="text-gray-700 font-medium">Sort by:</span>
         {[
           { key: 'createdAt', label: 'Date Created' },
@@ -869,7 +991,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           <button
             key={key}
             onClick={() => handleSort(key)}
-            className="flex items-center gap-1 text-blue-600 hover:text-blue-700 transition-colors"
+            className="flex items-center gap-1 text-blue-600 hover:text-blue-700 transition-colors whitespace-nowrap"
           >
             {label}
             {sortConfig.key === key && (
@@ -887,10 +1009,10 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             <span className="ml-2 text-gray-600">Loading your loads...</span>
           </div>
         ) : loads.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
+          <div className="flex flex-col items-center justify-center py-12 px-4">
             <Package className="h-16 w-16 text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
-            <p className="text-gray-500 mb-6 text-center max-w-md">
+            <h3 className="text-lg font-medium text-gray-900 mb-2 text-center">No loads found</h3>
+            <p className="text-gray-500 mb-6 text-center max-w-md text-sm sm:text-base">
               {Object.values(filters).some(filter => filter && filter !== false)
                 ? 'No loads match your current filters. Try adjusting your search criteria.'
                 : 'You haven\'t posted any loads yet.'
@@ -1047,7 +1169,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                         <div className="flex items-center space-x-2">
                           <button
                             onClick={() => handleViewDetails(load._id)}
-                            className="text-blue-600 hover:text-blue-700"
+                            className="text-blue-600 hover:text-blue-700 p-1 hover:bg-blue-50 rounded"
                             title="View Details"
                           >
                             <Eye className="h-4 w-4" />
@@ -1055,7 +1177,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                           {canEditLoad(load) && (
                             <button
                               onClick={() => handleEditLoad(load)}
-                              className="text-yellow-600 hover:text-yellow-700"
+                              className="text-yellow-600 hover:text-yellow-700 p-1 hover:bg-yellow-50 rounded"
                               title="Edit Load"
                             >
                               <Edit2 className="h-4 w-4" />
@@ -1064,7 +1186,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                           {canDeleteLoad(load) && (
                             <button
                               onClick={() => handleDeleteLoad(load._id)}
-                              className="text-red-600 hover:text-red-700"
+                              className="text-red-600 hover:text-red-700 p-1 hover:bg-red-50 rounded"
                               title="Delete Load"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -1081,37 +1203,37 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
             {/* Mobile Card View */}
             <div className="lg:hidden">
-              <div className="space-y-4 p-4">
+              <div className="space-y-3 p-3 sm:p-4">
                 {loads.map((load) => (
                   <div key={load._id} className="border border-gray-200 rounded-lg p-4 space-y-3">
                     <div className="flex items-start justify-between">
-                      <div className="flex items-start space-x-3 flex-1">
+                      <div className="flex items-start space-x-3 flex-1 min-w-0">
                         <input
                           type="checkbox"
                           checked={selectedLoads.has(load._id)}
                           onChange={() => toggleLoadSelection(load._id)}
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-1"
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-1 flex-shrink-0"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-2">
                             {load.isUrgent || load.urgent ? (
-                              <div className="relative">
+                              <div className="relative flex-shrink-0">
                                 <Package className="h-5 w-5 text-gray-400" />
                                 <Zap className="h-3 w-3 text-red-500 absolute -top-1 -right-1" />
                               </div>
                             ) : (
-                              <Package className="h-5 w-5 text-gray-400" />
+                              <Package className="h-5 w-5 text-gray-400 flex-shrink-0" />
                             )}
                             <h3 className="font-medium text-gray-900 truncate">{load.title}</h3>
                           </div>
                           
                           {load.description && (
-                            <p className="text-sm text-gray-600 mb-2 line-clamp-2">
+                            <p className="text-sm text-gray-600 mb-3 line-clamp-2">
                               {load.description}
                             </p>
                           )}
 
-                          <div className="space-y-2">
+                          <div className="space-y-2 mb-3">
                             <div className="flex items-center text-sm">
                               <MapPin className="h-4 w-4 text-green-500 mr-2 flex-shrink-0" />
                               <span className="text-gray-900 truncate">
@@ -1126,20 +1248,41 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                             </div>
                           </div>
 
-                          <div className="flex flex-wrap gap-2 mt-3 text-xs text-gray-500">
-                            <span>{load.weight} kg</span>
-                            <span>•</span>
-                            <span className="capitalize">{load.cargoType?.replace('_', ' ')}</span>
-                            <span>•</span>
-                            <span className="capitalize">{load.vehicleType?.replace('_', ' ')}</span>
+                          <div className="flex flex-wrap gap-1 text-xs text-gray-500 mb-3">
+                            <span className="bg-gray-100 px-2 py-1 rounded">{load.weight} kg</span>
+                            <span className="bg-gray-100 px-2 py-1 rounded capitalize">{load.cargoType?.replace('_', ' ')}</span>
+                            <span className="bg-gray-100 px-2 py-1 rounded capitalize">{load.vehicleType?.replace('_', ' ')}</span>
                           </div>
+
+                          {/* Status Change Buttons - Prominently displayed */}
+                          {canChangeStatus(load) && (
+                            <div className="mb-3">
+                              <div className="text-xs font-medium text-gray-500 mb-2">Quick Status Change:</div>
+                              <div className="flex flex-wrap gap-1">
+                                {getAvailableStatusTransitions(load.status).slice(0, 3).map((status) => (
+                                  <button
+                                    key={status}
+                                    onClick={() => handleUpdateLoadStatus(load._id, status)}
+                                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${getStatusColor(status)} hover:opacity-80`}
+                                    disabled={loading}
+                                  >
+                                    {getStatusIcon(status)}
+                                    {getStatusLabel(status)}
+                                  </button>
+                                ))}
+                                {getAvailableStatusTransitions(load.status).length > 3 && (
+                                  <StatusChangeDropdown load={load} />
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex flex-col items-end space-y-2">
+                      <div className="flex flex-col items-end space-y-2 flex-shrink-0 ml-3">
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
                           {getStatusIcon(load.status)}
-                          {getStatusLabel(load.status)}
+                          <span className="hidden sm:inline">{getStatusLabel(load.status)}</span>
                         </span>
                         <div className="text-sm font-medium text-gray-900">
                           {formatCurrency(load.budget)}
@@ -1151,35 +1294,30 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                     </div>
 
                     <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <div className="text-xs text-gray-500">
-                        <div>Pickup: {formatDate(load.pickupDate)}</div>
-                        <div>Delivery: {formatDate(load.deliveryDate)}</div>
+                      <div className="text-xs text-gray-500 space-y-1">
+                        <div className="flex items-center">
+                          <Calendar className="h-3 w-3 mr-1" />
+                          Pickup: {formatDate(load.pickupDate)}
+                        </div>
+                        <div className="flex items-center">
+                          <Clock className="h-3 w-3 mr-1" />
+                          Delivery: {formatDate(load.deliveryDate)}
+                        </div>
                       </div>
                       
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-1">
                         <button
                           onClick={() => handleViewDetails(load._id)}
                           className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="View Details"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {canEditLoad(load) && (
-                          <button
-                            onClick={() => handleEditLoad(load)}
-                            className="p-2 text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50 rounded-lg transition-colors"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
+                        
+                        {/* Show ActionsDropdown if there are edit/delete actions, otherwise show StatusChangeDropdown */}
+                        {(canEditLoad(load) || canDeleteLoad(load)) ? canChangeStatus(load) : (
+                          <StatusChangeDropdown load={load} />
                         )}
-                        {canDeleteLoad(load) && (
-                          <button
-                            onClick={() => handleDeleteLoad(load._id)}
-                            className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                        {canChangeStatus(load) && <StatusDropdown load={load} />}
                       </div>
                     </div>
                   </div>
@@ -1197,14 +1335,14 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             <button
               onClick={() => handlePageChange(pagination.page - 1)}
               disabled={pagination.page <= 1 || loading}
-              className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Previous
             </button>
             <button
               onClick={() => handlePageChange(pagination.page + 1)}
               disabled={pagination.page >= pagination.totalPages || loading}
-              className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next
             </button>
@@ -1222,7 +1360,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page <= 1 || loading}
-                  className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                  className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ChevronLeft className="h-5 w-5" />
                 </button>
@@ -1248,7 +1386,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                         pageNum === pagination.page
                           ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
                           : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                      } disabled:opacity-50`}
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
                       {pageNum}
                     </button>
@@ -1258,7 +1396,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                 <button
                   onClick={() => handlePageChange(pagination.page + 1)}
                   disabled={pagination.page >= pagination.totalPages || loading}
-                  className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                  className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ChevronRight className="h-5 w-5" />
                 </button>

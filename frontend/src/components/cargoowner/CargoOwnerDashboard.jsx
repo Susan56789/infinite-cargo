@@ -159,22 +159,24 @@ const CargoOwnerDashboard = () => {
       
       const authHeaders = getAuthHeaders();
       
-      const handleResponse = async (response, fallbackData = null) => {
+     const handleResponse = async (response, fallbackData = null) => {
   if (response.ok) {
     const data = await response.json();
-    return data.data || data;  // normal success
+    return data.data || data;
   }
 
-  // Unauthorized
+  // For 401 errors, don't automatically logout during data fetching
+  // Only logout if it's a direct user action that fails
   if (response.status === 401) {
-    handleLogout();
-    throw new Error('Authentication failed');
+    console.warn('Authentication failed during data fetch');
+    // Instead of logout, just return fallback data
+    return fallbackData;
   }
 
   // Forbidden / subscription limit
   if (response.status === 403) {
     console.warn('Access forbidden or subscription limit reached.');
-    return fallbackData; // can be null
+    return fallbackData;
   }
 
   // For all server errors – throw
@@ -695,43 +697,95 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   };
 
   const handleUpdateLoadStatus = async (loadId, newStatus) => {
-    const statusMessages = {
-      'not_available': 'mark as not available',
-      'posted': 'repost',
-      'cancelled': 'cancel'
-    };
+  const statusMessages = {
+    'not_available': 'mark as not available',
+    'posted': 'repost',
+    'cancelled': 'cancel',
+    'receiving_bids': 'set to receiving bids',
+    'assigned': 'assign to driver',
+    'in_transit': 'mark as in transit',
+    'delivered': 'mark as delivered',
+    'completed': 'mark as completed'
+  };
 
-    setConfirmDialog({
-      show: true,
-      message: `Are you sure you want to ${statusMessages[newStatus] || 'update'} this load?`,
-      onConfirm: async () => {
-        try {
-          const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
-            method: 'PATCH',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ status: newStatus })
-          });
+  setConfirmDialog({
+    show: true,
+    message: `Are you sure you want to ${statusMessages[newStatus] || 'update'} this load?`,
+    onConfirm: async () => {
+      try {
+        setLoading(true);
+        setError('');
 
+        // Get fresh auth headers
+        const authHeaders = getAuthHeaders();
+        
+        if (!authHeaders.Authorization) {
+          setError('Authentication required. Please refresh the page and log in again.');
+          return;
+        }
+
+        console.log('Updating load status via dashboard:', { loadId, newStatus });
+
+        const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ 
+            status: newStatus,
+            reason: `Status changed to ${newStatus} via dashboard`
+          })
+        });
+
+        console.log('Dashboard status update response:', response.status);
+
+        if (!response.ok) {
+          let errorMessage = 'Failed to update load status';
+          
           if (response.status === 401) {
-            handleLogout();
+            errorMessage = 'Session expired. Please refresh the page and log in again.';
+            // Don't logout automatically - let user decide
+            setError(errorMessage);
             return;
           }
 
-          if (response.ok) {
-            setSuccess(`Load ${statusMessages[newStatus]} successfully!`);
-            await fetchDashboardData();
-          } else {
-            const data = await response.json();
-            setError(data.message || 'Failed to update load status');
+          if (response.status === 403) {
+            errorMessage = 'You don\'t have permission to update this load.';
+            setError(errorMessage);
+            return;
           }
-        } catch (error) {
-          console.error('Error updating load status:', error);
-          setError(`Failed to update load status: ${error.message}`);
+
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.message || errorMessage;
+          } catch (parseError) {
+            console.error('Error parsing response:', parseError);
+          }
+
+          setError(errorMessage);
+          return;
         }
+
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          setSuccess(`Load ${statusMessages[newStatus] || 'updated'} successfully!`);
+          
+          // Refresh dashboard data instead of individual fetch
+          await fetchDashboardData();
+        } else {
+          setError(data.message || 'Failed to update load status');
+        }
+
+      } catch (error) {
+        console.error('Error updating load status:', error);
+        setError(`Failed to update load status: ${error.message}`);
+      } finally {
+        setLoading(false);
         setConfirmDialog({ show: false, message: '', onConfirm: null });
       }
-    });
-  };
+    }
+  });
+};
+
 
   const handleViewDetails = (loadId) => {
     window.location.href = `/loads/${loadId}`;
