@@ -449,7 +449,7 @@ element={
                       title="Support & Help"
                       description="Get help and support for drivers and cargo owners. Access resources, contact support, and find answers to common questions."
                       keywords="support Kenya, transport help, cargo assistance, driver support"
-                      canonicalUrl="https://infinitecargo.co.ke/support"
+                      canonicalUrl="https://infinitecargo.co.ke/contact"
                     />
                     <Support />
                   </>
