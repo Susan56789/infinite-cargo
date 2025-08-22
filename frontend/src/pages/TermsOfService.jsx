@@ -114,11 +114,11 @@ const TermsOfService = () => {
               </a>
               
               <a 
-                href="tel:+254722483468"
+                href="tel:+254723139610"
                 className="group flex items-center gap-4 bg-white border-2 border-primary-600 text-primary-600 hover:bg-primary-600 hover:text-white px-8 py-4 rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl"
               >
                 <Phone size={24} />
-                +254 722 483 468
+                +254723 139 610
               </a>
             </div>
           </div>

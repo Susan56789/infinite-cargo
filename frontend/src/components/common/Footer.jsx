@@ -45,8 +45,8 @@ const Footer = () => {
     },
     {
       icon: faPhone,
-      href: 'tel:+254722483468',
-      text: '+254 722 483 468',
+      href: 'tel:+254723139610',
+      text: '+254723 139 610',
       isLink: true
     },
     {

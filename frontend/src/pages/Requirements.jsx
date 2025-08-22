@@ -671,14 +671,14 @@ const Requirements = () => {
               <h2 className="text-3xl sm:text-4xl font-bold mb-6">Ready to Ship Your Cargo?</h2>
               <p className="text-xl text-sky-100 mb-12 leading-relaxed">Get competitive bids from verified drivers in minutes</p>
               <div className="flex flex-col sm:flex-row gap-6 justify-center">
-                <button className="group bg-white text-sky-600 hover:bg-gray-50 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center justify-center shadow-xl">
+                <a href='/register' className="group bg-white text-sky-600 hover:bg-gray-50 px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center justify-center shadow-xl">
                   <Package size={20} className="mr-3" />
                   Post Shipment
-                </button>
-                <button className="group bg-white/10 backdrop-blur-sm border-2 border-white/30 hover:bg-white/20 text-white px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center justify-center">
+                </a>
+                <a href='/search-loads' className="group bg-white/10 backdrop-blur-sm border-2 border-white/30 hover:bg-white/20 text-white px-8 py-4 rounded-xl text-lg font-semibold transition-all duration-300 transform hover:scale-105 flex items-center justify-center">
                   <ExternalLink size={20} className="mr-3" />
-                  Get Quote
-                </button>
+                 View Loads
+                </a>
               </div>
             </>
           )}

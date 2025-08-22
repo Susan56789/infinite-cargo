@@ -926,7 +926,7 @@ const Pricing = () => {
                 <a href="/register" className="bg-white text-primary-600 px-8 py-4 rounded-xl font-bold text-lg hover:bg-primary-50 transition-colors">
                   Start Free Trial
                 </a>
-                <a href="/contact" className="border-2 border-white text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-white/10 transition-colors">
+                <a href="/support" className="border-2 border-white text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-white/10 transition-colors">
                   Contact Sales
                 </a>
               </>

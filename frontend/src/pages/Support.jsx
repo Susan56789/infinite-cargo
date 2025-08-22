@@ -1,21 +1,13 @@
 import React, { useState } from 'react';
 import { 
-  MessageCircle, 
   Phone, 
   Mail, 
   HelpCircle, 
-  Users, 
   Truck, 
   Package, 
-  Clock,
-  AlertCircle,
   Search,
   ChevronDown,
-  ChevronRight,
-  ExternalLink,
-  Book,
-  FileText,
-  Video
+  ChevronRight
 } from 'lucide-react';
 
 const Support = () => {
@@ -43,7 +35,7 @@ const Support = () => {
       {
         id: 4,
         question: "How much does it cost to use Infinite Cargo?",
-        answer: "Registration is completely free for both drivers and cargo owners. We only charge a small service fee when a successful transaction is completed. This fee is transparently shown before you confirm any booking."
+        answer: "Registration is completely free for drivers. Cargo owners pay a monthly subscription fee to post loads and access our driver network. There are no transaction fees - cargo owners pay drivers directly upon agreement."
       },
       {
         id: 5,
@@ -65,7 +57,7 @@ const Support = () => {
       {
         id: 8,
         question: "How do I get paid?",
-        answer: "Payments are processed securely through our platform. Once you complete a delivery and the cargo owner confirms receipt, payment is released to your account within 24-48 hours. You can withdraw funds to your mobile money account or bank account."
+        answer: "Payment is arranged directly between you and the cargo owner. Once you complete a delivery and the cargo owner confirms receipt, they will pay you according to your agreed terms - whether cash, mobile money, or bank transfer."
       },
       {
         id: 9,
@@ -91,8 +83,8 @@ const Support = () => {
       },
       {
         id: 13,
-        question: "What payment methods do you accept?",
-        answer: "We accept M-Pesa, Airtel Money, bank transfers, and card payments. Payment is held securely in escrow until successful delivery is confirmed, protecting both parties in the transaction."
+        question: "How do I pay the driver?",
+        answer: "You pay the driver directly according to your agreement. Payment methods can include cash, M-Pesa, Airtel Money, or bank transfer - whatever you and the driver agree upon. Infinite Cargo does not handle payments between cargo owners and drivers."
       },
       {
         id: 14,
@@ -138,35 +130,35 @@ const Support = () => {
         </div>
       </section>
 
-      {/* Quick Actions */}
+      {/* Contact Options */}
       <section className="py-20 -mt-16 relative z-10">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {[
-              { icon: MessageCircle, title: "Live Chat", desc: "Chat with our support team instantly", action: "Start Chat", color: "bg-emerald-500 hover:bg-emerald-600" },
-              { icon: Phone, title: "Call Us", desc: "Speak directly with our team", action: "+254 722 483 468", color: "bg-blue-500 hover:bg-blue-600", link: "tel:+254722483468" },
-              { icon: Mail, title: "Email Support", desc: "Send us a detailed message", action: "Email Us", color: "bg-purple-500 hover:bg-purple-600", link: "mailto:support@infinitecargo.co.ke" },
-              { icon: Video, title: "Video Tutorials", desc: "Watch step-by-step guides", action: "Watch Now", color: "bg-orange-500 hover:bg-orange-600" }
-            ].map((item, index) => (
-              <div key={index} className="group bg-white rounded-3xl p-8 shadow-xl hover:shadow-2xl transition-all duration-500 transform hover:-translate-y-2">
-                <div className="mb-6">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                    <item.icon className="text-slate-600" size={32} />
-                  </div>
+        <div className="max-w-4xl mx-auto px-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="group bg-white rounded-3xl p-8 shadow-xl hover:shadow-2xl transition-all duration-500 transform hover:-translate-y-2">
+              <div className="mb-6">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
+                  <Phone className="text-slate-600" size={32} />
                 </div>
-                <h3 className="text-2xl font-bold text-slate-800 mb-3">{item.title}</h3>
-                <p className="text-slate-600 mb-6 leading-relaxed">{item.desc}</p>
-                {item.link ? (
-                  <a href={item.link} className={`block text-center py-4 px-6 rounded-xl font-semibold text-white transition-all duration-300 ${item.color}`}>
-                    {item.action}
-                  </a>
-                ) : (
-                  <button className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-300 ${item.color}`}>
-                    {item.action}
-                  </button>
-                )}
               </div>
-            ))}
+              <h3 className="text-2xl font-bold text-slate-800 mb-3">Call Us</h3>
+              <p className="text-slate-600 mb-6 leading-relaxed">Speak directly with our support team</p>
+              <a href="tel:+254723139610" className="block text-center py-4 px-6 rounded-xl font-semibold text-white transition-all duration-300 bg-blue-500 hover:bg-blue-600">
+                +254723 139 610
+              </a>
+            </div>
+
+            <div className="group bg-white rounded-3xl p-8 shadow-xl hover:shadow-2xl transition-all duration-500 transform hover:-translate-y-2">
+              <div className="mb-6">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
+                  <Mail className="text-slate-600" size={32} />
+                </div>
+              </div>
+              <h3 className="text-2xl font-bold text-slate-800 mb-3">Email Support</h3>
+              <p className="text-slate-600 mb-6 leading-relaxed">Send us a detailed message</p>
+              <a href="mailto:support@infinitecargo.co.ke" className="block text-center py-4 px-6 rounded-xl font-semibold text-white transition-all duration-300 bg-purple-500 hover:bg-purple-600">
+                Email Us
+              </a>
+            </div>
           </div>
         </div>
       </section>
@@ -229,172 +221,6 @@ const Support = () => {
                   )}
                 </div>
               ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Resources Section */}
-      <section className="py-20 bg-slate-50">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-5xl font-bold text-slate-800 mb-6">Additional Resources</h2>
-            <p className="text-xl text-slate-600">Explore our comprehensive guides and documentation</p>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {[
-              { icon: Book, title: "User Guides", desc: "Comprehensive guides for getting started", link: "/requirements", color: "from-amber-400 to-orange-500" },
-              { icon: FileText, title: "Documentation", desc: "Technical documentation and API guides", color: "from-blue-400 to-indigo-500" },
-              { icon: Users, title: "Community Forum", desc: "Connect with other users and share experiences", color: "from-green-400 to-emerald-500" },
-              { icon: Clock, title: "Service Status", desc: "Check current system status and updates", color: "from-purple-400 to-pink-500" }
-            ].map((resource, index) => (
-              <div key={index} className="group bg-white rounded-3xl p-8 shadow-xl hover:shadow-2xl transition-all duration-500 transform hover:-translate-y-2">
-                <div className="mb-6">
-                  <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${resource.color} flex items-center justify-center text-white group-hover:scale-110 transition-transform duration-300`}>
-                    <resource.icon size={32} />
-                  </div>
-                </div>
-                <h3 className="text-2xl font-bold text-slate-800 mb-3">{resource.title}</h3>
-                <p className="text-slate-600 mb-6 leading-relaxed">{resource.desc}</p>
-                {resource.link ? (
-                  <a href={resource.link} className="inline-flex items-center gap-2 text-primary-600 hover:text-primary-700 font-semibold text-lg group-hover:gap-3 transition-all duration-300">
-                    View Resource <ExternalLink size={18} />
-                  </a>
-                ) : (
-                  <button className="inline-flex items-center gap-2 text-primary-600 hover:text-primary-700 font-semibold text-lg group-hover:gap-3 transition-all duration-300">
-                    Access Resource <ExternalLink size={18} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Contact Form */}
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
-            <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-slate-800 mb-8">Still Need Help?</h2>
-              <p className="text-xl text-slate-600 mb-12 leading-relaxed">
-                Can't find what you're looking for? Send us a message and our support team will get back to you within 24 hours.
-              </p>
-              
-              <div className="space-y-8">
-                <div className="flex items-start gap-6">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white flex-shrink-0">
-                    <Clock size={24} />
-                  </div>
-                  <div>
-                    <h4 className="text-xl font-bold text-slate-800 mb-2">Support Hours</h4>
-                    <p className="text-slate-600 text-lg">Monday - Sunday: 6:00 AM - 10:00 PM</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-start gap-6">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white flex-shrink-0">
-                    <MessageCircle size={24} />
-                  </div>
-                  <div>
-                    <h4 className="text-xl font-bold text-slate-800 mb-2">Average Response Time</h4>
-                    <p className="text-slate-600 text-lg">Less than 2 hours during business hours</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-3xl p-10">
-              <div className="space-y-8">
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Full Name *</div>
-                  <input
-                    type="text"
-                    placeholder="Enter your full name"
-                    className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300"
-                  />
-                </div>
-                
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Email Address *</div>
-                  <input
-                    type="email"
-                    placeholder="Enter your email address"
-                    className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300"
-                  />
-                </div>
-                
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Phone Number</div>
-                  <input
-                    type="tel"
-                    placeholder="Enter your phone number"
-                    className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300"
-                  />
-                </div>
-                
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Issue Category *</div>
-                  <select className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300 bg-white">
-                    <option value="">Select a category</option>
-                    <option value="account">Account Issues</option>
-                    <option value="payment">Payment Problems</option>
-                    <option value="technical">Technical Issues</option>
-                    <option value="driver">Driver Related</option>
-                    <option value="cargo">Cargo Related</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Priority Level</div>
-                  <select className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300 bg-white">
-                    <option value="low">Low - General inquiry</option>
-                    <option value="medium">Medium - Issue affecting usage</option>
-                    <option value="high">High - Urgent issue</option>
-                    <option value="critical">Critical - Service disruption</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <div className="text-sm font-semibold text-slate-700 mb-3 uppercase tracking-wider">Message *</div>
-                  <textarea
-                    rows="6"
-                    placeholder="Please describe your issue or question in detail..."
-                    className="w-full px-6 py-4 border-2 border-slate-200 rounded-xl text-lg focus:outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-100 transition-all duration-300 resize-none"
-                  ></textarea>
-                </div>
-                
-                <button className="w-full bg-gradient-to-r from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white py-5 px-8 rounded-xl text-xl font-bold transition-all duration-300 transform hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-primary-300">
-                  Send Message
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Emergency Support */}
-      <section className="py-12 bg-gradient-to-r from-danger-600 to-danger-700">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="flex flex-col lg:flex-row items-center justify-between gap-8 bg-white/10 backdrop-blur-sm rounded-3xl p-8 border border-white/20">
-            <div className="flex items-center gap-6 text-white">
-              <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center flex-shrink-0">
-                <AlertCircle size={32} />
-              </div>
-              <div className="text-center lg:text-left">
-                <h3 className="text-2xl md:text-3xl font-bold mb-2">Emergency Support</h3>
-                <p className="text-danger-100 text-lg">For urgent issues during active transport or safety concerns</p>
-              </div>
-            </div>
-            <div className="flex-shrink-0">
-              <a 
-                href="tel:+254722483468" 
-                className="bg-white text-danger-600 px-8 py-4 rounded-xl font-bold text-lg hover:bg-danger-50 transition-all duration-300 transform hover:scale-105 shadow-xl"
-              >
-                Call Now: +254 722 483 468
-              </a>
             </div>
           </div>
         </div>

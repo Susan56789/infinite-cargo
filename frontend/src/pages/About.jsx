@@ -82,9 +82,9 @@ const About = () => {
             Whether you're a cargo owner or a licensed driver, Infinite Cargo is built for you.
           </p>
           <div className="mt-8">
-            <button className="bg-white text-primary-600 hover:bg-gray-50 px-8 py-3 rounded-lg font-semibold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg">
+            <a href='/register' className="bg-white text-primary-600 hover:bg-gray-50 px-8 py-3 rounded-lg font-semibold text-lg transition-all duration-300 transform hover:scale-105 shadow-lg">
               Get Started Today
-            </button>
+            </a>
           </div>
         </div>
       </div>
