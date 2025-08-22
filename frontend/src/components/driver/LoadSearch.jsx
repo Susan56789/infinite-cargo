@@ -436,6 +436,7 @@ const LoadSearch = () => {
   const [user, setUser] = useState(null);
   const [bidStates, setBidStates] = useState({}); 
   const [successMessage, setSuccessMessage] = useState('');
+  const [userBids, setUserBids] = useState(new Set()); // Track loads user has bid on
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -526,6 +527,7 @@ const LoadSearch = () => {
   useEffect(() => {
     checkAuthStatus();
     fetchLoads();
+    fetchUserBids(); // Fetch user's existing bids
   }, []);
 
   // Auto-dismiss success message
@@ -537,6 +539,51 @@ const LoadSearch = () => {
       return () => clearTimeout(timer);
     }
   }, [successMessage]);
+
+  // Fetch user's existing bids to track which loads they've already bid on
+  const fetchUserBids = async () => {
+    try {
+      if (!isUserAuthenticated || user?.userType !== 'driver') {
+        setUserBids(new Set());
+        return;
+      }
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()
+      };
+
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids/my-bids', {
+        method: 'GET',
+        headers,
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'success' && data.data && Array.isArray(data.data.bids)) {
+          // Extract load IDs that user has bid on
+          const bidLoadIds = new Set(
+            data.data.bids
+              .filter(bid => bid.load && (bid.status === 'pending' || bid.status === 'accepted'))
+              .map(bid => typeof bid.load === 'object' ? bid.load._id : bid.load)
+          );
+          
+          console.log('User has bid on loads:', Array.from(bidLoadIds));
+          setUserBids(bidLoadIds);
+        } else {
+          setUserBids(new Set());
+        }
+      } else {
+        console.warn('Failed to fetch user bids:', response.status);
+        setUserBids(new Set());
+      }
+    } catch (error) {
+      console.warn('Error fetching user bids:', error);
+      setUserBids(new Set());
+    }
+  };
 
   const fetchLoads = async (page = 1) => {
     try {
@@ -818,6 +865,9 @@ const LoadSearch = () => {
       if (result.status === 'success') {
         setSuccessMessage('Bid placed successfully! The cargo owner will be notified.');
         
+        // Add this load to user's bid list
+        setUserBids(prev => new Set([...prev, payload.load]));
+        
         // Close bid form
         setBidStates(prev => ({
           ...prev,
@@ -925,6 +975,7 @@ const LoadSearch = () => {
   const handleRefresh = () => {
     checkAuthStatus();
     fetchLoads(currentPage);
+    fetchUserBids(); // Also refresh user bids
   };
 
   const handleViewDetails = async (load) => {
@@ -1323,6 +1374,7 @@ const LoadSearch = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
               {loads.map((load) => {
                 const bidState = bidStates[load._id] || { showBidForm: false, submitting: false };
+                const hasUserBid = userBids.has(load._id); // Check if user has already bid
                 
                 return (
                   <div key={load._id} className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 ${load.isPriorityListing ? 'ring-2 ring-yellow-400' : ''}`}>
@@ -1340,6 +1392,12 @@ const LoadSearch = () => {
                             <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                               <TrendingUp className="w-3 h-3 mr-1" />
                               Featured
+                            </span>
+                          )}
+                          {hasUserBid && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Bid Placed
                             </span>
                           )}
                         </div>
@@ -1409,18 +1467,30 @@ const LoadSearch = () => {
                           Details
                         </button>
                         {!bidState.showBidForm && (
-                          <button 
-                            onClick={() => handleBidClick(load)}
-                            className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                          >
-                            <Plus className="w-4 h-4 mr-1 inline" />
-                            {isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid'}
-                          </button>
+                          <>
+                            {hasUserBid ? (
+                              <button 
+                                disabled={true}
+                                className="flex-1 px-3 py-2 text-sm bg-green-100 text-green-700 rounded-md cursor-not-allowed"
+                              >
+                                <CheckCircle className="w-4 h-4 mr-1 inline" />
+                                Bid Already Placed
+                              </button>
+                            ) : (
+                              <button 
+                                onClick={() => handleBidClick(load)}
+                                className="flex-1 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                              >
+                                <Plus className="w-4 h-4 mr-1 inline" />
+                                {isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid'}
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
 
                       {/* Bid Form */}
-                      {bidState.showBidForm && (
+                      {bidState.showBidForm && !hasUserBid && (
                         <BidForm 
                           load={load}
                           onBidSubmit={(bidData) => handleBidFormSubmit(load._id, bidData)}
@@ -1719,9 +1789,17 @@ const LoadSearch = () => {
                   setShowLoadModal(false);
                   handleBidClick(selectedLoad);
                 }}
-                className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                disabled={userBids.has(selectedLoad._id)}
+                className={`flex-1 px-4 py-2 text-sm rounded-md transition-colors ${
+                  userBids.has(selectedLoad._id) 
+                    ? 'bg-green-100 text-green-700 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
               >
-                {isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid'}
+                {userBids.has(selectedLoad._id) 
+                  ? 'Bid Already Placed'
+                  : (isUserAuthenticated && user?.userType === 'driver' ? 'Place Bid' : 'Login to Bid')
+                }
               </button>
             </div>
           </div>

@@ -702,7 +702,7 @@ router.get('/dashboard', auth, async (req, res) => {
 
 
 // @route   GET /api/drivers/active-jobs
-// @desc    Get active jobs for current driver (Fixed Version)
+// @desc    Get active jobs for current driver 
 // @access  Private (Driver only)
 router.get('/active-jobs', auth, async (req, res) => {
   try {
@@ -717,64 +717,287 @@ router.get('/active-jobs', auth, async (req, res) => {
     const bookingsCollection = db.collection('bookings');
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
-    // Updated status matching to include all possible active statuses
+    // COMPREHENSIVE status matching - includes ALL possible active job states
     const activeStatuses = [
-      'accepted', 
-      'in_progress', 
-      'driver_assigned', 
-      'assigned',
-      'picked_up', 
-      'in_transit',
-      'confirmed',
-      'on_route'
+      // Initial assignment states
+      'assigned', 'accepted', 'driver_assigned',
+      // Confirmation and preparation states
+      'confirmed', 'in_progress', 'started',
+      // Pickup phase states
+      'en_route_pickup', 'en_route_to_pickup', 'going_to_pickup',
+      'arrived_pickup', 'at_pickup_location', 'at_pickup',
+      'picked_up', 'pickup_completed', 'loading', 'loaded',
+      // Transit phase states
+      'in_transit', 'on_route', 'en_route_delivery', 'en_route_to_delivery',
+      'transporting', 'delivering',
+      // Near completion states (still active until fully completed)
+      'arrived_delivery', 'at_delivery_location', 'at_delivery',
+      'unloading', 'delivery_in_progress'
     ];
 
+    console.log(`[DEBUG] Searching for active jobs for driver: ${req.user.id}`);
+    console.log(`[DEBUG] Active statuses: ${activeStatuses.join(', ')}`);
+
+    // Get active jobs from bookings collection
     const activeJobs = await bookingsCollection.find({
       driverId,
       status: { $in: activeStatuses }
     })
-    .sort({ createdAt: -1, assignedAt: -1 })
+    .sort({ 
+      assignedAt: -1,
+      acceptedAt: -1,
+      createdAt: -1 
+    })
     .toArray();
 
-    // Format jobs for frontend with comprehensive field mapping
-    const formattedJobs = activeJobs.map(job => ({
-      _id: job._id,
-      title: job.title || job.loadTitle || job.description || 'Transport Job',
-      pickupLocation: job.pickupLocation || job.origin || job.fromLocation || 'Pickup Location',
-      deliveryLocation: job.deliveryLocation || job.destination || job.toLocation || 'Delivery Location',
-      pickupDate: job.pickupDate || job.scheduledPickupDate || job.startDate,
-      deliveryDate: job.deliveryDate || job.scheduledDeliveryDate || job.endDate,
-      cargoType: job.cargoType || job.loadType || job.type || 'General Cargo',
-      weight: job.weight || job.cargoWeight || job.estimatedWeight,
-      budget: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
-      price: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
-      currency: job.currency || 'KES',
-      status: job.status,
-      assignedAt: job.assignedAt || job.acceptedAt || job.createdAt,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      cargoOwnerId: job.cargoOwnerId,
-      loadId: job.loadId,
-      
-      // Additional details that might be useful
-      trackingUpdates: job.trackingUpdates || [],
-      estimatedDistance: job.estimatedDistance,
-      estimatedDuration: job.estimatedDuration,
-      instructions: job.instructions || job.specialInstructions,
-      contactPhone: job.contactPhone,
-      urgency: job.urgency || 'normal',
-      
-      // Derived fields for better UX
-      isUrgent: job.urgency === 'urgent',
-      isOverdue: job.deliveryDate ? new Date(job.deliveryDate) < new Date() : false,
-      timeToPickup: job.pickupDate ? Math.max(0, Math.ceil((new Date(job.pickupDate) - new Date()) / (1000 * 60 * 60 * 24))) : null
-    }));
+    console.log(`[DEBUG] Found ${activeJobs.length} active jobs in bookings collection`);
+    
+    // Log each job for debugging
+    activeJobs.forEach((job, index) => {
+      console.log(`[DEBUG] Job ${index + 1}:`, {
+        _id: job._id,
+        title: job.title,
+        status: job.status,
+        assignedAt: job.assignedAt,
+        pickupLocation: job.pickupLocation,
+        deliveryLocation: job.deliveryLocation
+      });
+    });
 
-    // Sort by priority (urgent first, then by pickup date, then by creation date)
+    // If no active jobs found, also check bids collection for recently accepted bids
+    // that might not have been converted to bookings yet
+    if (activeJobs.length === 0) {
+      console.log('[DEBUG] No active jobs found in bookings, checking bids collection...');
+      
+      const bidsCollection = db.collection('bids');
+      const loadsCollection = db.collection('loads');
+      
+      const recentlyAcceptedBids = await bidsCollection.find({
+        driverId,
+        status: 'accepted',
+        acceptedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+      }).toArray();
+
+      console.log(`[DEBUG] Found ${recentlyAcceptedBids.length} recently accepted bids`);
+
+      // Get load details for each accepted bid
+      for (const bid of recentlyAcceptedBids) {
+        try {
+          const load = await loadsCollection.findOne({ _id: bid.loadId });
+          
+          if (load) {
+            // Create a job-like object from the bid and load
+            const jobFromBid = {
+              _id: bid._id,
+              bidId: bid._id,
+              loadId: bid.loadId,
+              title: load.title || 'Transport Job',
+              pickupLocation: load.pickupLocation || load.origin,
+              deliveryLocation: load.deliveryLocation || load.destination,
+              pickupDate: bid.proposedPickupDate || load.pickupDate,
+              deliveryDate: bid.proposedDeliveryDate || load.deliveryDate,
+              cargoType: load.cargoType || load.loadType,
+              weight: load.weight,
+              dimensions: load.dimensions,
+              agreedAmount: bid.bidAmount,
+              totalAmount: bid.bidAmount,
+              currency: bid.currency || 'KES',
+              status: 'assigned', // Default status for accepted bids
+              assignedAt: bid.acceptedAt,
+              createdAt: bid.createdAt,
+              updatedAt: bid.updatedAt,
+              cargoOwnerId: bid.cargoOwnerId,
+              specialInstructions: load.specialInstructions,
+              source: 'bid' // Mark this as coming from bid
+            };
+            
+            activeJobs.push(jobFromBid);
+            console.log(`[DEBUG] Added job from bid:`, {
+              bidId: bid._id,
+              loadTitle: load.title,
+              status: 'assigned'
+            });
+          }
+        } catch (bidError) {
+          console.error('[DEBUG] Error processing bid:', bidError);
+        }
+      }
+    }
+
+    // Format jobs for frontend with comprehensive field mapping
+    const formattedJobs = activeJobs.map(job => {
+      // Comprehensive date handling
+      const getDate = (...dateFields) => {
+        for (const field of dateFields) {
+          const value = job[field];
+          if (value) return value;
+        }
+        return null;
+      };
+
+      const pickupDate = getDate('pickupDate', 'scheduledPickupDate', 'startDate', 'pickupTime');
+      const deliveryDate = getDate('deliveryDate', 'scheduledDeliveryDate', 'endDate', 'deliveryTime');
+
+      // Calculate derived fields
+      const now = new Date();
+      const isUrgent = job.urgency === 'urgent' || job.isUrgent || 
+                     (pickupDate && new Date(pickupDate) <= new Date(now.getTime() + 24 * 60 * 60 * 1000));
+      const isOverdue = deliveryDate ? new Date(deliveryDate) < now : false;
+      
+      let timeToPickup = null;
+      if (pickupDate) {
+        const diffTime = new Date(pickupDate) - now;
+        timeToPickup = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      }
+
+      // Status normalization for frontend consistency
+      const normalizeStatus = (status) => {
+        const statusMap = {
+          'assigned': 'assigned',
+          'driver_assigned': 'assigned',
+          'accepted': 'accepted',
+          'confirmed': 'confirmed',
+          'in_progress': 'in_progress',
+          'started': 'in_progress',
+          'en_route_pickup': 'en_route_pickup',
+          'en_route_to_pickup': 'en_route_pickup',
+          'going_to_pickup': 'en_route_pickup',
+          'arrived_pickup': 'at_pickup',
+          'at_pickup_location': 'at_pickup',
+          'at_pickup': 'at_pickup',
+          'picked_up': 'picked_up',
+          'pickup_completed': 'picked_up',
+          'loading': 'picked_up',
+          'loaded': 'picked_up',
+          'in_transit': 'in_transit',
+          'on_route': 'in_transit',
+          'transporting': 'in_transit',
+          'en_route_delivery': 'in_transit',
+          'en_route_to_delivery': 'in_transit',
+          'delivering': 'in_transit',
+          'arrived_delivery': 'at_delivery',
+          'at_delivery_location': 'at_delivery',
+          'at_delivery': 'at_delivery',
+          'unloading': 'at_delivery',
+          'delivery_in_progress': 'at_delivery'
+        };
+        return statusMap[status] || status;
+      };
+
+      const normalizedStatus = normalizeStatus(job.status);
+
+      // Status display helpers
+      const getStatusDisplay = (status) => {
+        const displays = {
+          'assigned': 'Assigned',
+          'accepted': 'Accepted',
+          'confirmed': 'Confirmed',
+          'in_progress': 'In Progress',
+          'en_route_pickup': 'En Route to Pickup',
+          'at_pickup': 'At Pickup Location',
+          'picked_up': 'Cargo Picked Up',
+          'in_transit': 'In Transit',
+          'at_delivery': 'At Delivery Location'
+        };
+        return displays[status] || status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      };
+
+      // Action availability based on status
+      const getAvailableActions = (status) => {
+        const actions = {
+          'assigned': ['confirm', 'start'],
+          'accepted': ['confirm', 'start'],
+          'confirmed': ['start', 'en_route_pickup'],
+          'in_progress': ['pickup', 'en_route_pickup'],
+          'en_route_pickup': ['arrive_pickup'],
+          'at_pickup': ['pickup_complete'],
+          'picked_up': ['start_transit'],
+          'in_transit': ['arrive_delivery'],
+          'at_delivery': ['complete_delivery']
+        };
+        return actions[status] || [];
+      };
+
+      return {
+        _id: job._id,
+        bidId: job.bidId,
+        loadId: job.loadId,
+        
+        // Basic job information
+        title: job.title || job.loadTitle || job.description || 'Transport Job',
+        pickupLocation: job.pickupLocation || job.origin || job.fromLocation || 'Pickup Location',
+        deliveryLocation: job.deliveryLocation || job.destination || job.toLocation || 'Delivery Location',
+        
+        // Dates
+        pickupDate,
+        deliveryDate,
+        
+        // Cargo details
+        cargoType: job.cargoType || job.loadType || job.type || 'General Cargo',
+        weight: job.weight || job.cargoWeight || job.estimatedWeight,
+        dimensions: job.dimensions,
+        
+        // Financial information
+        agreedAmount: job.agreedAmount || job.totalAmount || job.price || job.amount || 0,
+        totalAmount: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
+        budget: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
+        currency: job.currency || 'KES',
+        paymentMethod: job.paymentMethod,
+        paymentTiming: job.paymentTiming,
+        
+        // Status information
+        status: normalizedStatus,
+        originalStatus: job.status,
+        statusDisplay: getStatusDisplay(normalizedStatus),
+        
+        // Timestamps
+        assignedAt: job.assignedAt || job.acceptedAt || job.createdAt,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+        
+        // Related IDs
+        cargoOwnerId: job.cargoOwnerId,
+        driverId: job.driverId,
+        
+        // Additional details
+        specialInstructions: job.specialInstructions || job.instructions,
+        trackingUpdates: job.trackingUpdates || [],
+        timeline: job.timeline || [],
+        estimatedDistance: job.estimatedDistance,
+        estimatedDuration: job.estimatedDuration,
+        
+        // Contact information
+        driverInfo: job.driverInfo,
+        cargoOwnerInfo: job.cargoOwnerInfo,
+        
+        // Derived fields for UI
+        isUrgent,
+        isOverdue,
+        timeToPickup,
+        priority: isOverdue ? 'critical' : isUrgent ? 'high' : timeToPickup <= 1 ? 'high' : 'normal',
+        
+        // Action helpers
+        availableActions: getAvailableActions(normalizedStatus),
+        canConfirm: ['assigned', 'accepted'].includes(normalizedStatus),
+        canStart: ['assigned', 'accepted', 'confirmed'].includes(normalizedStatus),
+        canUpdateLocation: ['in_progress', 'picked_up', 'in_transit'].includes(normalizedStatus),
+        canCompletePickup: ['en_route_pickup', 'at_pickup'].includes(normalizedStatus),
+        canCompleteDelivery: ['in_transit', 'at_delivery'].includes(normalizedStatus),
+        
+        // Source tracking
+        source: job.source || 'booking'
+      };
+    });
+
+    // Enhanced sorting logic
     formattedJobs.sort((a, b) => {
-      // Urgent jobs first
-      if (a.isUrgent && !b.isUrgent) return -1;
-      if (!a.isUrgent && b.isUrgent) return 1;
+      // Critical/overdue jobs first
+      if (a.priority === 'critical' && b.priority !== 'critical') return -1;
+      if (a.priority !== 'critical' && b.priority === 'critical') return 1;
+      
+      // High priority jobs next
+      if (a.priority === 'high' && b.priority !== 'high') return -1;
+      if (!a.priority === 'high' && b.priority === 'high') return 1;
       
       // Then by pickup date (soonest first)
       if (a.pickupDate && b.pickupDate) {
@@ -783,23 +1006,43 @@ router.get('/active-jobs', auth, async (req, res) => {
       if (a.pickupDate && !b.pickupDate) return -1;
       if (!a.pickupDate && b.pickupDate) return 1;
       
-      // Finally by creation date (newest first)
-      return new Date(b.createdAt) - new Date(a.createdAt);
+      // Finally by assignment date (newest first)
+      return new Date(b.assignedAt) - new Date(a.assignedAt);
     });
+
+    // Calculate comprehensive summary statistics
+    const summary = {
+      total: formattedJobs.length,
+      urgent: formattedJobs.filter(job => job.isUrgent).length,
+      overdue: formattedJobs.filter(job => job.isOverdue).length,
+      today: formattedJobs.filter(job => 
+        job.pickupDate && 
+        new Date(job.pickupDate).toDateString() === new Date().toDateString()
+      ).length,
+      thisWeek: formattedJobs.filter(job => {
+        if (!job.pickupDate) return false;
+        const pickupDate = new Date(job.pickupDate);
+        const now = new Date();
+        const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        return pickupDate >= now && pickupDate <= weekFromNow;
+      }).length,
+      byStatus: formattedJobs.reduce((acc, job) => {
+        acc[job.status] = (acc[job.status] || 0) + 1;
+        return acc;
+      }, {}),
+      totalValue: formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0)
+    };
+
+    console.log(`[DEBUG] Final response: ${formattedJobs.length} active jobs`);
+    console.log(`[DEBUG] Summary:`, summary);
 
     res.json({
       status: 'success',
       data: {
         activeJobs: formattedJobs,
         total: formattedJobs.length,
-        summary: {
-          urgent: formattedJobs.filter(job => job.isUrgent).length,
-          overdue: formattedJobs.filter(job => job.isOverdue).length,
-          today: formattedJobs.filter(job => 
-            job.pickupDate && 
-            new Date(job.pickupDate).toDateString() === new Date().toDateString()
-          ).length
-        }
+        summary,
+        message: formattedJobs.length === 0 ? 'No active jobs found. Check for new opportunities in available loads!' : undefined
       }
     });
 
@@ -2008,264 +2251,6 @@ function getNestedValue(obj, path) {
     return current && current[key] !== undefined ? current[key] : undefined;
   }, obj);
 }
-
-// @route   GET /api/drivers/active-jobs
-// @desc    Get active jobs for current driver (Enhanced Version)
-// @access  Private (Driver only)
-router.get('/active-jobs', auth, async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. Driver account required.'
-      });
-    }
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-    const driverId = new mongoose.Types.ObjectId(req.user.id);
-
-    // Comprehensive status matching - covers all possible active job states
-    const activeStatuses = [
-      // From bid acceptance process
-      'accepted', 'assigned', 'driver_assigned',
-      // Job progression states
-      'confirmed', 'in_progress', 'started',
-      // Pickup and transport states  
-      'en_route_pickup', 'arrived_pickup', 'picked_up', 'loading',
-      'in_transit', 'en_route_delivery', 'on_route',
-      // Near completion (but still active)
-      'arrived_delivery', 'unloading'
-    ];
-
-    // Get active jobs from bookings collection
-    const activeJobs = await bookingsCollection.find({
-      driverId,
-      status: { $in: activeStatuses }
-    })
-    .sort({ 
-      createdAt: -1, 
-      assignedAt: -1,
-      acceptedAt: -1 
-    })
-    .toArray();
-
-    console.log(`Found ${activeJobs.length} active jobs for driver ${req.user.id}`);
-
-    // If no jobs found in bookings, also check bids collection for recently accepted bids
-    if (activeJobs.length === 0) {
-      const Bid = require('../models/bid');
-      const recentlyAcceptedBids = await Bid.find({
-        driver: driverId,
-        status: 'accepted',
-        acceptedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-      })
-      .populate('load')
-      .populate('cargoOwner', 'name phone email')
-      .sort({ acceptedAt: -1 });
-
-      console.log(`Found ${recentlyAcceptedBids.length} recently accepted bids`);
-
-      // Convert accepted bids to job format if no booking exists yet
-      for (const bid of recentlyAcceptedBids) {
-        if (bid.load) {
-          const jobFromBid = {
-            _id: bid._id, // Use bid ID as job ID temporarily
-            title: bid.load.title || 'Transport Job',
-            pickupLocation: bid.load.pickupLocation,
-            deliveryLocation: bid.load.deliveryLocation,
-            pickupDate: bid.proposedPickupDate || bid.load.pickupDate,
-            deliveryDate: bid.proposedDeliveryDate || bid.load.deliveryDate,
-            cargoType: bid.load.cargoType,
-            weight: bid.load.weight,
-            totalAmount: bid.bidAmount,
-            agreedAmount: bid.bidAmount,
-            currency: bid.currency || 'KES',
-            status: 'assigned', // Normalize status
-            assignedAt: bid.acceptedAt,
-            createdAt: bid.createdAt,
-            cargoOwnerId: bid.cargoOwner._id,
-            loadId: bid.load._id,
-            bidId: bid._id,
-            // Additional metadata
-            source: 'bid', // Indicates this came from bid, not booking
-            cargoOwnerInfo: {
-              name: bid.cargoOwner.name,
-              phone: bid.cargoOwner.phone,
-              email: bid.cargoOwner.email
-            },
-            instructions: bid.load.specialInstructions
-          };
-          
-          activeJobs.push(jobFromBid);
-        }
-      }
-    }
-
-    // Format jobs for frontend with comprehensive field mapping
-    const formattedJobs = activeJobs.map(job => {
-      // Handle different date field possibilities
-      const getDate = (dateField) => {
-        return job[dateField] || job.scheduledPickupDate || job.startDate || null;
-      };
-
-      const pickupDate = getDate('pickupDate');
-      const deliveryDate = getDate('deliveryDate') || getDate('scheduledDeliveryDate') || getDate('endDate');
-
-      // Calculate derived fields
-      const now = new Date();
-      const isUrgent = job.urgency === 'urgent' || job.isUrgent || 
-                     (pickupDate && new Date(pickupDate) <= new Date(now.getTime() + 24 * 60 * 60 * 1000));
-      const isOverdue = deliveryDate ? new Date(deliveryDate) < now : false;
-      const timeToPickup = pickupDate ? Math.max(0, Math.ceil((new Date(pickupDate) - now) / (1000 * 60 * 60 * 24))) : null;
-
-      // Normalize status for frontend
-      const normalizeStatus = (status) => {
-        const statusMap = {
-          'driver_assigned': 'assigned',
-          'en_route_pickup': 'en_route',
-          'arrived_pickup': 'at_pickup',
-          'en_route_delivery': 'in_transit',
-          'arrived_delivery': 'at_delivery'
-        };
-        return statusMap[status] || status;
-      };
-
-      return {
-        _id: job._id,
-        title: job.title || job.loadTitle || job.description || 'Transport Job',
-        pickupLocation: job.pickupLocation || job.origin || job.fromLocation || 'Pickup Location',
-        deliveryLocation: job.deliveryLocation || job.destination || job.toLocation || 'Delivery Location',
-        pickupDate,
-        deliveryDate,
-        cargoType: job.cargoType || job.loadType || job.type || 'General Cargo',
-        weight: job.weight || job.cargoWeight || job.estimatedWeight,
-        
-        // Financial details
-        budget: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
-        price: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
-        agreedAmount: job.totalAmount || job.agreedAmount || job.price || job.amount || 0,
-        currency: job.currency || 'KES',
-        
-        // Status and timing
-        status: normalizeStatus(job.status),
-        originalStatus: job.status, // Keep original for backend reference
-        assignedAt: job.assignedAt || job.acceptedAt || job.createdAt,
-        createdAt: job.createdAt,
-        updatedAt: job.updatedAt,
-        
-        // Related IDs
-        cargoOwnerId: job.cargoOwnerId,
-        loadId: job.loadId,
-        bidId: job.bidId,
-        
-        // Contact information
-        cargoOwnerInfo: job.cargoOwnerInfo || job.clientInfo,
-        contactPhone: job.contactPhone || job.cargoOwnerInfo?.phone,
-        
-        // Job details
-        trackingUpdates: job.trackingUpdates || [],
-        timeline: job.timeline || [],
-        estimatedDistance: job.estimatedDistance,
-        estimatedDuration: job.estimatedDuration,
-        instructions: job.instructions || job.specialInstructions || job.load?.specialInstructions,
-        
-        // Driver-specific info
-        paymentMethod: job.paymentMethod,
-        paymentTiming: job.paymentTiming,
-        
-        // Derived fields for better UX
-        isUrgent,
-        isOverdue,
-        timeToPickup,
-        
-        // Priority calculation
-        priority: isUrgent ? 'high' : isOverdue ? 'critical' : timeToPickup <= 1 ? 'high' : 'normal',
-        
-        // Source tracking
-        source: job.source || 'booking',
-        
-        // Status display helpers
-        statusDisplay: normalizeStatus(job.status).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-        canStartJob: ['assigned', 'confirmed'].includes(normalizeStatus(job.status)),
-        canUpdateLocation: ['in_progress', 'picked_up', 'in_transit', 'en_route'].includes(normalizeStatus(job.status)),
-        canCompletePickup: ['assigned', 'confirmed', 'en_route', 'at_pickup'].includes(normalizeStatus(job.status)),
-        canCompleteDelivery: ['in_transit', 'at_delivery'].includes(normalizeStatus(job.status))
-      };
-    });
-
-    // Enhanced sorting logic
-    formattedJobs.sort((a, b) => {
-      // Critical/overdue jobs first
-      if (a.priority === 'critical' && b.priority !== 'critical') return -1;
-      if (a.priority !== 'critical' && b.priority === 'critical') return 1;
-      
-      // Urgent jobs next
-      if (a.isUrgent && !b.isUrgent) return -1;
-      if (!a.isUrgent && b.isUrgent) return 1;
-      
-      // Jobs starting today
-      const aToday = a.timeToPickup === 0;
-      const bToday = b.timeToPickup === 0;
-      if (aToday && !bToday) return -1;
-      if (!aToday && bToday) return 1;
-      
-      // Then by pickup date (soonest first)
-      if (a.pickupDate && b.pickupDate) {
-        return new Date(a.pickupDate) - new Date(b.pickupDate);
-      }
-      if (a.pickupDate && !b.pickupDate) return -1;
-      if (!a.pickupDate && b.pickupDate) return 1;
-      
-      // Finally by creation date (newest first)
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    });
-
-    // Calculate summary statistics
-    const summary = {
-      total: formattedJobs.length,
-      urgent: formattedJobs.filter(job => job.isUrgent).length,
-      overdue: formattedJobs.filter(job => job.isOverdue).length,
-      today: formattedJobs.filter(job => 
-        job.pickupDate && 
-        new Date(job.pickupDate).toDateString() === new Date().toDateString()
-      ).length,
-      thisWeek: formattedJobs.filter(job => {
-        if (!job.pickupDate) return false;
-        const pickupDate = new Date(job.pickupDate);
-        const now = new Date();
-        const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-        return pickupDate >= now && pickupDate <= weekFromNow;
-      }).length,
-      byStatus: formattedJobs.reduce((acc, job) => {
-        acc[job.status] = (acc[job.status] || 0) + 1;
-        return acc;
-      }, {}),
-      totalEarnings: formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0)
-    };
-
-    console.log('Active jobs summary:', summary);
-
-    res.json({
-      status: 'success',
-      data: {
-        activeJobs: formattedJobs,
-        total: formattedJobs.length,
-        summary,
-        message: formattedJobs.length === 0 ? 'No active jobs found. Check for new load opportunities!' : undefined
-      }
-    });
-
-  } catch (error) {
-    console.error('Get active jobs error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching active jobs',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 
 // @route   GET /api/drivers/stats
