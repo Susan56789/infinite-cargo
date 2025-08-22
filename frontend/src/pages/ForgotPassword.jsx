@@ -21,26 +21,28 @@ const ForgotPassword = () => {
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    
-    // For verification code, only allow numbers and limit to 6 digits
-    if (name === 'verificationCode') {
-      const numericValue = value.replace(/\D/g, '').slice(0, 6);
-      setFormData({
-        ...formData,
-        [name]: numericValue
-      });
-    } else {
-      setFormData({
-        ...formData,
-        [name]: value
-      });
-    }
-    
-    // Clear messages when user starts typing
-    if (error) setError('');
-    if (success) setSuccess('');
-  };
+  const { name, value } = e.target;
+  
+  // For verification code, only allow numbers and limit to 6 digits
+  if (name === 'verificationCode') {
+    // Remove all non-numeric characters and spaces, limit to 6 digits
+    const numericValue = value.replace(/\D/g, '').slice(0, 6);
+    setFormData({
+      ...formData,
+      [name]: numericValue // Store clean numeric value, not formatted
+    });
+  } else {
+    setFormData({
+      ...formData,
+      [name]: value
+    });
+  }
+  
+  // Clear messages when user starts typing
+  if (error) setError('');
+  if (success) setSuccess('');
+};
+
 
   const handleFocus = (fieldName) => {
     setFocusedField(fieldName);
@@ -64,17 +66,22 @@ const ForgotPassword = () => {
   };
 
   const validateCode = () => {
-    if (!formData.verificationCode.trim()) {
-      setError('Verification code is required');
-      return false;
-    }
-    if (formData.verificationCode.length !== 6) {
-      setError('Please enter the complete 6-digit verification code');
-      return false;
-    }
-    return true;
-  };
-
+  const cleanCode = formData.verificationCode.trim();
+  
+  if (!cleanCode) {
+    setError('Verification code is required');
+    return false;
+  }
+  if (cleanCode.length !== 6) {
+    setError('Please enter the complete 6-digit verification code');
+    return false;
+  }
+  if (!/^\d{6}$/.test(cleanCode)) {
+    setError('Verification code must contain only numbers');
+    return false;
+  }
+  return true;
+};
   const startResendTimer = () => {
     const timerDuration = Math.min(60 + (resendCount * 30), 300); // Max 5 minutes
     setResendTimer(timerDuration);
@@ -162,76 +169,93 @@ const ForgotPassword = () => {
   };
 
   const handleCodeSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!validateCode()) return;
+  e.preventDefault();
+  
+  if (!validateCode()) return;
 
-    setLoading(true);
-    setError('');
-    setSuccess('');
+  setLoading(true);
+  setError('');
+  setSuccess('');
 
+  try {
+    // Send the clean numeric code, not the formatted display version
+    const requestBody = {
+      email: formData.email.trim().toLowerCase(),
+      code: formData.verificationCode.trim() // This is already clean numeric
+    };
+
+    console.log('Sending verification request:', requestBody); // Debug log
+
+    const response = await fetch(`${API_BASE_URL}/users/verify-reset-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      mode: 'cors',
+      body: JSON.stringify(requestBody)
+    });
+
+    let result;
     try {
-      const response = await fetch(`${API_BASE_URL}/users/verify-reset-code`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-        mode: 'cors',
-        body: JSON.stringify({
-          email: formData.email.trim().toLowerCase(),
-          code: formData.verificationCode.trim()
-        })
-      });
-
-      let result;
-      try {
-        result = await response.json();
-      } catch (parseError) {
-        throw new Error('Invalid response from server');
-      }
-
-      if (!response.ok) {
-        if (response.status === 400) {
-          throw new Error(result.message || 'Invalid or expired verification code');
-        } else if (response.status === 500) {
-          throw new Error('Server error. Please try again later');
-        } else {
-          throw new Error(result.message || `Request failed (${response.status})`);
-        }
-      }
-
-      // Success - navigate to reset password page with token
-      setSuccess('Code verified! Redirecting to create new password...');
-      
-      setTimeout(() => {
-        navigate(`/reset-password?token=${result.resetToken}&email=${encodeURIComponent(result.email)}`);
-      }, 1500);
-
-    } catch (error) {
-      console.error('Verify code error:', error);
-      
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        setError('🌐 Network error: Unable to connect to server. Please check your internet connection and try again.');
-      } else {
-        setError(error.message || '❌ Invalid verification code. Please try again.');
-      }
-    } finally {
-      setLoading(false);
+      result = await response.json();
+    } catch (parseError) {
+      throw new Error('Invalid response from server');
     }
-  };
+
+    console.log('Verification response:', { status: response.status, result }); // Debug log
+
+    if (!response.ok) {
+      if (response.status === 400) {
+        // Provide more specific error messages
+        if (result.message.includes('expired')) {
+          throw new Error('Verification code has expired. Please request a new one.');
+        } else if (result.message.includes('Invalid')) {
+          throw new Error('Invalid verification code. Please check and try again.');
+        } else {
+          throw new Error(result.message || 'Invalid or expired verification code');
+        }
+      } else if (response.status === 500) {
+        throw new Error('Server error. Please try again later');
+      } else {
+        throw new Error(result.message || `Request failed (${response.status})`);
+      }
+    }
+
+    // Success - navigate to reset password page with token
+    setSuccess('Code verified! Redirecting to create new password...');
+    
+    setTimeout(() => {
+      navigate(`/reset-password?token=${result.resetToken}&email=${encodeURIComponent(result.email)}`);
+    }, 1500);
+
+  } catch (error) {
+    console.error('Verify code error:', error);
+    
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error: Unable to connect to server. Please check your internet connection and try again.');
+    } else {
+      setError(error.message || 'Invalid verification code. Please try again.');
+    }
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleResend = async () => {
-    if (resendTimer > 0 || resendCount >= 3) return;
-    
-    setResendCount(prev => prev + 1);
-    const success = await sendVerificationCode();
-    if (success) {
-      setSuccess('Verification code resent! Check your email.');
-      startResendTimer();
-    }
-  };
+  if (resendTimer > 0 || resendCount >= 3) return;
+  
+  console.log('Resending verification code to:', formData.email); // Debug log
+  
+  setResendCount(prev => prev + 1);
+  const success = await sendVerificationCode();
+  if (success) {
+    setSuccess('Verification code resent! Check your email.');
+    startResendTimer();
+  }
+};
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -502,23 +526,26 @@ const ForgotPassword = () => {
                           focusedField === 'verificationCode' ? 'text-blue-500' : 'text-slate-400'
                         }`} size={20} />
                         <input
-                          type="text"
-                          id="verificationCode"
-                          name="verificationCode"
-                          value={formatCodeDisplay(formData.verificationCode)}
-                          onChange={handleChange}
-                          onFocus={() => handleFocus('verificationCode')}
-                          onBlur={handleBlur}
-                          placeholder="000 000"
-                          className={`w-full pl-12 pr-4 py-4 border-2 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-center text-2xl font-mono tracking-widest ${
-                            focusedField === 'verificationCode' 
-                              ? 'border-blue-500 ring-4 ring-blue-100 shadow-lg' 
-                              : 'border-slate-200 hover:border-blue-300'
-                          }`}
-                          required
-                          disabled={loading}
-                          maxLength={7} // 6 digits + 1 space
-                        />
+  type="text"
+  id="verificationCode"
+  name="verificationCode"
+  value={formatCodeDisplay(formData.verificationCode)} 
+  onChange={handleChange} 
+  onFocus={() => handleFocus('verificationCode')}
+  onBlur={handleBlur}
+  placeholder="000 000"
+  className={`w-full pl-12 pr-4 py-4 border-2 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-center text-2xl font-mono tracking-widest ${
+    focusedField === 'verificationCode' 
+      ? 'border-blue-500 ring-4 ring-blue-100 shadow-lg' 
+      : 'border-slate-200 hover:border-blue-300'
+  }`}
+  required
+  disabled={loading}
+  maxLength={7} // 6 digits + 1 space for formatting
+  inputMode="numeric" // Show numeric keyboard on mobile
+  pattern="[0-9\s]*" // Allow only numbers and spaces
+/>
+
                       </div>
                       <p className="text-xs text-slate-500 mt-2">
                         Check your email for the 6-digit verification code

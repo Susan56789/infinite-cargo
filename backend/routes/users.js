@@ -923,6 +923,7 @@ router.post('/verify-reset-code', corsHandler, [
   try {
     console.log('Reset code verification request received:', {
       email: req.body.email,
+      code: req.body.code, // Log the actual code for debugging
       ip: req.ip,
       userAgent: req.get('User-Agent')
     });
@@ -943,19 +944,45 @@ router.post('/verify-reset-code', corsHandler, [
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
 
-    // Check both collections for user with valid reset code
+    // FIX: Use correct field name and add debugging
     const [driverUser, cargoOwnerUser] = await Promise.all([
       db.collection('drivers').findOne({
         email: email.toLowerCase().trim(),
-        passwordResetCode: code,
-        passwordResetExpires: { $gt: new Date() }
+        passwordResetCode: code.toString(),
+        passwordResetCodeExpires: { $gt: new Date() } // FIX: Use correct field name
       }),
       db.collection('cargo-owners').findOne({
         email: email.toLowerCase().trim(),
-        passwordResetCode: code,
-        passwordResetExpires: { $gt: new Date() }
+        passwordResetCode: code.toString(),
+        passwordResetCodeExpires: { $gt: new Date() } // FIX: Use correct field name
       })
     ]);
+
+    console.log('Database query results:', {
+      email: email.toLowerCase().trim(),
+      code: code.toString(),
+      driverFound: !!driverUser,
+      cargoOwnerFound: !!cargoOwnerUser,
+      currentTime: new Date()
+    });
+
+    // Also check if user exists but code is expired/invalid for better debugging
+    const [driverUserAny, cargoOwnerUserAny] = await Promise.all([
+      db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
+      db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
+    ]);
+
+    const userAny = driverUserAny || cargoOwnerUserAny;
+    if (userAny) {
+      console.log('User found in database:', {
+        storedCode: userAny.passwordResetCode,
+        submittedCode: code.toString(),
+        codeMatch: userAny.passwordResetCode === code.toString(),
+        storedExpiry: userAny.passwordResetCodeExpires,
+        currentTime: new Date(),
+        isExpired: userAny.passwordResetCodeExpires ? new Date() > userAny.passwordResetCodeExpires : 'no expiry set'
+      });
+    }
 
     const user = driverUser || cargoOwnerUser;
     const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
@@ -964,6 +991,7 @@ router.post('/verify-reset-code', corsHandler, [
       console.log('Invalid reset code verification attempt:', {
         email,
         code,
+        userExists: !!userAny,
         processingTime: `${Date.now() - startTime}ms`
       });
       
@@ -994,7 +1022,7 @@ router.post('/verify-reset-code', corsHandler, [
         },
         $unset: {
           passwordResetCode: "", // Remove the code once verified
-          passwordResetCodeExpires: ""
+          passwordResetCodeExpires: "" // Remove expiry as well
         }
       }
     );
@@ -1019,6 +1047,7 @@ router.post('/verify-reset-code', corsHandler, [
       error: error.message,
       stack: error.stack,
       email: req.body.email,
+      code: req.body.code,
       processingTime: `${Date.now() - startTime}ms`
     });
 
@@ -1048,8 +1077,6 @@ router.post(
     try {
       const { email } = req.body;
       
-
-      // Validation errors
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -1062,7 +1089,6 @@ router.post(
         });
       }
 
-      // Ensure DB is connected
       if (!mongoose.connection?.db) {
         console.error('MongoDB not connected at forgot-password-code route');
         return res.status(500).json({
@@ -1073,7 +1099,6 @@ router.post(
 
       const db = mongoose.connection.db;
 
-      // Search in both collections
       const [driverUser, cargoOwnerUser] = await Promise.all([
         db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
         db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
@@ -1085,16 +1110,16 @@ router.post(
       if (user) {
         // Generate code
         const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000);
+        const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        // Update user record
+        // Update user record - FIX: Use correct field name and actual Date value
         const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
         await collection.updateOne(
           { _id: user._id },
           {
             $set: {
               passwordResetCode: resetCode,
-              passwordResetCodeExpires: { $gt: new Date() },
+              passwordResetCodeExpires: resetCodeExpiry, // FIX: Store actual Date, not query
               passwordResetRequestedAt: new Date(),
               resetCodeVerified: false,
               updatedAt: new Date()
@@ -1107,23 +1132,26 @@ router.post(
           }
         );
 
-        // Send email (wrapped in try/catch so it doesn't crash whole route)
+        console.log('Reset code stored:', {
+          userId: user._id,
+          code: resetCode,
+          expiresAt: resetCodeExpiry,
+          email: user.email
+        });
+
+        // Send email
         try {
           await sendPasswordResetCodeEmail(user.email, user.name, resetCode, userType);
-          
         } catch (mailErr) {
           console.error('Email sending failed:', mailErr);
-          // Don’t expose email issues to client, still return success
         }
       } else {
         console.log('Password reset requested for non-existent email:', email);
       }
 
-      // Always return success
       res.json({
         status: 'success',
-        message:
-          'If an account with that email exists, a 6-digit verification code has been sent.',
+        message: 'If an account with that email exists, a 6-digit verification code has been sent.',
         expiresIn: '10 minutes'
       });
     } catch (error) {
