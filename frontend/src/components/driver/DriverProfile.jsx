@@ -1,814 +1,569 @@
 import React, { useState, useEffect } from 'react';
-import { User, Truck, Phone, Mail, MapPin, Save, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react';
-import { getAuthHeader } from '../../utils/auth'; 
+import { useNavigate } from 'react-router-dom';
+import { 
+  User, 
+  Truck, 
+  Phone, 
+  Mail, 
+  Calendar,
+  Star,
+  Edit3, 
+  Save, 
+  X,
+  Shield,
+  CheckCircle,
+  AlertCircle,
+  FileText,
+} from 'lucide-react';
+import { isAuthenticated, getUser, getAuthHeader } from '../../utils/auth';
 
 const DriverProfile = () => {
-  const [profile, setProfile] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-    licenseNumber: '',
-    licenseExpiry: '',
-    vehicleType: '',
-    vehicleCapacity: '',
-    vehiclePlate: '',
-    vehicleModel: '',
-    vehicleYear: '',
-    emergencyContact: '',
-    emergencyPhone: '',
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: ''
-  });
-
+  const navigate = useNavigate();
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [errors, setErrors] = useState({});
-  const [success, setSuccess] = useState('');
-  const [showPasswords, setShowPasswords] = useState({
-    current: false,
-    new: false,
-    confirm: false
-  });
+  const [editedProfile, setEditedProfile] = useState({});
+  const [activeTab, setActiveTab] = useState('personal');
 
-  const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
-
-  // Load profile data from API
   useEffect(() => {
+    if (!isAuthenticated()) {
+      navigate('/login');
+      return;
+    }
+
+    const user = getUser();
+    if (user?.userType !== 'driver') {
+      navigate('/driver-dashboard');
+      return;
+    }
+
     fetchProfile();
-  }, []);
+  }, [navigate]);
 
   const fetchProfile = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      
-      if (!token) {
-        setErrors({ general: 'No authentication token found. Please login again.' });
-        return;
-      }
+      setError('');
 
-      const response = await fetch(`${API_BASE_URL}/drivers/profile`, {
-        method: 'GET',
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         headers: {
+          'Authorization': getAuthHeader(),
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
+        },
       });
 
-      const data = await response.json();
-
-      if (response.ok && data.status === 'success') {
-        const driverData = data.data.driver;
-        
-        // Map API response to profile state
-        setProfile(prev => ({
-          ...prev,
-          firstName: driverData.firstName || '',
-          lastName: driverData.lastName || '',
-          email: driverData.email || '',
-          phone: driverData.phone || '',
-          address: driverData.address || '',
-          city: driverData.city || '',
-          state: driverData.state || '',
-          zipCode: driverData.zipCode || '',
-          licenseNumber: driverData.licenseNumber || '',
-          licenseExpiry: driverData.licenseExpiry ? 
-            new Date(driverData.licenseExpiry).toISOString().split('T')[0] : '',
-          vehicleType: driverData.vehicleType || driverData.driverProfile?.vehicleType || '',
-          vehicleCapacity: driverData.vehicleCapacity || driverData.driverProfile?.vehicleCapacity || '',
-          vehiclePlate: driverData.vehiclePlate || '',
-          vehicleModel: driverData.vehicleModel || '',
-          vehicleYear: driverData.vehicleYear || '',
-          emergencyContact: driverData.emergencyContact || '',
-          emergencyPhone: driverData.emergencyPhone || ''
-        }));
-        
-        setErrors({});
-      } else {
-        // Handle API errors
+      if (!response.ok) {
         if (response.status === 401) {
-          setErrors({ general: 'Session expired. Please login again.' });
-          localStorage.removeItem('token');
-        } else if (response.status === 403) {
-          setErrors({ general: 'Access denied. Driver profile not found.' });
-        } else {
-          setErrors({ general: data.message || 'Failed to load profile data' });
+          navigate('/login');
+          return;
         }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-    } catch (error) {
-      console.error('Profile fetch error:', error);
-      setErrors({ general: 'Network error. Please check your connection and try again.' });
+
+      const data = await response.json();
+      const profileData = data.data?.driver || data.driver || data;
+
+      if (!profileData?._id) {
+        throw new Error('Invalid profile data received');
+      }
+
+      // Ensure profile structure
+      const formattedProfile = {
+        ...profileData,
+        driverProfile: profileData.driverProfile || {},
+        statistics: profileData.statistics || {
+          totalJobs: 0,
+          completedJobs: 0,
+          averageRating: 0,
+          totalRatingsReceived: 0,
+          successRate: 0
+        },
+        profileCompletion: profileData.profileCompletion || calculateProfileCompletion(profileData)
+      };
+
+      setProfile(formattedProfile);
+      setEditedProfile(formattedProfile);
+
+    } catch (err) {
+      console.error('Fetch profile error:', err);
+      setError(err.message || 'Failed to fetch profile data');
+      
+      if (err.message.includes('401') || err.message.includes('Unauthorized')) {
+        navigate('/login');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const vehicleTypes = [
-    { value: '', label: 'Select Vehicle Type' },
-    { value: 'sedan', label: 'Sedan' },
-    { value: 'suv', label: 'SUV' },
-    { value: 'van', label: 'Van' },
-    { value: 'pickup', label: 'Pickup Truck' },
-    { value: 'bus', label: 'Bus' },
-    { value: 'motorcycle', label: 'Motorcycle' }
-  ];
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setProfile(prev => ({
-      ...prev,
-      [name]: value
-    }));
+  const calculateProfileCompletion = (profile) => {
+    if (!profile) return 0;
     
-    // Clear specific field error when user starts typing
-    if (errors[name]) {
-      setErrors(prev => ({
-        ...prev,
-        [name]: ''
-      }));
-    }
-  };
-
-  const togglePasswordVisibility = (field) => {
-    setShowPasswords(prev => ({
-      ...prev,
-      [field]: !prev[field]
-    }));
-  };
-
-  const validateForm = () => {
-    const newErrors = {};
-
-    // Basic validation
-    if (!profile.firstName.trim()) newErrors.firstName = 'First name is required';
-    if (!profile.lastName.trim()) newErrors.lastName = 'Last name is required';
-    if (!profile.email.trim()) newErrors.email = 'Email is required';
-    if (!profile.phone.trim()) newErrors.phone = 'Phone number is required';
-    if (!profile.licenseNumber.trim()) newErrors.licenseNumber = 'License number is required';
-    if (!profile.vehicleType) newErrors.vehicleType = 'Vehicle type is required';
-    if (!profile.vehicleCapacity) newErrors.vehicleCapacity = 'Vehicle capacity is required';
-
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (profile.email && !emailRegex.test(profile.email)) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    // Phone validation
-    const phoneRegex = /^[+]?[\d\s-()]+$/;
-    if (profile.phone && !phoneRegex.test(profile.phone)) {
-      newErrors.phone = 'Please enter a valid phone number';
-    }
-
-    // Vehicle capacity validation
-    if (profile.vehicleCapacity && (isNaN(profile.vehicleCapacity) || profile.vehicleCapacity <= 0)) {
-      newErrors.vehicleCapacity = 'Please enter a valid capacity number';
-    }
-
-    // Password validation (only if changing password)
-    if (profile.newPassword || profile.confirmPassword || profile.currentPassword) {
-      if (!profile.currentPassword) {
-        newErrors.currentPassword = 'Current password is required to change password';
-      }
-      if (!profile.newPassword) {
-        newErrors.newPassword = 'New password is required';
-      } else if (profile.newPassword.length < 6) {
-        newErrors.newPassword = 'Password must be at least 6 characters';
-      }
-      if (profile.newPassword !== profile.confirmPassword) {
-        newErrors.confirmPassword = 'Passwords do not match';
-      }
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+    const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber', 'licenseExpiry'];
+    const optionalFields = ['dateOfBirth', 'address', 'city', 'state', 'vehicleMake', 'vehicleModel', 'vehicleYear', 'vehiclePlate', 'nationalId', 'experienceYears'];
     
-    if (!validateForm()) {
-      return;
-    }
+    let completed = 0;
+    let total = requiredFields.length + optionalFields.length;
+    
+    requiredFields.forEach(field => {
+      if (profile[field]) completed += 1.5;
+    });
+    
+    optionalFields.forEach(field => {
+      if (profile[field]) completed += 1;
+    });
+    
+    total = requiredFields.length * 1.5 + optionalFields.length;
+    return Math.round((completed / total) * 100);
+  };
 
+  const handleSave = async () => {
     setSaving(true);
-    setErrors({});
-    setSuccess('');
-
+    setError('');
+    
     try {
-      const token = localStorage.getItem('token');
-      
-      if (!token) {
-        setErrors({ general: 'No authentication token found. Please login again.' });
-        setSaving(false);
-        return;
-      }
-
-      // Prepare data for API call
-      const updateData = { ...profile };
-      
-      // Remove password fields if not changing password
-      if (!profile.newPassword) {
-        delete updateData.currentPassword;
-        delete updateData.newPassword;
-        delete updateData.confirmPassword;
-      }
-
-      // Remove empty strings and undefined values
-      Object.keys(updateData).forEach(key => {
-        if (updateData[key] === '' || updateData[key] === undefined) {
-          delete updateData[key];
-        }
-      });
-
-      // Convert vehicleCapacity to number if present
-      if (updateData.vehicleCapacity) {
-        updateData.vehicleCapacity = parseInt(updateData.vehicleCapacity);
-      }
-
-      // Convert vehicleYear to number if present
-      if (updateData.vehicleYear) {
-        updateData.vehicleYear = parseInt(updateData.vehicleYear);
-      }
-
-      const response = await fetch(`${API_BASE_URL}/drivers/profile`, {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'PUT',
         headers: {
+          'Authorization': getAuthHeader(),
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(updateData)
+        body: JSON.stringify(editedProfile)
       });
 
-      const data = await response.json();
-
-      if (response.ok && data.status === 'success') {
-        setSuccess('Profile updated successfully!');
-        
-        // Clear password fields after successful update
-        setProfile(prev => ({
-          ...prev,
-          currentPassword: '',
-          newPassword: '',
-          confirmPassword: ''
-        }));
-        
-        // Scroll to top to show success message
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-
-        // Optionally refresh the profile data to get the latest from server
-        setTimeout(() => {
-          fetchProfile();
-        }, 1000);
-        
-      } else {
-        // Handle API errors
-        if (response.status === 400 && data.errors && Array.isArray(data.errors)) {
-          const apiErrors = {};
-          data.errors.forEach(error => {
-            apiErrors[error.path || error.param] = error.msg || error.message;
-          });
-          setErrors(apiErrors);
-        } else if (response.status === 401) {
-          setErrors({ general: 'Session expired. Please login again.' });
-          localStorage.removeItem('token');
-        } else if (response.status === 403) {
-          setErrors({ general: 'Access denied. Only drivers can update profiles.' });
-        } else {
-          setErrors({ general: data.message || 'Failed to update profile' });
+      if (!response.ok) {
+        if (response.status === 401) {
+          navigate('/login');
+          return;
         }
+        throw new Error(`Failed to update profile (${response.status})`);
       }
-    } catch (error) {
-      console.error('Profile update error:', error);
-      setErrors({ general: 'Network error. Please check your connection and try again.' });
+
+      const data = await response.json();
+      const updatedProfile = data.data?.driver || data.driver || data;
+      
+      const formattedProfile = {
+        ...updatedProfile,
+        driverProfile: updatedProfile.driverProfile || {},
+        statistics: updatedProfile.statistics || profile.statistics,
+        profileCompletion: updatedProfile.profileCompletion || calculateProfileCompletion(updatedProfile)
+      };
+      
+      setProfile(formattedProfile);
+      setEditedProfile(formattedProfile);
+      setEditing(false);
+      alert('Profile updated successfully!');
+      
+    } catch (err) {
+      console.error('Update profile error:', err);
+      const errorMessage = err.message || 'Network error occurred while updating profile';
+      setError(errorMessage);
+      alert(errorMessage);
     } finally {
       setSaving(false);
     }
   };
 
-  // Show loading spinner while fetching profile
+  const handleInputChange = (field, value) => {
+    if (field.includes('.')) {
+      const [parent, child] = field.split('.');
+      setEditedProfile(prev => ({
+        ...prev,
+        [parent]: {
+          ...prev[parent],
+          [child]: value
+        }
+      }));
+    } else {
+      setEditedProfile(prev => ({
+        ...prev,
+        [field]: value
+      }));
+    }
+  };
+
+  const getCompletionColor = (percentage) => {
+    if (percentage >= 80) return 'text-green-600 bg-green-100';
+    if (percentage >= 60) return 'text-yellow-600 bg-yellow-100';
+    return 'text-red-600 bg-red-100';
+  };
+
+  const FormField = ({ label, field, type = "text", required = false, options = null }) => (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">
+        {label} {required && '*'}
+      </label>
+      {editing ? (
+        options ? (
+          <select
+            value={editedProfile?.[field] || ''}
+            onChange={(e) => handleInputChange(field, e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">Select {label}</option>
+            {options.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        ) : type === 'textarea' ? (
+          <textarea
+            value={editedProfile?.[field] || ''}
+            onChange={(e) => handleInputChange(field, e.target.value)}
+            rows={3}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        ) : (
+          <input
+            type={type}
+            value={editedProfile?.[field] || ''}
+            onChange={(e) => handleInputChange(field, type === 'number' ? parseFloat(e.target.value) : e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        )
+      ) : (
+        <p className="py-2 text-gray-900">
+          {type === 'date' && profile?.[field] 
+            ? new Date(profile[field]).toLocaleDateString('en-KE') 
+            : profile?.[field] || 'Not set'}
+        </p>
+      )}
+    </div>
+  );
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 py-8 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading profile...</p>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex items-center space-x-2">
+          <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-gray-600">Loading profile...</span>
         </div>
       </div>
     );
   }
 
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center max-w-md mx-auto">
+          <AlertCircle className="mx-auto h-12 w-12 text-red-500 mb-4" />
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Error Loading Profile</h2>
+          <p className="text-gray-600 mb-4">{error}</p>
+          <div className="space-x-3">
+            <button onClick={() => fetchProfile()} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+              Try Again
+            </button>
+            <button onClick={() => navigate('/driver-dashboard')} className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition">
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="mx-auto h-12 w-12 text-yellow-500 mb-4" />
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Profile Not Found</h2>
+          <button onClick={() => fetchProfile()} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const vehicleTypes = [
+    { value: 'pickup', label: 'Pickup' },
+    { value: 'van', label: 'Van' },
+    { value: 'small_truck', label: 'Small Truck' },
+    { value: 'medium_truck', label: 'Medium Truck' },
+    { value: 'large_truck', label: 'Large Truck' },
+    { value: 'heavy_truck', label: 'Heavy Truck' },
+    { value: 'trailer', label: 'Trailer' },
+    { value: 'refrigerated_truck', label: 'Refrigerated Truck' },
+    { value: 'flatbed', label: 'Flatbed' },
+    { value: 'container_truck', label: 'Container Truck' }
+  ];
+
+  const genderOptions = [
+    { value: 'male', label: 'Male' },
+    { value: 'female', label: 'Female' },
+    { value: 'other', label: 'Other' }
+  ];
+
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          {/* Header */}
-          <div className="bg-blue-600 px-6 py-4">
-            <h1 className="text-2xl font-bold text-white flex items-center">
-              <User className="mr-3" size={28} />
-              Driver Profile
-            </h1>
-            <p className="text-blue-100 mt-1">Update your profile information and vehicle details</p>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-6">
+            <div>
+              <button onClick={() => navigate('/driver-dashboard')} className="text-blue-600 hover:text-blue-800 mb-2">
+                ← Back to Dashboard
+              </button>
+              <h1 className="text-2xl font-bold text-gray-900">Driver Profile</h1>
+            </div>
+            <div className="flex items-center space-x-3">
+              {!editing ? (
+                <button onClick={() => setEditing(true)} className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+                  <Edit3 className="w-4 h-4" />
+                  <span>Edit Profile</span>
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => { setEditedProfile(profile); setEditing(false); setError(''); }} className="flex items-center space-x-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition">
+                    <X className="w-4 h-4" />
+                    <span>Cancel</span>
+                  </button>
+                  <button onClick={handleSave} disabled={saving} className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 transition">
+                    <Save className="w-4 h-4" />
+                    <span>{saving ? 'Saving...' : 'Save Changes'}</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-400 p-4">
+          <div className="flex">
+            <AlertCircle className="h-5 w-5 text-red-400" />
+            <div className="ml-3">
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+            <button onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600">×</button>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+          {/* Profile Overview Card */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="text-center">
+                <div className="w-24 h-24 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <User className="w-12 h-12 text-blue-600" />
+                </div>
+                
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {profile?.firstName} {profile?.lastName}
+                </h2>
+                <p className="text-gray-600">{profile?.vehicleType?.replace(/_/g, ' ').toUpperCase()}</p>
+                
+                {/* Rating */}
+                <div className="flex items-center justify-center space-x-1 mt-2">
+                  <Star className="w-5 h-5 text-yellow-400 fill-current" />
+                  <span className="font-medium">{profile?.statistics?.averageRating?.toFixed(1) || '0.0'}</span>
+                  <span className="text-gray-500">({profile?.statistics?.totalRatingsReceived || 0} reviews)</span>
+                </div>
+              </div>
+
+              {/* Profile Completion */}
+              <div className="mt-6">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm font-medium text-gray-700">Profile Completion</span>
+                  <span className={`text-sm font-medium px-2 py-1 rounded ${getCompletionColor(profile?.profileCompletion || 0)}`}>
+                    {profile?.profileCompletion || 0}%
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div 
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      (profile?.profileCompletion || 0) >= 80 ? 'bg-green-500' : 
+                      (profile?.profileCompletion || 0) >= 60 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${profile?.profileCompletion || 0}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              {/* Quick Stats */}
+              <div className="mt-6 space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Total Jobs</span>
+                  <span className="font-medium">{profile?.statistics?.totalJobs || 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Completed</span>
+                  <span className="font-medium text-green-600">{profile?.statistics?.completedJobs || 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Success Rate</span>
+                  <span className="font-medium">{profile?.statistics?.successRate || 0}%</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Success Message */}
-          {success && (
-            <div className="mx-6 mt-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center">
-              <CheckCircle className="text-green-600 mr-3" size={20} />
-              <span className="text-green-800">{success}</span>
-            </div>
-          )}
-
-          {/* General Error */}
-          {errors.general && (
-            <div className="mx-6 mt-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center">
-              <AlertCircle className="text-red-600 mr-3" size={20} />
-              <span className="text-red-800">{errors.general}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="p-6 space-y-8">
-            {/* Personal Information */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900 flex items-center">
-                  <User className="mr-2 text-blue-600" size={24} />
-                  Personal Information
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
-                    First Name *
-                  </label>
-                  <input
-                    type="text"
-                    id="firstName"
-                    name="firstName"
-                    value={profile.firstName}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.firstName ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter your first name"
-                  />
-                  {errors.firstName && (
-                    <p className="mt-1 text-sm text-red-600">{errors.firstName}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
-                    Last Name *
-                  </label>
-                  <input
-                    type="text"
-                    id="lastName"
-                    name="lastName"
-                    value={profile.lastName}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.lastName ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter your last name"
-                  />
-                  {errors.lastName && (
-                    <p className="mt-1 text-sm text-red-600">{errors.lastName}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                    <Mail className="inline mr-1" size={16} />
-                    Email Address *
-                  </label>
-                  <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    value={profile.email}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.email ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter your email address"
-                  />
-                  {errors.email && (
-                    <p className="mt-1 text-sm text-red-600">{errors.email}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">
-                    <Phone className="inline mr-1" size={16} />
-                    Phone Number *
-                  </label>
-                  <input
-                    type="tel"
-                    id="phone"
-                    name="phone"
-                    value={profile.phone}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.phone ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter your phone number"
-                  />
-                  {errors.phone && (
-                    <p className="mt-1 text-sm text-red-600">{errors.phone}</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Address Information */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900 flex items-center">
-                  <MapPin className="mr-2 text-blue-600" size={24} />
-                  Address Information
-                </h2>
-              </div>
-
-              <div>
-                <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-2">
-                  Street Address
-                </label>
-                <input
-                  type="text"
-                  id="address"
-                  name="address"
-                  value={profile.address}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter your street address"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div>
-                  <label htmlFor="city" className="block text-sm font-medium text-gray-700 mb-2">
-                    City
-                  </label>
-                  <input
-                    type="text"
-                    id="city"
-                    name="city"
-                    value={profile.city}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter city"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="state" className="block text-sm font-medium text-gray-700 mb-2">
-                    State/County
-                  </label>
-                  <input
-                    type="text"
-                    id="state"
-                    name="state"
-                    value={profile.state}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter state or county"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="zipCode" className="block text-sm font-medium text-gray-700 mb-2">
-                    Zip/Postal Code
-                  </label>
-                  <input
-                    type="text"
-                    id="zipCode"
-                    name="zipCode"
-                    value={profile.zipCode}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter zip code"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* License Information */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900">License Information</h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="licenseNumber" className="block text-sm font-medium text-gray-700 mb-2">
-                    License Number *
-                  </label>
-                  <input
-                    type="text"
-                    id="licenseNumber"
-                    name="licenseNumber"
-                    value={profile.licenseNumber}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.licenseNumber ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter license number"
-                  />
-                  {errors.licenseNumber && (
-                    <p className="mt-1 text-sm text-red-600">{errors.licenseNumber}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="licenseExpiry" className="block text-sm font-medium text-gray-700 mb-2">
-                    License Expiry Date
-                  </label>
-                  <input
-                    type="date"
-                    id="licenseExpiry"
-                    name="licenseExpiry"
-                    value={profile.licenseExpiry}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Vehicle Information */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900 flex items-center">
-                  <Truck className="mr-2 text-blue-600" size={24} />
-                  Vehicle Information
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="vehicleType" className="block text-sm font-medium text-gray-700 mb-2">
-                    Vehicle Type *
-                  </label>
-                  <select
-                    id="vehicleType"
-                    name="vehicleType"
-                    value={profile.vehicleType}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.vehicleType ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  >
-                    {vehicleTypes.map(type => (
-                      <option key={type.value} value={type.value}>{type.label}</option>
-                    ))}
-                  </select>
-                  {errors.vehicleType && (
-                    <p className="mt-1 text-sm text-red-600">{errors.vehicleType}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label htmlFor="vehicleCapacity" className="block text-sm font-medium text-gray-700 mb-2">
-                    Passenger Capacity *
-                  </label>
-                  <input
-                    type="number"
-                    id="vehicleCapacity"
-                    name="vehicleCapacity"
-                    value={profile.vehicleCapacity}
-                    onChange={handleInputChange}
-                    min="1"
-                    max="50"
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      errors.vehicleCapacity ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter passenger capacity"
-                  />
-                  {errors.vehicleCapacity && (
-                    <p className="mt-1 text-sm text-red-600">{errors.vehicleCapacity}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div>
-                  <label htmlFor="vehiclePlate" className="block text-sm font-medium text-gray-700 mb-2">
-                    License Plate
-                  </label>
-                  <input
-                    type="text"
-                    id="vehiclePlate"
-                    name="vehiclePlate"
-                    value={profile.vehiclePlate}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter license plate"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="vehicleModel" className="block text-sm font-medium text-gray-700 mb-2">
-                    Vehicle Model
-                  </label>
-                  <input
-                    type="text"
-                    id="vehicleModel"
-                    name="vehicleModel"
-                    value={profile.vehicleModel}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter vehicle model"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="vehicleYear" className="block text-sm font-medium text-gray-700 mb-2">
-                    Vehicle Year
-                  </label>
-                  <input
-                    type="number"
-                    id="vehicleYear"
-                    name="vehicleYear"
-                    value={profile.vehicleYear}
-                    onChange={handleInputChange}
-                    min="1990"
-                    max={new Date().getFullYear()}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter vehicle year"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Emergency Contact */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900">Emergency Contact</h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="emergencyContact" className="block text-sm font-medium text-gray-700 mb-2">
-                    Emergency Contact Name
-                  </label>
-                  <input
-                    type="text"
-                    id="emergencyContact"
-                    name="emergencyContact"
-                    value={profile.emergencyContact}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter emergency contact name"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="emergencyPhone" className="block text-sm font-medium text-gray-700 mb-2">
-                    Emergency Contact Phone
-                  </label>
-                  <input
-                    type="tel"
-                    id="emergencyPhone"
-                    name="emergencyPhone"
-                    value={profile.emergencyPhone}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Enter emergency contact phone"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Password Change */}
-            <div className="space-y-6">
-              <div className="border-b border-gray-200 pb-4">
-                <h2 className="text-xl font-semibold text-gray-900">Change Password</h2>
-                <p className="text-sm text-gray-600 mt-1">Leave blank if you don't want to change your password</p>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label htmlFor="currentPassword" className="block text-sm font-medium text-gray-700 mb-2">
-                    Current Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPasswords.current ? "text" : "password"}
-                      id="currentPassword"
-                      name="currentPassword"
-                      value={profile.currentPassword}
-                      onChange={handleInputChange}
-                      className={`w-full px-3 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                        errors.currentPassword ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      placeholder="Enter current password"
-                    />
+          {/* Main Content */}
+          <div className="lg:col-span-3">
+            {/* Navigation Tabs */}
+            <div className="bg-white rounded-lg shadow mb-6">
+              <div className="border-b border-gray-200">
+                <nav className="flex space-x-8 px-6">
+                  {[
+                    { id: 'personal', label: 'Personal Info', icon: User },
+                    { id: 'vehicle', label: 'Vehicle Info', icon: Truck },
+                    { id: 'documents', label: 'Documents', icon: FileText },
+                    { id: 'settings', label: 'Settings', icon: Shield }
+                  ].map((tab) => (
                     <button
-                      type="button"
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                      onClick={() => togglePasswordVisibility('current')}
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${
+                        activeTab === tab.id
+                          ? 'border-blue-500 text-blue-600'
+                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      }`}
                     >
-                      {showPasswords.current ? <EyeOff size={20} /> : <Eye size={20} />}
+                      <tab.icon className="w-4 h-4" />
+                      <span>{tab.label}</span>
                     </button>
-                  </div>
-                  {errors.currentPassword && (
-                    <p className="mt-1 text-sm text-red-600">{errors.currentPassword}</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-2">
-                      New Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPasswords.new ? "text" : "password"}
-                        id="newPassword"
-                        name="newPassword"
-                        value={profile.newPassword}
-                        onChange={handleInputChange}
-                        className={`w-full px-3 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          errors.newPassword ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        placeholder="Enter new password"
-                      />
-                      <button
-                        type="button"
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                        onClick={() => togglePasswordVisibility('new')}
-                      >
-                        {showPasswords.new ? <EyeOff size={20} /> : <Eye size={20} />}
-                      </button>
-                    </div>
-                    {errors.newPassword && (
-                      <p className="mt-1 text-sm text-red-600">{errors.newPassword}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-2">
-                      Confirm New Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPasswords.confirm ? "text" : "password"}
-                        id="confirmPassword"
-                        name="confirmPassword"
-                        value={profile.confirmPassword}
-                        onChange={handleInputChange}
-                        className={`w-full px-3 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                          errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                        placeholder="Confirm new password"
-                      />
-                      <button
-                        type="button"
-                        className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                        onClick={() => togglePasswordVisibility('confirm')}
-                      >
-                        {showPasswords.confirm ? <EyeOff size={20} /> : <Eye size={20} />}
-                      </button>
-                    </div>
-                    {errors.confirmPassword && (
-                      <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>
-                    )}
-                  </div>
-                </div>
+                  ))}
+                </nav>
               </div>
             </div>
 
-            {/* Submit Button */}
-            <div className="flex justify-end pt-6 border-t border-gray-200">
-              <button
-                type="submit"
-                disabled={saving}
-                className="flex items-center px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {saving ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Updating...
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-2" size={20} />
-                    Update Profile
-                  </>
-                )}
-              </button>
+            {/* Tab Content */}
+            <div className="bg-white rounded-lg shadow p-6">
+              {activeTab === 'personal' && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Personal Information</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField label="First Name" field="firstName" required />
+                    <FormField label="Last Name" field="lastName" required />
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                      <div className="flex items-center space-x-2">
+                        <Mail className="w-4 h-4 text-gray-400" />
+                        <p className="py-2 text-gray-900">{profile?.email}</p>
+                        {profile?.emailVerified && <CheckCircle className="w-4 h-4 text-green-500" />}
+                      </div>
+                    </div>
+                    <FormField label="Phone" field="phone" type="tel" required />
+                    <FormField label="Date of Birth" field="dateOfBirth" type="date" />
+                    <FormField label="Gender" field="gender" options={genderOptions} />
+                    <div className="md:col-span-2">
+                      <FormField label="Address" field="address" />
+                    </div>
+                    <FormField label="City" field="city" />
+                    <FormField label="State/County" field="state" />
+                    <div className="md:col-span-2">
+                      <FormField label="Bio" field="driverProfile.bio" type="textarea" />
+                    </div>
+                    <FormField label="Emergency Contact Name" field="emergencyContact" />
+                    <FormField label="Emergency Contact Phone" field="emergencyPhone" type="tel" />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'vehicle' && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Vehicle Information</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField label="Vehicle Type" field="vehicleType" options={vehicleTypes} required />
+                    <FormField label="Vehicle Capacity (tonnes)" field="vehicleCapacity" type="number" required />
+                    <FormField label="Vehicle Make" field="vehicleMake" />
+                    <FormField label="Vehicle Model" field="vehicleModel" />
+                    <FormField label="Vehicle Year" field="vehicleYear" type="number" />
+                    <FormField label="License Plate" field="vehiclePlate" />
+                    <FormField label="Experience Years" field="experienceYears" type="number" />
+                    <FormField label="Insurance Valid Until" field="insuranceExpiry" type="date" />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'documents' && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Documents & Licenses</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField label="Driving License Number" field="licenseNumber" required />
+                    <FormField label="License Expiry Date" field="licenseExpiry" type="date" required />
+                    <FormField label="National ID Number" field="nationalId" />
+                    <FormField label="KRA PIN" field="kraPin" />
+                    
+                    <div className="md:col-span-2">
+                      <h4 className="font-medium text-gray-900 mb-3">Document Status</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <div className="flex items-center space-x-2">
+                          {profile?.driverProfile?.verified ? (
+                            <CheckCircle className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <AlertCircle className="w-5 h-5 text-red-500" />
+                          )}
+                          <span className="text-sm">Profile Verified</span>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2">
+                          {profile?.documentsVerified ? (
+                            <CheckCircle className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <AlertCircle className="w-5 h-5 text-red-500" />
+                          )}
+                          <span className="text-sm">Documents Verified</span>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2">
+                          {profile?.backgroundCheckPassed ? (
+                            <CheckCircle className="w-5 h-5 text-green-500" />
+                          ) : (
+                            <AlertCircle className="w-5 h-5 text-yellow-500" />
+                          )}
+                          <span className="text-sm">Background Check</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'settings' && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Account Settings</h3>
+                  <div className="space-y-6">
+                    <div>
+                      <h4 className="font-medium text-gray-900 mb-3">Account Information</h4>
+                      <div className="bg-gray-50 p-4 rounded-md space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Account Created</span>
+                          <span className="text-sm text-gray-900">
+                            {profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString('en-KE') : 'Unknown'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Last Updated</span>
+                          <span className="text-sm text-gray-900">
+                            {profile?.updatedAt ? new Date(profile.updatedAt).toLocaleDateString('en-KE') : 'Unknown'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Account Status</span>
+                          <span className={`text-sm px-2 py-1 rounded ${profile?.isActive !== false ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                            {profile?.isActive !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Verification Status</span>
+                          <span className={`text-sm px-2 py-1 rounded ${profile?.driverProfile?.verified ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                            {profile?.driverProfile?.verified ? 'Verified' : 'Pending Verification'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          </form>
+          </div>
         </div>
       </div>
     </div>

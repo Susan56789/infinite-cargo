@@ -214,12 +214,6 @@ const MyBidsSection = ({ myBids, formatCurrency, formatDate }) => {
             <Briefcase size={18} className="mr-2" />
             My Bids
           </h2>
-          <Link
-            to="/driver/bids"
-            className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center"
-          >
-            View All <ArrowRight size={16} className="ml-1" />
-          </Link>
         </div>
         
         {/* Bids Summary */}

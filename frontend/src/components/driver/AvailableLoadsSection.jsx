@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import BidForm from './BidForm';
 
-const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate }) => {
+const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate,isAuthenticated }) => {
   const [showBidForm, setShowBidForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -133,6 +133,7 @@ const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate }) => {
           </button>
           <Link
             to={`/driver/load/${load._id}`}
+            target="_blank"
             className="inline-flex items-center px-3 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors"
           >
             <Eye size={14} className="mr-1" />
@@ -163,6 +164,7 @@ const AvailableLoadsSection = ({
         <h2 className="text-lg font-semibold text-gray-900">Available Loads</h2>
         <Link
           to="/search-loads"
+          target='_blank'
           className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center"
         >
           <Search size={16} className="mr-1" />
@@ -191,6 +193,7 @@ const AvailableLoadsSection = ({
             </p>
             <Link
               to="/search-loads"
+              target="_blank"
               className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
               <Search size={16} className="mr-2" />

@@ -92,12 +92,7 @@ const ActiveJobsSection = ({
             </span>
           )}
         </div>
-        <Link
-          to="/driver/active-jobs"
-          className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center transition-colors"
-        >
-          View All <ArrowRight size={16} className="ml-1" />
-        </Link>
+        
       </div>
       
       <div className="p-6">

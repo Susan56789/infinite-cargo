@@ -92,6 +92,37 @@ const Header = () => {
     }
   }, [location.pathname, updateAuthState]);
 
+// Force refresh on tab focus
+useEffect(() => {
+  const handleFocus = () => {
+    setTimeout(() => updateAuthState(), 100);
+  };
+  
+  window.addEventListener('focus', handleFocus);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) handleFocus();
+  });
+  
+  return () => {
+    window.removeEventListener('focus', handleFocus);
+    document.removeEventListener('visibilitychange', handleFocus);
+  };
+}, [updateAuthState]);
+
+// Enhanced initial auth check
+useEffect(() => {
+  // Multiple auth checks with delays to catch timing issues
+  const timeouts = [0, 100, 300, 1000].map(delay => 
+    setTimeout(() => {
+      if (mountedRef.current) {
+        updateAuthState();
+      }
+    }, delay)
+  );
+
+  return () => timeouts.forEach(clearTimeout);
+}, []);
+
   // Handle storage events (for cross-tab synchronization)
   useEffect(() => {
     const handleStorageChange = (e) => {

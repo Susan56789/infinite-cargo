@@ -28,6 +28,7 @@ import AdminDashboard from './components/admin/AdminDashboard';
 import DriverDashboard from './components/driver/DriverDashboard';
 import CargoOwnerDashboard from './components/cargoowner/CargoOwnerDashboard';
 import DriverProfile from './components/driver/DriverProfile';
+import DriverJobDetails from './components/driver/DriverJobDetails';
 
 // Core Functionality Pages
 import LoadSearch from './components/driver/LoadSearch';
@@ -289,6 +290,20 @@ element={
                   </>
                 } 
               />
+             <Route 
+                path="/driver-dashboard" 
+                element={
+                  <>
+                    <SEOHelmet 
+                      title="Driver Dashboard"
+                      description="Manage your driver profile, view available loads, track earnings, and communicate with cargo owners from your dashboard."
+                      keywords="driver dashboard, manage loads, driver earnings, transport management"
+                      canonicalUrl="https://infinitecargo.co.ke/driver-dashboard"
+                    />
+                    <DriverDashboard />
+                  </>
+                } 
+              /> 
 
               <Route
 path='/driver/profile'
@@ -304,6 +319,21 @@ element ={
   </>
 }
               />
+
+              <Route 
+                path="/driver-dashboard" 
+                element={
+                  <>
+                    <SEOHelmet 
+                      title="Driver Dashboard"
+                      description="Manage your driver profile, view available loads, track earnings, and communicate with cargo owners from your dashboard."
+                      keywords="driver dashboard, manage loads, driver earnings, transport management"
+                      canonicalUrl="https://infinitecargo.co.ke/driver-dashboard"
+                    />
+                    <DriverDashboard />
+                  </>
+                } 
+              />
               
               
               <Route 
@@ -317,6 +347,22 @@ element ={
                       canonicalUrl="https://infinitecargo.co.ke/cargo-dashboard"
                     />
                     <CargoOwnerDashboard />
+                  </>
+                } 
+              />
+
+              <Route
+              path='/driver/job/:id'
+
+element={
+                  <>
+                    <SEOHelmet 
+                      title="My Job Details"
+                      description="Manage your cargo shipments, track loads, communicate with drivers, and handle payments from your cargo owner dashboard."
+                      keywords="cargo dashboard, manage shipments, track cargo, cargo owner panel"
+                      canonicalUrl="https://infinitecargo.co.ke/driver/job/:id"
+                    />
+                    <DriverJobDetails/>
                   </>
                 } 
               />
