@@ -686,87 +686,33 @@ router.post('/:id/accept', auth, async (req, res) => {
       });
     }
 
-    // FIXED: Improved authorization check logic
+    // Authorization check (using your existing logic)
     const userIdString = req.user.id || req.user._id?.toString();
     let isAuthorized = false;
 
-    // Debug logging
-    console.log('=== BID ACCEPTANCE AUTHORIZATION DEBUG ===');
-    console.log('User ID from req.user:', userIdString);
-    console.log('User Type:', req.user.userType);
-    console.log('Bid ID:', bid._id);
-    console.log('Bid cargoOwner ID:', bid.cargoOwner?._id?.toString());
-    console.log('Load postedBy ID:', bid.load.postedBy?.toString());
-
-    // Method 1: Check against bid's cargoOwner field (if populated)
     if (bid.cargoOwner && bid.cargoOwner._id) {
       isAuthorized = bid.cargoOwner._id.toString() === userIdString;
-      console.log('Checking bid.cargoOwner:', isAuthorized);
     }
 
-    // Method 2: Check against load's postedBy field (fallback and primary check)
     if (!isAuthorized && bid.load.postedBy) {
       isAuthorized = bid.load.postedBy.toString() === userIdString;
-      console.log('Checking load.postedBy:', isAuthorized);
     }
 
-    // Method 3: Alternative approach - check if cargoOwner field matches but isn't populated
     if (!isAuthorized && bid.cargoOwner && !bid.cargoOwner._id) {
-      // cargoOwner is an ObjectId (not populated)
       isAuthorized = bid.cargoOwner.toString() === userIdString;
-      console.log('Checking unpopulated bid.cargoOwner:', isAuthorized);
     }
 
-    // ADDITIONAL FIX: Direct database query as final check
     if (!isAuthorized) {
-      console.log('Performing direct database check...');
-      
-      // Query the load directly to ensure we have the most current data
       const loadCheck = await Load.findById(bid.load._id).select('postedBy');
       if (loadCheck && loadCheck.postedBy) {
         isAuthorized = loadCheck.postedBy.toString() === userIdString;
-        console.log('Direct load query result:', isAuthorized, {
-          loadPostedBy: loadCheck.postedBy.toString(),
-          userId: userIdString
-        });
-      }
-
-      // Also check if user has any loads with this ID
-      const userLoadCount = await Load.countDocuments({ 
-        _id: bid.load._id, 
-        postedBy: userIdString 
-      });
-      
-      if (!isAuthorized && userLoadCount > 0) {
-        isAuthorized = true;
-        console.log('User load ownership confirmed via count query');
       }
     }
 
-    console.log('Final authorization result:', isAuthorized);
-
     if (!isAuthorized) {
-      // Enhanced error response with debug info in development
       return res.status(403).json({
         status: 'error',
-        message: 'You are not authorized to accept this bid. You must be the owner of the load.',
-        debug: process.env.NODE_ENV === 'development' ? {
-          userId: userIdString,
-          userType: req.user.userType,
-          bidId: bid._id.toString(),
-          loadId: bid.load._id.toString(),
-          bidCargoOwner: bid.cargoOwner ? 
-            (bid.cargoOwner._id ? bid.cargoOwner._id.toString() : bid.cargoOwner.toString()) : 
-            'null',
-          loadPostedBy: bid.load.postedBy ? bid.load.postedBy.toString() : 'null',
-          // Add suggestions for debugging
-          suggestions: [
-            'Verify that you are logged in as the correct user',
-            'Check that this load belongs to your account',
-            'Ensure the load was not transferred to another user',
-            'Try refreshing your session'
-          ]
-        } : undefined
+        message: 'You are not authorized to accept this bid. You must be the owner of the load.'
       });
     }
 
@@ -817,77 +763,171 @@ router.post('/:id/accept', auth, async (req, res) => {
       const load = bid.load;
       load.assignedDriver = bid.driver._id;
       load.assignedDate = new Date();
+      load.assignedAt = new Date(); // Make sure this field exists for consistency
       load.status = 'driver_assigned';
-      load.acceptedBid = {
-        bidId: bid._id,
-        amount: bid.bidAmount,
-        acceptedDate: new Date()
-      };
+      load.acceptedBid = bid._id; // Fixed: Only assign the bid ID
       
       await load.save({ session });
 
-      // CREATE ACTIVE JOB/BOOKING RECORD
-      try {
-        const db = mongoose.connection.db;
-        const bookingsCollection = db.collection('bookings');
+      // CREATE ACTIVE JOB/BOOKING RECORD - Enhanced version
+      const db = mongoose.connection.db;
+      const bookingsCollection = db.collection('bookings');
+      
+      // Calculate estimated distance and duration if coordinates are available
+      let estimatedDistance = null;
+      let estimatedDuration = null;
+      
+      if (load.pickupCoordinates && load.deliveryCoordinates) {
+        // Simple distance calculation (you can replace with more sophisticated logic)
+        const R = 6371; // Earth's radius in km
+        const dLat = (load.deliveryCoordinates.latitude - load.pickupCoordinates.latitude) * Math.PI / 180;
+        const dLon = (load.deliveryCoordinates.longitude - load.pickupCoordinates.longitude) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(load.pickupCoordinates.latitude * Math.PI / 180) * 
+                  Math.cos(load.deliveryCoordinates.latitude * Math.PI / 180) * 
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        estimatedDistance = Math.round(R * c);
         
-        const activeJob = {
-          loadId: load._id,
-          bidId: bid._id,
-          driverId: bid.driver._id,
-          cargoOwnerId: userIdString,
-          
-          // Job details from load
-          title: load.title,
-          pickupLocation: load.pickupLocation,
-          deliveryLocation: load.deliveryLocation,
-          pickupDate: bid.proposedPickupDate,
-          deliveryDate: bid.proposedDeliveryDate,
-          
-          // Cargo details
-          cargoType: load.cargoType,
-          weight: load.weight,
-          dimensions: load.dimensions,
-          specialInstructions: load.specialInstructions,
-          
-          // Financial details
-          agreedAmount: bid.bidAmount,
-          currency: bid.currency || 'KES',
-          paymentMethod: bid.terms?.paymentMethod || 'cash',
-          paymentTiming: bid.terms?.paymentTiming || 'on_delivery',
-          
-          // Status tracking
-          status: 'assigned', // assigned -> in_progress -> delivered -> completed
-          assignedAt: new Date(),
-          
-          // Driver and vehicle info
-          driverInfo: {
-            name: bid.driverInfo?.name || bid.driver.name,
-            phone: bid.driverInfo?.phone || bid.driver.phone,
-            rating: bid.driverInfo?.rating || bid.driver.rating || 0,
-            vehicleType: bid.vehicleDetails?.type || bid.driver.vehicleType,
-            vehicleCapacity: bid.vehicleDetails?.capacity || bid.driver.vehicleCapacity
-          },
-          
-          // Timeline
-          timeline: [{
-            event: 'job_assigned',
-            timestamp: new Date(),
-            description: `Job assigned to ${bid.driverInfo?.name || bid.driver.name}`,
-            userId: userIdString
-          }],
-          
-          // Created/updated timestamps
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
-
-        await bookingsCollection.insertOne(activeJob, { session });
-        
-      } catch (jobError) {
-        console.error('Error creating active job:', jobError);
-        // Don't fail the entire transaction for job creation error
+        // Rough estimation: 50 km/hour average speed
+        estimatedDuration = Math.round(estimatedDistance / 50 * 60); // minutes
       }
+
+      // Create comprehensive active job document matching your active-jobs endpoint expectations
+      const activeJob = {
+        // Core identifiers
+        _id: new mongoose.Types.ObjectId(),
+        loadId: load._id,
+        bidId: bid._id,
+        driverId: new mongoose.Types.ObjectId(bid.driver._id),
+        cargoOwnerId: new mongoose.Types.ObjectId(userIdString),
+        
+        // Job details - multiple field names for compatibility
+        title: load.title,
+        loadTitle: load.title,
+        description: load.description,
+        
+        // Location fields - multiple field names for compatibility
+        pickupLocation: load.pickupLocation,
+        origin: load.pickupLocation,
+        fromLocation: load.pickupLocation,
+        deliveryLocation: load.deliveryLocation,
+        destination: load.deliveryLocation,
+        toLocation: load.deliveryLocation,
+        
+        // Address details if available
+        pickupAddress: load.pickupAddress,
+        deliveryAddress: load.deliveryAddress,
+        pickupCoordinates: load.pickupCoordinates,
+        deliveryCoordinates: load.deliveryCoordinates,
+        
+        // Date fields - multiple field names for compatibility
+        pickupDate: bid.proposedPickupDate || load.pickupDate,
+        scheduledPickupDate: bid.proposedPickupDate || load.pickupDate,
+        startDate: bid.proposedPickupDate || load.pickupDate,
+        deliveryDate: bid.proposedDeliveryDate || load.deliveryDate,
+        scheduledDeliveryDate: bid.proposedDeliveryDate || load.deliveryDate,
+        endDate: bid.proposedDeliveryDate || load.deliveryDate,
+        
+        // Cargo details - multiple field names for compatibility
+        cargoType: load.cargoType,
+        loadType: load.cargoType,
+        type: load.cargoType,
+        weight: load.weight,
+        cargoWeight: load.weight,
+        estimatedWeight: load.weight,
+        dimensions: load.dimensions,
+        
+        // Financial details - multiple field names for compatibility
+        agreedAmount: bid.bidAmount,
+        totalAmount: bid.bidAmount,
+        price: bid.bidAmount,
+        amount: bid.bidAmount,
+        budget: load.budget, // Original budget for reference
+        currency: bid.currency || 'KES',
+        paymentMethod: bid.terms?.paymentMethod || 'cash',
+        paymentTiming: bid.terms?.paymentTiming || 'on_delivery',
+        
+        // Status tracking - using status that matches your active-jobs endpoint
+        status: 'assigned', // This matches one of the activeStatuses in your endpoint
+        assignedAt: new Date(),
+        acceptedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        
+        // Driver and vehicle info
+        driverInfo: {
+          name: bid.driverInfo?.name || bid.driver.name,
+          phone: bid.driverInfo?.phone || bid.driver.phone,
+          email: bid.driver.email,
+          rating: bid.driverInfo?.rating || bid.driver.rating || 0,
+          totalTrips: bid.driverInfo?.totalTrips || 0,
+          vehicleType: bid.vehicleDetails?.type || bid.driver.vehicleType,
+          vehicleCapacity: bid.vehicleDetails?.capacity || bid.driver.vehicleCapacity,
+          vehicleDetails: bid.vehicleDetails
+        },
+        
+        // Cargo owner info for driver reference
+        cargoOwnerInfo: {
+          name: load.cargoOwnerName || load.postedByName || 'Unknown',
+          phone: load.contactPerson?.phone,
+          email: load.contactPerson?.email,
+          contactPerson: load.contactPerson?.name
+        },
+        
+        // Enhanced fields for your active jobs endpoint
+        estimatedDistance,
+        estimatedDuration,
+        instructions: load.specialInstructions,
+        specialInstructions: load.specialInstructions,
+        contactPhone: load.contactPerson?.phone || bid.driver.phone,
+        urgency: load.isUrgent ? 'urgent' : 'normal',
+        isUrgent: load.isUrgent || false,
+        
+        // Tracking and timeline
+        timeline: [{
+          event: 'job_assigned',
+          status: 'assigned',
+          timestamp: new Date(),
+          description: `Job assigned to ${bid.driverInfo?.name || bid.driver.name}`,
+          userId: userIdString,
+          userType: 'cargo_owner',
+          location: null,
+          notes: `Bid accepted: ${bid.currency || 'KES'} ${bid.bidAmount?.toLocaleString()}`
+        }],
+        
+        trackingUpdates: [],
+        
+        // Additional metadata
+        version: 1,
+        isActive: true,
+        priority: load.isUrgent ? 'high' : 'normal',
+        
+        // Reference to original load and bid for data integrity
+        originalLoad: {
+          _id: load._id,
+          loadNumber: load.loadNumber,
+          title: load.title,
+          status: load.status
+        },
+        
+        originalBid: {
+          _id: bid._id,
+          bidAmount: bid.bidAmount,
+          submittedAt: bid.submittedAt,
+          acceptedAt: bid.acceptedAt
+        }
+      };
+
+      // Insert the active job
+      const insertResult = await bookingsCollection.insertOne(activeJob, { session });
+      
+      console.log('Active job created successfully:', {
+        insertedId: insertResult.insertedId,
+        loadId: load._id,
+        driverId: bid.driver._id,
+        status: 'assigned'
+      });
 
       // Reject all other pending bids for this load
       await Bid.updateMany(
@@ -918,23 +958,49 @@ router.post('/:id/accept', auth, async (req, res) => {
             bid.driver._id,
             {
               bidId: bid._id,
-              bidAmount: `${bid.currency || 'KES'} ${bid.bidAmount?.toLocaleString() || '0'}`
+              bidAmount: `${bid.currency || 'KES'} ${bid.bidAmount?.toLocaleString() || '0'}`,
+              loadTitle: load.title,
+              pickupLocation: load.pickupLocation,
+              deliveryLocation: load.deliveryLocation,
+              pickupDate: bid.proposedPickupDate || load.pickupDate
             },
             {
               loadId: load._id,
-              title: load.title
+              title: load.title,
+              jobId: insertResult.insertedId
             }
           );
         }
+        
+        // Also create a notification for the job assignment
+        if (notificationUtils && typeof notificationUtils.createNotification === 'function') {
+          await notificationUtils.createNotification({
+            userId: bid.driver._id,
+            userType: 'driver',
+            type: 'job_assigned',
+            title: 'New Job Assigned!',
+            message: `You've been assigned a new job: "${load.title}". Check your active jobs for details.`,
+            priority: load.isUrgent ? 'high' : 'normal',
+            icon: 'truck',
+            data: {
+              loadId: load._id,
+              bidId: bid._id,
+              jobId: insertResult.insertedId,
+              amount: bid.bidAmount,
+              currency: bid.currency || 'KES'
+            }
+          });
+        }
+        
       } catch (notificationError) {
         console.error('Failed to send acceptance notifications:', notificationError);
         // Don't fail the response for notification errors
       }
 
-      // Return success response
+      // Return success response with job details
       res.status(200).json({
         status: 'success',
-        message: 'Bid accepted successfully',
+        message: 'Bid accepted successfully and job created',
         data: {
           bid: {
             _id: bid._id,
@@ -947,12 +1013,22 @@ router.post('/:id/accept', auth, async (req, res) => {
             _id: load._id,
             status: load.status,
             assignedDriver: load.assignedDriver,
-            assignedDate: load.assignedDate
+            assignedDate: load.assignedDate,
+            acceptedBid: load.acceptedBid
           },
           driver: {
             _id: bid.driver._id,
             name: bid.driver.name,
             phone: bid.driver.phone
+          },
+          activeJob: {
+            _id: insertResult.insertedId,
+            status: 'assigned',
+            title: load.title,
+            pickupLocation: load.pickupLocation,
+            deliveryLocation: load.deliveryLocation,
+            amount: bid.bidAmount,
+            currency: bid.currency || 'KES'
           }
         }
       });
