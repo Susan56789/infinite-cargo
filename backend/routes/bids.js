@@ -687,57 +687,85 @@ router.post('/:id/accept', auth, async (req, res) => {
     }
 
     // FIXED: Improved authorization check logic
-    // Check ownership using multiple possible fields
-    const userIdString = req.user.id || req.user._id;
+    const userIdString = req.user.id || req.user._id?.toString();
     let isAuthorized = false;
-
-    // Check if user is the cargo owner directly from bid
-    if (bid.cargoOwner && bid.cargoOwner._id) {
-      isAuthorized = bid.cargoOwner._id.toString() === userIdString;
-      console.log('Checking cargoOwner from bid:', {
-        bidCargoOwner: bid.cargoOwner._id.toString(),
-        userId: userIdString,
-        match: isAuthorized
-      });
-    }
-
-    // If not found, check the load's postedBy field
-    if (!isAuthorized && bid.load.postedBy) {
-      isAuthorized = bid.load.postedBy.toString() === userIdString;
-      console.log('Checking load postedBy:', {
-        loadPostedBy: bid.load.postedBy.toString(),
-        userId: userIdString,
-        match: isAuthorized
-      });
-    }
-
-    // Additional check: if cargoOwner field is not populated, check against load owner
-    if (!isAuthorized && !bid.cargoOwner && bid.load.postedBy) {
-      isAuthorized = bid.load.postedBy.toString() === userIdString;
-      console.log('Checking load owner (no cargoOwner populated):', {
-        loadPostedBy: bid.load.postedBy.toString(),
-        userId: userIdString,
-        match: isAuthorized
-      });
-    }
 
     // Debug logging
     console.log('=== BID ACCEPTANCE AUTHORIZATION DEBUG ===');
-    console.log('User ID:', userIdString);
+    console.log('User ID from req.user:', userIdString);
     console.log('User Type:', req.user.userType);
     console.log('Bid ID:', bid._id);
-    console.log('Bid cargoOwner:', bid.cargoOwner?._id?.toString());
-    console.log('Load postedBy:', bid.load.postedBy?.toString());
-    console.log('Is Authorized:', isAuthorized);
+    console.log('Bid cargoOwner ID:', bid.cargoOwner?._id?.toString());
+    console.log('Load postedBy ID:', bid.load.postedBy?.toString());
+
+    // Method 1: Check against bid's cargoOwner field (if populated)
+    if (bid.cargoOwner && bid.cargoOwner._id) {
+      isAuthorized = bid.cargoOwner._id.toString() === userIdString;
+      console.log('Checking bid.cargoOwner:', isAuthorized);
+    }
+
+    // Method 2: Check against load's postedBy field (fallback and primary check)
+    if (!isAuthorized && bid.load.postedBy) {
+      isAuthorized = bid.load.postedBy.toString() === userIdString;
+      console.log('Checking load.postedBy:', isAuthorized);
+    }
+
+    // Method 3: Alternative approach - check if cargoOwner field matches but isn't populated
+    if (!isAuthorized && bid.cargoOwner && !bid.cargoOwner._id) {
+      // cargoOwner is an ObjectId (not populated)
+      isAuthorized = bid.cargoOwner.toString() === userIdString;
+      console.log('Checking unpopulated bid.cargoOwner:', isAuthorized);
+    }
+
+    // ADDITIONAL FIX: Direct database query as final check
+    if (!isAuthorized) {
+      console.log('Performing direct database check...');
+      
+      // Query the load directly to ensure we have the most current data
+      const loadCheck = await Load.findById(bid.load._id).select('postedBy');
+      if (loadCheck && loadCheck.postedBy) {
+        isAuthorized = loadCheck.postedBy.toString() === userIdString;
+        console.log('Direct load query result:', isAuthorized, {
+          loadPostedBy: loadCheck.postedBy.toString(),
+          userId: userIdString
+        });
+      }
+
+      // Also check if user has any loads with this ID
+      const userLoadCount = await Load.countDocuments({ 
+        _id: bid.load._id, 
+        postedBy: userIdString 
+      });
+      
+      if (!isAuthorized && userLoadCount > 0) {
+        isAuthorized = true;
+        console.log('User load ownership confirmed via count query');
+      }
+    }
+
+    console.log('Final authorization result:', isAuthorized);
 
     if (!isAuthorized) {
+      // Enhanced error response with debug info in development
       return res.status(403).json({
         status: 'error',
         message: 'You are not authorized to accept this bid. You must be the owner of the load.',
         debug: process.env.NODE_ENV === 'development' ? {
           userId: userIdString,
-          bidCargoOwner: bid.cargoOwner?._id?.toString(),
-          loadPostedBy: bid.load.postedBy?.toString()
+          userType: req.user.userType,
+          bidId: bid._id.toString(),
+          loadId: bid.load._id.toString(),
+          bidCargoOwner: bid.cargoOwner ? 
+            (bid.cargoOwner._id ? bid.cargoOwner._id.toString() : bid.cargoOwner.toString()) : 
+            'null',
+          loadPostedBy: bid.load.postedBy ? bid.load.postedBy.toString() : 'null',
+          // Add suggestions for debugging
+          suggestions: [
+            'Verify that you are logged in as the correct user',
+            'Check that this load belongs to your account',
+            'Ensure the load was not transferred to another user',
+            'Try refreshing your session'
+          ]
         } : undefined
       });
     }
@@ -898,24 +926,6 @@ router.post('/:id/accept', auth, async (req, res) => {
             }
           );
         }
-
-        if (notificationUtils && typeof notificationUtils.createNotification === 'function') {
-          await notificationUtils.createNotification({
-            userId: userIdString,
-            userType: 'cargo_owner',
-            type: 'load_assigned',
-            title: 'Driver Assigned',
-            message: `${bid.driverInfo?.name || bid.driver.name} has been assigned to your load "${load.title}"`,
-            priority: 'high',
-            icon: 'truck',
-            data: {
-              loadId: load._id,
-              driverId: bid.driver._id,
-              bidId: bid._id
-            },
-            actionUrl: `/loads/${load._id}/tracking`
-          });
-        }
       } catch (notificationError) {
         console.error('Failed to send acceptance notifications:', notificationError);
         // Don't fail the response for notification errors
@@ -1002,20 +1012,22 @@ router.post('/:id/accept', auth, async (req, res) => {
 // @route   POST /api/bids/:id/reject
 // @desc    Reject bid (cargo owner only)
 // @access  Private (Cargo owner only)
-router.post('/:id/reject',  auth, [
+router.post('/:id/reject', auth, [
   body('reason').optional().isLength({ max: 500 }).withMessage('Reason cannot exceed 500 characters')
 ], async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
 
+    // Validate bid ID format
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid bid ID'
+        message: 'Invalid bid ID format'
       });
     }
 
+    // Validate request body
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -1025,6 +1037,7 @@ router.post('/:id/reject',  auth, [
       });
     }
 
+    // Check user type
     if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
@@ -1032,45 +1045,289 @@ router.post('/:id/reject',  auth, [
       });
     }
 
-    const bid = await Bid.findById(id).populate('load');
+    // Find bid with populated data
+    const bid = await Bid.findById(id)
+      .populate('load')
+      .populate('driver', 'name phone email location rating vehicleType vehicleCapacity')
+      .populate('cargoOwner', 'name email');
 
     if (!bid) {
       return res.status(404).json({
         status: 'error',
-        message: 'Bid not found'
+        message: 'Bid not found or has been removed'
       });
     }
 
-    // Check if user owns the load
-    if (bid.load.postedBy.toString() !== req.user._id) {
+    // Check if load exists
+    if (!bid.load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Associated load not found'
+      });
+    }
+
+    // FIXED: Improved authorization check logic (same as accept endpoint)
+    const userIdString = req.user.id || req.user._id?.toString();
+    let isAuthorized = false;
+
+    // Debug logging
+    console.log('=== BID REJECTION AUTHORIZATION DEBUG ===');
+    console.log('User ID from req.user:', userIdString);
+    console.log('User Type:', req.user.userType);
+    console.log('Bid ID:', bid._id);
+    console.log('Bid cargoOwner ID:', bid.cargoOwner?._id?.toString());
+    console.log('Load postedBy ID:', bid.load.postedBy?.toString());
+
+    // Method 1: Check against bid's cargoOwner field (if populated)
+    if (bid.cargoOwner && bid.cargoOwner._id) {
+      isAuthorized = bid.cargoOwner._id.toString() === userIdString;
+      console.log('Checking bid.cargoOwner:', isAuthorized);
+    }
+
+    // Method 2: Check against load's postedBy field (fallback and primary check)
+    if (!isAuthorized && bid.load.postedBy) {
+      isAuthorized = bid.load.postedBy.toString() === userIdString;
+      console.log('Checking load.postedBy:', isAuthorized);
+    }
+
+    // Method 3: Alternative approach - check if cargoOwner field matches but isn't populated
+    if (!isAuthorized && bid.cargoOwner && !bid.cargoOwner._id) {
+      // cargoOwner is an ObjectId (not populated)
+      isAuthorized = bid.cargoOwner.toString() === userIdString;
+      console.log('Checking unpopulated bid.cargoOwner:', isAuthorized);
+    }
+
+    // ADDITIONAL FIX: Direct database query as final check
+    if (!isAuthorized) {
+      console.log('Performing direct database check for rejection...');
+      
+      // Query the load directly to ensure we have the most current data
+      const loadCheck = await Load.findById(bid.load._id).select('postedBy');
+      if (loadCheck && loadCheck.postedBy) {
+        isAuthorized = loadCheck.postedBy.toString() === userIdString;
+        console.log('Direct load query result:', isAuthorized, {
+          loadPostedBy: loadCheck.postedBy.toString(),
+          userId: userIdString
+        });
+      }
+
+      // Also check if user has any loads with this ID
+      const userLoadCount = await Load.countDocuments({ 
+        _id: bid.load._id, 
+        postedBy: userIdString 
+      });
+      
+      if (!isAuthorized && userLoadCount > 0) {
+        isAuthorized = true;
+        console.log('User load ownership confirmed via count query for rejection');
+      }
+    }
+
+    console.log('Final rejection authorization result:', isAuthorized);
+
+    if (!isAuthorized) {
+      // Enhanced error response with debug info in development
       return res.status(403).json({
         status: 'error',
-        message: 'Not authorized to reject this bid'
+        message: 'You are not authorized to reject this bid. You must be the owner of the load.',
+        debug: process.env.NODE_ENV === 'development' ? {
+          userId: userIdString,
+          userType: req.user.userType,
+          bidId: bid._id.toString(),
+          loadId: bid.load._id.toString(),
+          bidCargoOwner: bid.cargoOwner ? 
+            (bid.cargoOwner._id ? bid.cargoOwner._id.toString() : bid.cargoOwner.toString()) : 
+            'null',
+          loadPostedBy: bid.load.postedBy ? bid.load.postedBy.toString() : 'null',
+          // Add suggestions for debugging
+          suggestions: [
+            'Verify that you are logged in as the correct user',
+            'Check that this load belongs to your account',
+            'Ensure the load was not transferred to another user',
+            'Try refreshing your session'
+          ]
+        } : undefined
       });
     }
 
     // Check if bid can be rejected
-    if (!['submitted', 'viewed', 'under_review', 'shortlisted'].includes(bid.status)) {
+    const rejectableStatuses = ['submitted', 'viewed', 'under_review', 'shortlisted', 'counter_offered'];
+    if (!rejectableStatuses.includes(bid.status)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Bid cannot be rejected in its current status'
+        message: `Cannot reject bid in '${bid.status}' status. Only bids in ${rejectableStatuses.join(', ')} status can be rejected.`
       });
     }
 
-    // Reject the bid
-    await bid.reject(req.user._id, reason);
+    // Check if load is still in a state where rejections make sense
+    if (['driver_assigned', 'completed', 'cancelled'].includes(bid.load.status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot reject bids for a load that is already assigned, completed, or cancelled'
+      });
+    }
 
-    res.json({
-      status: 'success',
-      message: 'Bid rejected successfully'
-    });
+    // Store original status for potential rollback/logging
+    const originalStatus = bid.status;
+
+    // Start database transaction for consistency
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Update the bid with rejection details
+      bid.status = 'rejected';
+      bid.rejectedAt = new Date();
+      bid.rejectedBy = userIdString;
+      
+      // Set response object with rejection details
+      bid.response = {
+        status: 'rejected',
+        message: reason?.trim() || 'Bid rejected by cargo owner',
+        respondedAt: new Date(),
+        respondedBy: userIdString
+      };
+      
+      bid.respondedAt = new Date();
+
+      // Add to status history
+      bid.statusHistory.push({
+        status: 'rejected',
+        timestamp: new Date(),
+        updatedBy: userIdString,
+        reason: reason?.trim() || 'Bid rejected by cargo owner'
+      });
+
+      // Save the bid changes
+      await bid.save({ session });
+
+      // Optional: Update load statistics (decrement pending bids count)
+      if (bid.load.bidsReceived && bid.load.bidsReceived > 0) {
+        await Load.findByIdAndUpdate(
+          bid.load._id,
+          { 
+            $inc: { bidsReceived: -1 },
+            $set: { lastActivityDate: new Date() }
+          },
+          { session }
+        );
+      }
+
+      // Commit the transaction
+      await session.commitTransaction();
+
+      // Send notification to driver (don't fail if this errors)
+      try {
+        if (notificationUtils && typeof notificationUtils.sendBidRejectedNotification === 'function') {
+          await notificationUtils.sendBidRejectedNotification(
+            bid.driver._id,
+            {
+              bidId: bid._id,
+              bidAmount: `${bid.currency || 'KES'} ${bid.bidAmount?.toLocaleString() || '0'}`,
+              rejectionReason: reason?.substring(0, 100) || 'No specific reason provided'
+            },
+            {
+              loadId: bid.load._id,
+              title: bid.load.title
+            }
+          );
+        }
+
+        // Also create a general notification
+        if (notificationUtils && typeof notificationUtils.createNotification === 'function') {
+          await notificationUtils.createNotification({
+            userId: bid.driver._id,
+            userType: 'driver',
+            type: 'bid_rejected',
+            title: 'Bid Rejected',
+            message: `Your bid for "${bid.load.title}" has been rejected${reason ? `: ${reason.substring(0, 100)}` : ''}`,
+            priority: 'normal',
+            icon: 'x-circle',
+            data: {
+              loadId: bid.load._id,
+              bidId: bid._id,
+              rejectionReason: reason
+            }
+          });
+        }
+      } catch (notificationError) {
+        console.error('Failed to send rejection notifications:', notificationError);
+        // Don't fail the response for notification errors
+      }
+
+      // Return success response
+      res.status(200).json({
+        status: 'success',
+        message: 'Bid rejected successfully',
+        data: {
+          bid: {
+            _id: bid._id,
+            status: bid.status,
+            rejectedAt: bid.rejectedAt,
+            rejectionReason: reason?.trim() || 'No specific reason provided',
+            originalBidAmount: bid.bidAmount,
+            currency: bid.currency
+          },
+          driver: {
+            _id: bid.driver._id,
+            name: bid.driver.name
+          },
+          load: {
+            _id: bid.load._id,
+            title: bid.load.title,
+            status: bid.load.status
+          }
+        }
+      });
+
+    } catch (transactionError) {
+      // Rollback transaction on any error
+      await session.abortTransaction();
+      console.error('Transaction error during bid rejection:', transactionError);
+      throw transactionError;
+    } finally {
+      // End session
+      await session.endSession();
+    }
 
   } catch (error) {
-    console.error('Reject bid error:', error);
-    res.status(500).json({
+    console.error('=== BID REJECTION ERROR ===');
+    console.error('Error details:', error);
+    console.error('Stack trace:', error.stack);
+
+    // Handle specific error types
+    let statusCode = 500;
+    let errorMessage = 'Server error while rejecting bid';
+
+    if (error.name === 'ValidationError') {
+      statusCode = 400;
+      errorMessage = 'Validation failed: ' + Object.values(error.errors).map(e => e.message).join(', ');
+    } else if (error.name === 'CastError') {
+      statusCode = 400;
+      errorMessage = 'Invalid ID format provided';
+    } else if (error.message.includes('duplicate key')) {
+      statusCode = 409;
+      errorMessage = 'This bid has already been processed';
+    } else if (error.message.includes('not found')) {
+      statusCode = 404;
+      errorMessage = error.message;
+    } else if (error.message.includes('authorization') || error.message.includes('permission')) {
+      statusCode = 403;
+      errorMessage = error.message;
+    } else if (error.code === 11000) {
+      statusCode = 409;
+      errorMessage = 'Duplicate operation detected';
+    }
+
+    // Return appropriate error response
+    res.status(statusCode).json({
       status: 'error',
-      message: 'Server error rejecting bid',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 });
