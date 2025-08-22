@@ -1046,11 +1046,7 @@ router.post(
 
     try {
       const { email } = req.body;
-      console.log('Password reset code request received:', {
-        email,
-        ip: req.ip,
-        userAgent: req.get('User-Agent')
-      });
+      
 
       // Validation errors
       const errors = validationResult(req);
@@ -1113,13 +1109,7 @@ router.post(
         // Send email (wrapped in try/catch so it doesn't crash whole route)
         try {
           await sendPasswordResetCodeEmail(user.email, user.name, resetCode, userType);
-          console.log('Password reset code sent:', {
-            userId: user._id,
-            email: user.email,
-            userType,
-            codeExpiry: resetCodeExpiry,
-            processingTime: `${Date.now() - startTime}ms`
-          });
+          
         } catch (mailErr) {
           console.error('Email sending failed:', mailErr);
           // Don’t expose email issues to client, still return success

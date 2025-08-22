@@ -39,7 +39,7 @@ class AuthManager {
       this._setupStorageListeners();
       
       this.isInitialized = true;
-      console.log('[Auth] Initialized with state:', this.authState);
+     
       this._notifyListeners();
     } catch (error) {
       console.error('Failed to initialize auth state:', error);
@@ -61,7 +61,7 @@ class AuthManager {
             this.authState = { token, user, isAuthenticated: true };
             this._startExpiryMonitoring(isAdmin);
           }
-          console.log('[Auth] Synced valid auth state from storage');
+          
           return true;
         } else {
           // Clear invalid/expired auth data
@@ -69,7 +69,7 @@ class AuthManager {
           if (!isAdmin) {
             this.authState = { token: null, user: null, isAuthenticated: false };
           }
-          console.log('[Auth] Cleared expired auth state');
+         
         }
       } else {
         if (!isAdmin) {
@@ -365,7 +365,7 @@ class AuthManager {
       // Start expiry monitoring
       this._startExpiryMonitoring(isAdmin);
 
-      console.log('[Auth] Set auth data successfully');
+      
       return true;
     } catch (error) {
       console.error('Failed to store auth data:', error);
@@ -590,7 +590,7 @@ class AuthManager {
         this.warningShown = false;
       }
       
-      console.log('[Auth] Cleared auth data');
+     
     } catch (error) {
       console.error('Failed to clear auth data:', error);
     }
@@ -616,8 +616,8 @@ class AuthManager {
     
     const redirectPath = isAdmin ? '/admin/login' : '/login';
     const message = isAdmin 
-      ? 'Your admin session has expired after 6 hours. Please login again.'
-      : 'Your session has expired after 6 hours. Please login again.';
+      ? 'Your admin session has expired. Please login again.'
+      : 'Your session has expired . Please login again.';
     
     // Show alert and redirect
     setTimeout(() => {
