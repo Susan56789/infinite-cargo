@@ -1,26 +1,42 @@
 import React, { useState } from 'react';
-import { Mail, ArrowLeft, Truck, Package, AlertCircle, CheckCircle, Loader2, Shield, Star, Users, Clock, Send } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Mail, ArrowLeft, Truck, Package, AlertCircle, CheckCircle, Loader2, Shield, Star, Users, Clock, Send, Key, RefreshCw } from 'lucide-react';
 
 const ForgotPassword = () => {
   const [formData, setFormData] = useState({
-    email: ''
+    email: '',
+    verificationCode: ''
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [step, setStep] = useState('email'); // 'email', 'sent', 'expired'
+  const [step, setStep] = useState('email'); // 'email', 'verify', 'expired'
   const [focusedField, setFocusedField] = useState('');
   const [resendTimer, setResendTimer] = useState(0);
   const [resendCount, setResendCount] = useState(0);
+
+  const navigate = useNavigate();
 
   // API Configuration
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    const { name, value } = e.target;
+    
+    // For verification code, only allow numbers and limit to 6 digits
+    if (name === 'verificationCode') {
+      const numericValue = value.replace(/\D/g, '').slice(0, 6);
+      setFormData({
+        ...formData,
+        [name]: numericValue
+      });
+    } else {
+      setFormData({
+        ...formData,
+        [name]: value
+      });
+    }
+    
     // Clear messages when user starts typing
     if (error) setError('');
     if (success) setSuccess('');
@@ -47,6 +63,18 @@ const ForgotPassword = () => {
     return true;
   };
 
+  const validateCode = () => {
+    if (!formData.verificationCode.trim()) {
+      setError('Verification code is required');
+      return false;
+    }
+    if (formData.verificationCode.length !== 6) {
+      setError('Please enter the complete 6-digit verification code');
+      return false;
+    }
+    return true;
+  };
+
   const startResendTimer = () => {
     const timerDuration = Math.min(60 + (resendCount * 30), 300); // Max 5 minutes
     setResendTimer(timerDuration);
@@ -62,21 +90,15 @@ const ForgotPassword = () => {
     }, 1000);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!validateEmail()) return;
+  const sendVerificationCode = async () => {
+    if (!validateEmail()) return false;
 
     setLoading(true);
     setError('');
     setSuccess('');
 
     try {
-      const resetData = {
-        email: formData.email.trim().toLowerCase()
-      };
-
-      const response = await fetch(`${API_BASE_URL}/users/forgot-password`, {
+      const response = await fetch(`${API_BASE_URL}/users/forgot-password-code`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -84,7 +106,7 @@ const ForgotPassword = () => {
         },
         credentials: 'include',
         mode: 'cors',
-        body: JSON.stringify(resetData)
+        body: JSON.stringify({ email: formData.email.trim().toLowerCase() })
       });
 
       let result;
@@ -95,9 +117,7 @@ const ForgotPassword = () => {
       }
 
       if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error('No account found with this email address');
-        } else if (response.status === 429) {
+        if (response.status === 429) {
           throw new Error('Too many password reset requests. Please try again later.');
         } else if (response.status === 400 && result.errors) {
           const errorMessages = result.errors.map(err => err.message).join('. ');
@@ -109,13 +129,10 @@ const ForgotPassword = () => {
         }
       }
 
-      // Success - move to sent step
-      setSuccess('Password reset instructions sent! Check your email.');
-      setStep('sent');
-      startResendTimer();
+      return true;
 
     } catch (error) {
-      console.error('Forgot password error:', error);
+      console.error('Send verification code error:', error);
       
       // Handle specific network errors
       if (error.name === 'TypeError' && error.message.includes('fetch')) {
@@ -125,7 +142,80 @@ const ForgotPassword = () => {
       } else if (error.message.includes('Failed to fetch')) {
         setError('🌐 Connection failed: Please check your internet connection and try again.');
       } else {
-        setError(error.message || '❌ Failed to send reset instructions. Please try again.');
+        setError(error.message || '❌ Failed to send verification code. Please try again.');
+      }
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailSubmit = async (e) => {
+    e.preventDefault();
+    
+    const success = await sendVerificationCode();
+    if (success) {
+      setSuccess('Verification code sent! Check your email.');
+      setStep('verify');
+      startResendTimer();
+    }
+  };
+
+  const handleCodeSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!validateCode()) return;
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/users/verify-reset-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        credentials: 'include',
+        mode: 'cors',
+        body: JSON.stringify({
+          email: formData.email.trim().toLowerCase(),
+          code: formData.verificationCode.trim()
+        })
+      });
+
+      let result;
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        throw new Error('Invalid response from server');
+      }
+
+      if (!response.ok) {
+        if (response.status === 400) {
+          throw new Error(result.message || 'Invalid or expired verification code');
+        } else if (response.status === 500) {
+          throw new Error('Server error. Please try again later');
+        } else {
+          throw new Error(result.message || `Request failed (${response.status})`);
+        }
+      }
+
+      // Success - navigate to reset password page with token
+      setSuccess('Code verified! Redirecting to create new password...');
+      
+      setTimeout(() => {
+        navigate(`/reset-password?token=${result.resetToken}&email=${encodeURIComponent(result.email)}`);
+      }, 1500);
+
+    } catch (error) {
+      console.error('Verify code error:', error);
+      
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        setError('🌐 Network error: Unable to connect to server. Please check your internet connection and try again.');
+      } else {
+        setError(error.message || '❌ Invalid verification code. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -136,13 +226,23 @@ const ForgotPassword = () => {
     if (resendTimer > 0 || resendCount >= 3) return;
     
     setResendCount(prev => prev + 1);
-    await handleSubmit(new Event('submit'));
+    const success = await sendVerificationCode();
+    if (success) {
+      setSuccess('Verification code resent! Check your email.');
+      startResendTimer();
+    }
   };
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const formatCodeDisplay = (code) => {
+    // Format as XXX XXX for better readability
+    if (code.length <= 3) return code;
+    return `${code.slice(0, 3)} ${code.slice(3)}`;
   };
 
   return (
@@ -170,10 +270,10 @@ const ForgotPassword = () => {
                   </div>
                   <div>
                     <h1 className="text-4xl lg:text-5xl font-bold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent mb-2">
-                      Reset Password
+                      {step === 'email' ? 'Reset Password' : 'Verify Code'}
                     </h1>
                     <p className="text-blue-100 text-xl">
-                      Secure your Infinite Cargo account
+                      {step === 'email' ? 'Secure your Infinite Cargo account' : 'Enter your verification code'}
                     </p>
                   </div>
                 </div>
@@ -207,19 +307,19 @@ const ForgotPassword = () => {
                   <div className="flex-1">
                     <h4 className="text-xl font-bold text-white mb-2 group-hover:text-blue-100 transition-colors">Secure Recovery</h4>
                     <p className="text-blue-100 leading-relaxed group-hover:text-white transition-colors">
-                      Your password reset link is encrypted and expires in 15 minutes for maximum security
+                      Your verification code is encrypted and expires in 10 minutes for maximum security
                     </p>
                   </div>
                 </div>
                 
                 <div className="flex items-start gap-4 group cursor-pointer">
                   <div className="p-3 bg-blue-400/30 rounded-xl group-hover:bg-blue-400/40 transition-all duration-300 group-hover:scale-110">
-                    <Mail className="text-blue-200" size={28} />
+                    <Key className="text-blue-200" size={28} />
                   </div>
                   <div className="flex-1">
-                    <h4 className="text-xl font-bold text-white mb-2 group-hover:text-blue-100 transition-colors">Email Verification</h4>
+                    <h4 className="text-xl font-bold text-white mb-2 group-hover:text-blue-100 transition-colors">Code Verification</h4>
                     <p className="text-blue-100 leading-relaxed group-hover:text-white transition-colors">
-                      We'll send reset instructions to your registered email address only
+                      We'll send a 6-digit code to your registered email address for verification
                     </p>
                   </div>
                 </div>
@@ -263,16 +363,16 @@ const ForgotPassword = () => {
               
               {/* Back to Login Link */}
               <div className="mb-8">
-                <a 
-                  href="/login" 
-                 
+                <Link 
+                  to="/login" 
                   className="inline-flex items-center gap-3 text-blue-600 hover:text-blue-700 font-semibold transition-all duration-200 group"
                 >
                   <ArrowLeft className="group-hover:-translate-x-1 transition-transform" size={20} />
                   <span>Back to Sign In</span>
-                </a>
+                </Link>
               </div>
 
+              {/* Step 1: Email Input */}
               {step === 'email' && (
                 <>
                   <div className="text-center mb-10">
@@ -280,15 +380,15 @@ const ForgotPassword = () => {
                       Forgot Password?
                     </h2>
                     <p className="text-slate-600 text-lg">
-                      No worries! Enter your email and we'll send you reset instructions
+                      No worries! Enter your email and we'll send you a verification code
                     </p>
                     <div className="flex items-center justify-center gap-2 mt-3 text-sm text-slate-500">
                       <Shield size={16} />
-                      <span>Secure password recovery</span>
+                      <span>Secure 6-digit code verification</span>
                     </div>
                   </div>
 
-                  <form onSubmit={handleSubmit} className="space-y-7">
+                  <form onSubmit={handleEmailSubmit} className="space-y-7">
                     
                     {/* Email */}
                     <div>
@@ -318,7 +418,7 @@ const ForgotPassword = () => {
                         />
                       </div>
                       <p className="text-xs text-slate-500 mt-2">
-                        We'll send password reset instructions to this email
+                        We'll send a 6-digit verification code to this email
                       </p>
                     </div>
 
@@ -335,54 +435,36 @@ const ForgotPassword = () => {
                       {loading ? (
                         <div className="flex items-center justify-center gap-3">
                           <Loader2 className="animate-spin" size={24} />
-                          <span>Sending Instructions...</span>
+                          <span>Sending Code...</span>
                         </div>
                       ) : (
                         <div className="flex items-center justify-center gap-3">
                           <Send size={24} />
-                          <span>Send Reset Instructions</span>
+                          <span>Send Verification Code</span>
                         </div>
                       )}
                     </button>
-
-                    {/* Error Message */}
-                    {error && (
-                      <div className="flex items-center gap-3 p-5 bg-red-50 border-l-4 border-red-400 rounded-xl transform transition-all duration-300 scale-100 animate-pulse">
-                        <AlertCircle className="text-red-500 flex-shrink-0" size={24} />
-                        <span className="text-red-700 text-sm font-medium">{error}</span>
-                      </div>
-                    )}
-
-                    {/* Success Message */}
-                    {success && (
-                      <div className="flex items-center gap-3 p-5 bg-green-50 border-l-4 border-green-400 rounded-xl transform transition-all duration-300 scale-100">
-                        <CheckCircle className="text-green-500 flex-shrink-0" size={24} />
-                        <span className="text-green-700 text-sm font-medium">{success}</span>
-                      </div>
-                    )}
 
                     {/* Help Text */}
                     <div className="text-center pt-6 border-t border-slate-200">
                       <p className="text-slate-600 mb-4">
                         Remember your password?{' '}
-                        <a 
-                          href="/login" 
-                         
+                        <Link 
+                          to="/login" 
                           className="text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200"
                         >
                           Sign In
-                        </a>
+                        </Link>
                       </p>
                       
                       <p className="text-slate-600 mb-6">
                         Don't have an account?{' '}
-                        <a 
-                          href="/register" 
-                         
+                        <Link 
+                          to="/register" 
                           className="text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200"
                         >
                           Create Account
-                        </a>
+                        </Link>
                       </p>
                     </div>
 
@@ -390,45 +472,85 @@ const ForgotPassword = () => {
                 </>
               )}
 
-              {step === 'sent' && (
-                <div className="text-center">
-                  <div className="mb-8">
-                    <div className="mx-auto w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
-                      <CheckCircle className="text-green-600" size={40} />
+              {/* Step 2: Code Verification */}
+              {step === 'verify' && (
+                <>
+                  <div className="text-center mb-10">
+                    <div className="mx-auto w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mb-6">
+                      <Key className="text-blue-600" size={40} />
                     </div>
-                    <h2 className="text-4xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent mb-3">
-                      Check Your Email
+                    <h2 className="text-4xl font-bold bg-gradient-to-r from-blue-800 to-indigo-600 bg-clip-text text-transparent mb-3">
+                      Enter Verification Code
                     </h2>
                     <p className="text-slate-600 text-lg mb-4">
-                      We've sent password reset instructions to:
+                      We've sent a 6-digit code to:
                     </p>
                     <p className="text-blue-600 font-semibold text-xl mb-6">
                       {formData.email}
                     </p>
                   </div>
 
-                  <div className="space-y-6">
-                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-                      <h3 className="font-bold text-blue-800 mb-3">Next Steps:</h3>
-                      <ol className="text-left text-blue-700 space-y-2 text-sm">
-                        <li className="flex items-start gap-2">
-                          <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">1</span>
-                          <span>Check your email inbox (and spam folder)</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">2</span>
-                          <span>Click the "Reset Password" link in the email</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mt-0.5">3</span>
-                          <span>Create your new secure password</span>
-                        </li>
-                      </ol>
+                  <form onSubmit={handleCodeSubmit} className="space-y-7">
+                    
+                    {/* Verification Code */}
+                    <div>
+                      <label htmlFor="verificationCode" className="block text-sm font-bold text-blue-800 mb-2">
+                        6-Digit Verification Code *
+                      </label>
+                      <div className="relative group">
+                        <Key className={`absolute left-4 top-1/2 transform -translate-y-1/2 transition-colors duration-200 ${
+                          focusedField === 'verificationCode' ? 'text-blue-500' : 'text-slate-400'
+                        }`} size={20} />
+                        <input
+                          type="text"
+                          id="verificationCode"
+                          name="verificationCode"
+                          value={formatCodeDisplay(formData.verificationCode)}
+                          onChange={handleChange}
+                          onFocus={() => handleFocus('verificationCode')}
+                          onBlur={handleBlur}
+                          placeholder="000 000"
+                          className={`w-full pl-12 pr-4 py-4 border-2 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-center text-2xl font-mono tracking-widest ${
+                            focusedField === 'verificationCode' 
+                              ? 'border-blue-500 ring-4 ring-blue-100 shadow-lg' 
+                              : 'border-slate-200 hover:border-blue-300'
+                          }`}
+                          required
+                          disabled={loading}
+                          maxLength={7} // 6 digits + 1 space
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Check your email for the 6-digit verification code
+                      </p>
                     </div>
 
+                    {/* Submit Button */}
+                    <button
+                      type="submit"
+                      disabled={loading || formData.verificationCode.length !== 6}
+                      className={`w-full py-4 px-6 rounded-xl font-bold text-lg transition-all duration-300 transform focus:outline-none focus:ring-4 focus:ring-blue-200 ${
+                        loading || formData.verificationCode.length !== 6
+                          ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                          : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95'
+                      }`}
+                    >
+                      {loading ? (
+                        <div className="flex items-center justify-center gap-3">
+                          <Loader2 className="animate-spin" size={24} />
+                          <span>Verifying Code...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-3">
+                          <CheckCircle size={24} />
+                          <span>Verify Code</span>
+                        </div>
+                      )}
+                    </button>
+
                     {/* Resend Option */}
-                    <div className="border-t border-slate-200 pt-6">
-                      <p className="text-slate-600 mb-4">Didn't receive the email?</p>
+                    <div className="text-center pt-6 border-t border-slate-200">
+                      <p className="text-slate-600 mb-4">Didn't receive the code?</p>
                       
                       {resendTimer > 0 ? (
                         <div className="flex items-center justify-center gap-2 text-slate-500">
@@ -438,16 +560,17 @@ const ForgotPassword = () => {
                       ) : resendCount >= 3 ? (
                         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
                           <p className="text-yellow-700 text-sm">
-                            Maximum resend attempts reached. Please contact support if you need assistance.
+                            Maximum resend attempts reached. Please start over or contact support.
                           </p>
                         </div>
                       ) : (
                         <button
                           onClick={handleResend}
                           disabled={loading}
-                          className="text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200 disabled:opacity-50"
+                          className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200 disabled:opacity-50"
                         >
-                          Resend Email
+                          <RefreshCw size={16} />
+                          Resend Code
                         </button>
                       )}
                       
@@ -459,10 +582,12 @@ const ForgotPassword = () => {
                     </div>
 
                     {/* Back Options */}
-                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
+                    <div className="flex flex-col sm:flex-row gap-4 pt-4">
                       <button
+                        type="button"
                         onClick={() => {
                           setStep('email');
+                          setFormData({ ...formData, verificationCode: '' });
                           setError('');
                           setSuccess('');
                           setResendTimer(0);
@@ -470,23 +595,38 @@ const ForgotPassword = () => {
                         }}
                         className="flex-1 py-3 px-6 border-2 border-blue-600 text-blue-600 font-semibold rounded-xl hover:bg-blue-50 transition-all duration-200"
                       >
-                        Try Different Email
+                        Change Email
                       </button>
-                      <a
-                        href="/login"
-                       
-                        className="flex-1 py-3 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 text-center"
+                      <Link
+                        to="/login"
+                        className="flex-1 py-3 px-6 bg-gradient-to-r from-slate-600 to-slate-700 text-white font-semibold rounded-xl hover:from-slate-700 hover:to-slate-800 transition-all duration-200 text-center"
                       >
-                        Back to Sign In
-                      </a>
+                        Cancel
+                      </Link>
                     </div>
-                  </div>
+                  </form>
 
-                  {/* Security Notice */}
-                  <div className="flex items-center justify-center gap-2 text-xs text-slate-500 bg-slate-50 p-3 rounded-lg mt-8">
+                  {/* Code expires notice */}
+                  <div className="flex items-center justify-center gap-2 text-xs text-slate-500 bg-slate-50 p-3 rounded-lg mt-6">
                     <Shield size={16} />
-                    <span>Reset link expires in 15 minutes for security</span>
+                    <span>Verification code expires in 10 minutes</span>
                   </div>
+                </>
+              )}
+
+              {/* Error Message */}
+              {error && (
+                <div className="flex items-center gap-3 p-5 bg-red-50 border-l-4 border-red-400 rounded-xl transform transition-all duration-300 scale-100 animate-pulse mt-6">
+                  <AlertCircle className="text-red-500 flex-shrink-0" size={24} />
+                  <span className="text-red-700 text-sm font-medium">{error}</span>
+                </div>
+              )}
+
+              {/* Success Message */}
+              {success && (
+                <div className="flex items-center gap-3 p-5 bg-green-50 border-l-4 border-green-400 rounded-xl transform transition-all duration-300 scale-100 mt-6">
+                  <CheckCircle className="text-green-500 flex-shrink-0" size={24} />
+                  <span className="text-green-700 text-sm font-medium">{success}</span>
                 </div>
               )}
 

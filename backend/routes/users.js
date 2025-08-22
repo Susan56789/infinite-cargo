@@ -8,8 +8,38 @@ const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
 const corsHandler = require('../middleware/corsHandler');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 router.use(corsHandler);
+
+
+// Gmail transporter configuration
+const createEmailTransporter = () => {
+  return nodemailer.createTransporter({
+    service: 'gmail',
+    auth: {
+      user: process.env.GMAIL_EMAIL, // Your Gmail address
+      pass: process.env.GMAIL_APP_PASSWORD // Your Gmail App Password (not regular password)
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+};
+
+// Rate limiting for password reset requests
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3, // limit each IP to 3 reset requests per windowMs
+  message: {
+    status: 'error',
+    message: 'Too many password reset requests from this IP, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Rate limiting for registration and login
 const authLimiter = rateLimit({
@@ -34,7 +64,7 @@ const BASIC_PLAN = {
   currency: 'KES',
   duration: 30,
   features: {
-    maxLoads: 3,
+    maxLoads: 1,
     prioritySupport: false,
     advancedAnalytics: false,
     bulkOperations: false,
@@ -870,6 +900,484 @@ router.get('/me',  auth, async (req, res) => {
     });
   }
 });
+
+// Add these endpoints to your routes/users.js file after the existing forgot-password endpoint
+
+// @route   POST /api/users/verify-reset-code
+// @desc    Verify password reset code
+// @access  Public
+router.post('/verify-reset-code', corsHandler, [
+  body('email')
+    .trim()
+    .normalizeEmail()
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('code')
+    .trim()
+    .isLength({ min: 6, max: 6 })
+    .isNumeric()
+    .withMessage('Please provide a valid 6-digit verification code')
+], async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    console.log('Reset code verification request received:', {
+      email: req.body.email,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { email, code } = req.body;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Check both collections for user with valid reset code
+    const [driverUser, cargoOwnerUser] = await Promise.all([
+      db.collection('drivers').findOne({
+        email: email.toLowerCase().trim(),
+        passwordResetCode: code,
+        passwordResetExpires: { $gt: new Date() }
+      }),
+      db.collection('cargo-owners').findOne({
+        email: email.toLowerCase().trim(),
+        passwordResetCode: code,
+        passwordResetExpires: { $gt: new Date() }
+      })
+    ]);
+
+    const user = driverUser || cargoOwnerUser;
+    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+
+    if (!user) {
+      console.log('Invalid reset code verification attempt:', {
+        email,
+        code,
+        processingTime: `${Date.now() - startTime}ms`
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or expired verification code'
+      });
+    }
+
+    // Generate a secure reset token for password change
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    // Hash the token before storing
+    const hashedResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    // Update user with reset token and mark code as verified
+    const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
+    await collection.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          passwordResetToken: hashedResetToken,
+          passwordResetExpires: resetTokenExpiry,
+          resetCodeVerified: true,
+          resetCodeVerifiedAt: new Date(),
+          updatedAt: new Date()
+        },
+        $unset: {
+          passwordResetCode: "", // Remove the code once verified
+          passwordResetCodeExpires: ""
+        }
+      }
+    );
+
+    console.log('Reset code verified successfully:', {
+      userId: user._id,
+      email: user.email,
+      userType,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Verification code confirmed successfully',
+      resetToken: resetToken, // Send the unhashed token to the client
+      email: user.email,
+      expiresIn: '15 minutes'
+    });
+
+  } catch (error) {
+    console.error('Verify reset code error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to verify reset code. Please try again later.'
+    });
+  }
+});
+
+// Enhanced forgot-password endpoint to send verification codes instead of links
+router.post('/forgot-password-code', corsHandler, resetPasswordLimiter, [
+  body('email')
+    .trim()
+    .normalizeEmail()
+    .isEmail()
+    .withMessage('Please provide a valid email address')
+], async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    console.log('Password reset code request received:', {
+      email: req.body.email,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { email } = req.body;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Check both collections for user
+    const [driverUser, cargoOwnerUser] = await Promise.all([
+      db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
+      db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
+    ]);
+
+    const user = driverUser || cargoOwnerUser;
+    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+
+    // Always return success message to prevent email enumeration
+    if (user) {
+      // Generate 6-digit verification code
+      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      // Store reset code in user document
+      const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
+      await collection.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            passwordResetCode: resetCode,
+            passwordResetCodeExpires: resetCodeExpiry,
+            passwordResetRequestedAt: new Date(),
+            resetCodeVerified: false,
+            updatedAt: new Date()
+          },
+          // Remove any existing reset tokens
+          $unset: {
+            passwordResetToken: "",
+            passwordResetExpires: "",
+            resetCodeVerifiedAt: ""
+          }
+        }
+      );
+
+      // Send reset code email
+      await sendPasswordResetCodeEmail(user.email, user.name, resetCode, userType);
+
+      console.log('Password reset code sent successfully:', {
+        userId: user._id,
+        email: user.email,
+        userType,
+        codeExpiry: resetCodeExpiry,
+        processingTime: `${Date.now() - startTime}ms`
+      });
+    } else {
+      console.log('Password reset code requested for non-existent email:', email);
+    }
+
+    // Always return success to prevent email enumeration
+    res.json({
+      status: 'success',
+      message: 'If an account with that email exists, we have sent a 6-digit verification code to your email address.',
+      expiresIn: '10 minutes'
+    });
+
+  } catch (error) {
+    console.error('Forgot password code error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to process password reset request. Please try again later.'
+    });
+  }
+});
+
+// Helper function to send password reset code email
+async function sendPasswordResetCodeEmail(email, name, code, userType) {
+  try {
+    const transporter = createEmailTransporter();
+    
+    const mailOptions = {
+      from: `"Infinite Cargo" <${process.env.GMAIL_EMAIL}>`,
+      to: email,
+      subject: '🔐 Your Infinite Cargo Password Reset Code',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Password Reset Code</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); padding: 40px 30px; text-align: center;">
+              <div style="background-color: rgba(255, 255, 255, 0.2); width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                <div style="color: white; font-size: 36px; font-weight: bold;">🔐</div>
+              </div>
+              <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Password Reset Code</h1>
+              <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0; font-size: 16px;">Secure your Infinite Cargo account</p>
+            </div>
+
+            <!-- Content -->
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #1e293b; margin: 0 0 20px; font-size: 24px; font-weight: 600;">Hello ${name}!</h2>
+              
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 25px; font-size: 16px;">
+                We received a request to reset your password for your Infinite Cargo ${userType === 'driver' ? 'Driver' : 'Cargo Owner'} account.
+              </p>
+
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 30px; font-size: 16px;">
+                Use the verification code below to proceed with your password reset:
+              </p>
+
+              <!-- Verification Code -->
+              <div style="background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; border: 2px dashed #cbd5e1;">
+                <p style="color: #475569; margin: 0 0 15px; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Your Verification Code</p>
+                <div style="background-color: #ffffff; border-radius: 8px; padding: 20px; display: inline-block; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                  <span style="font-family: 'Courier New', monospace; font-size: 36px; font-weight: 700; color: #1e40af; letter-spacing: 8px;">${code}</span>
+                </div>
+                <p style="color: #64748b; margin: 15px 0 0; font-size: 12px;">This code expires in 10 minutes</p>
+              </div>
+
+              <!-- Instructions -->
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
+                <h3 style="color: #92400e; margin: 0 0 10px; font-size: 16px; font-weight: 600;">Next Steps:</h3>
+                <ol style="color: #92400e; margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+                  <li>Go back to the password reset page</li>
+                  <li>Enter this 6-digit verification code</li>
+                  <li>Create your new secure password</li>
+                  <li>Sign in with your new password</li>
+                </ol>
+              </div>
+
+              <!-- Security Notice -->
+              <div style="background-color: #fee2e2; border: 1px solid #fecaca; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                <h3 style="color: #dc2626; margin: 0 0 10px; font-size: 16px; font-weight: 600;">🛡️ Security Notice</h3>
+                <p style="color: #dc2626; margin: 0; font-size: 14px; line-height: 1.5;">
+                  If you did not request this password reset, please ignore this email and contact our support team immediately. 
+                  Your account security is important to us.
+                </p>
+              </div>
+
+              <!-- Support -->
+              <div style="text-align: center; margin: 30px 0;">
+                <p style="color: #64748b; margin: 0 0 15px; font-size: 14px;">
+                  Need help? Contact our support team
+                </p>
+                <a href="mailto:support@infinitecargo.co.ke" style="color: #3b82f6; text-decoration: none; font-weight: 600; font-size: 14px;">
+                  support@infinitecargo.co.ke
+                </a>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+              <div style="margin-bottom: 20px;">
+                <h3 style="color: #1e293b; margin: 0 0 10px; font-size: 18px; font-weight: 700;">Infinite Cargo</h3>
+                <p style="color: #64748b; margin: 0; font-size: 14px;">Connecting Kenya, One Load at a Time</p>
+              </div>
+              
+              <div style="margin-bottom: 20px;">
+                <a href="https://infinitecargo.co.ke" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Website</a>
+                <a href="mailto:support@infinitecargo.co.ke" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Support</a>
+                <a href="tel:+254700000000" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Call Us</a>
+              </div>
+              
+              <p style="color: #94a3b8; font-size: 12px; margin: 0; line-height: 1.5;">
+                This is an automated message. Please do not reply to this email.<br>
+                © 2024 Infinite Cargo. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Password reset code email sent successfully to:', email);
+    
+  } catch (error) {
+    console.error('Failed to send password reset code email:', error);
+    throw error;
+  }
+}
+// @route   POST /api/users/reset-password
+// @desc    Reset password with token
+// @access  Public
+
+router.post('/reset-password', corsHandler, [
+  body('token')
+    .notEmpty()
+    .withMessage('Reset token is required'),
+  body('email')
+    .trim()
+    .normalizeEmail()
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('password')
+    .isLength({ min: 8, max: 128 })
+    .withMessage('Password must be between 8 and 128 characters long')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character')
+], async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('Password reset submission received:', {
+      email: req.body.email,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { token, email, password } = req.body;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Hash the provided token to match stored hash
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Find user with valid reset token and verified code
+    const [driverUser, cargoOwnerUser] = await Promise.all([
+      db.collection('drivers').findOne({
+        email: email.toLowerCase().trim(),
+        passwordResetToken: hashedToken,
+        passwordResetExpires: { $gt: new Date() },
+        resetCodeVerified: true
+      }),
+      db.collection('cargo-owners').findOne({
+        email: email.toLowerCase().trim(),
+        passwordResetToken: hashedToken,
+        passwordResetExpires: { $gt: new Date() },
+        resetCodeVerified: true
+      })
+    ]);
+
+    const user = driverUser || cargoOwnerUser;
+    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+
+    if (!user) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or expired reset token, or verification code not confirmed'
+      });
+    }
+
+    // Hash new password
+    const saltRounds = process.env.NODE_ENV === 'production' ? 14 : 12;
+    const salt = await bcrypt.genSalt(saltRounds);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Update user with new password and clear all reset-related fields
+    const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
+    await collection.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          password: hashedPassword,
+          updatedAt: new Date(),
+          passwordChangedAt: new Date()
+        },
+        $unset: {
+          passwordResetToken: "",
+          passwordResetExpires: "",
+          passwordResetRequestedAt: "",
+          resetCodeVerified: "",
+          resetCodeVerifiedAt: "",
+          passwordResetCode: "",
+          passwordResetCodeExpires: ""
+        }
+      }
+    );
+
+    // Send password change confirmation email
+    await sendPasswordChangeConfirmationEmail(user.email, user.name, userType);
+
+    console.log('Password reset completed successfully:', {
+      userId: user._id,
+      email: user.email,
+      userType,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Password has been reset successfully. You can now sign in with your new password.'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to reset password. Please try again later.'
+    });
+  }
+});
+
+
 
 // Helper function to calculate profile completeness
 function calculateProfileCompleteness(user, userType) {

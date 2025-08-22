@@ -18,6 +18,7 @@ import Pricing from './pages/Pricing';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 
 // Admin Pages
 import AdminLogin from './components/admin/AdminLogin';
@@ -239,9 +240,22 @@ element={
                       title="Forgot Password"
                       description="Reset your Infinite Cargo account password. Enter your email to receive instructions for resetting your password securely."
                       keywords="forgot password, reset password, account recovery, infinite cargo"
-                      canonicalUrl="https://infinitecargo.co.ke/forot-password"
+                      canonicalUrl="https://infinitecargo.co.ke/forgot-password"
                     />
                     <ForgotPassword/>
+  </>
+}
+/><Route 
+path="/reset-password"
+element={
+  <>
+  <SEOHelmet 
+                      title="Reset Password"
+                      description="Reset your Infinite Cargo account password. Enter your email to receive instructions for resetting your password securely."
+                      keywords="forgot password, reset password, account recovery, infinite cargo"
+                      canonicalUrl="https://infinitecargo.co.ke/reset-password"
+                    />
+                    <ResetPassword/>
   </>
 }
 />
