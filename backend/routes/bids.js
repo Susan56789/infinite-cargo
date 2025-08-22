@@ -664,6 +664,7 @@ router.post('/:id/accept', auth, async (req, res) => {
         message: 'Only cargo owners can accept bids'
       });
     }
+
     // Find bid with populated data
     const bid = await Bid.findById(id)
       .populate('load')
@@ -676,29 +677,74 @@ router.post('/:id/accept', auth, async (req, res) => {
         message: 'Bid not found or has been removed'
       });
     }
+
     // Check if load exists
     if (!bid.load) {
-      
       return res.status(404).json({
         status: 'error',
         message: 'Associated load not found'
       });
     }
 
-    // Check if user owns the load
-    const loadOwnerId = bid.load.postedBy?.toString() || bid.cargoOwner?._id?.toString();
-    if (loadOwnerId !== req.user.id) {
-      
+    // FIXED: Improved authorization check logic
+    // Check ownership using multiple possible fields
+    const userIdString = req.user.id || req.user._id;
+    let isAuthorized = false;
+
+    // Check if user is the cargo owner directly from bid
+    if (bid.cargoOwner && bid.cargoOwner._id) {
+      isAuthorized = bid.cargoOwner._id.toString() === userIdString;
+      console.log('Checking cargoOwner from bid:', {
+        bidCargoOwner: bid.cargoOwner._id.toString(),
+        userId: userIdString,
+        match: isAuthorized
+      });
+    }
+
+    // If not found, check the load's postedBy field
+    if (!isAuthorized && bid.load.postedBy) {
+      isAuthorized = bid.load.postedBy.toString() === userIdString;
+      console.log('Checking load postedBy:', {
+        loadPostedBy: bid.load.postedBy.toString(),
+        userId: userIdString,
+        match: isAuthorized
+      });
+    }
+
+    // Additional check: if cargoOwner field is not populated, check against load owner
+    if (!isAuthorized && !bid.cargoOwner && bid.load.postedBy) {
+      isAuthorized = bid.load.postedBy.toString() === userIdString;
+      console.log('Checking load owner (no cargoOwner populated):', {
+        loadPostedBy: bid.load.postedBy.toString(),
+        userId: userIdString,
+        match: isAuthorized
+      });
+    }
+
+    // Debug logging
+    console.log('=== BID ACCEPTANCE AUTHORIZATION DEBUG ===');
+    console.log('User ID:', userIdString);
+    console.log('User Type:', req.user.userType);
+    console.log('Bid ID:', bid._id);
+    console.log('Bid cargoOwner:', bid.cargoOwner?._id?.toString());
+    console.log('Load postedBy:', bid.load.postedBy?.toString());
+    console.log('Is Authorized:', isAuthorized);
+
+    if (!isAuthorized) {
       return res.status(403).json({
         status: 'error',
-        message: 'You are not authorized to accept this bid'
+        message: 'You are not authorized to accept this bid. You must be the owner of the load.',
+        debug: process.env.NODE_ENV === 'development' ? {
+          userId: userIdString,
+          bidCargoOwner: bid.cargoOwner?._id?.toString(),
+          loadPostedBy: bid.load.postedBy?.toString()
+        } : undefined
       });
     }
 
     // Check if bid is in acceptable status
     const acceptableStatuses = ['submitted', 'viewed', 'under_review', 'shortlisted', 'pending'];
     if (!acceptableStatuses.includes(bid.status)) {
-      
       return res.status(400).json({
         status: 'error',
         message: `Cannot accept bid in '${bid.status}' status. Only bids in ${acceptableStatuses.join(', ')} status can be accepted.`
@@ -707,7 +753,6 @@ router.post('/:id/accept', auth, async (req, res) => {
 
     // Check if load can still receive acceptances
     if (bid.load.status === 'driver_assigned' || bid.load.status === 'completed' || bid.load.status === 'cancelled') {
-  
       return res.status(400).json({
         status: 'error',
         message: 'This load is no longer accepting bids'
@@ -716,14 +761,11 @@ router.post('/:id/accept', auth, async (req, res) => {
 
     // Check if driver exists
     if (!bid.driver) {
-     
       return res.status(404).json({
         status: 'error',
         message: 'Driver associated with this bid not found'
       });
     }
-
-
 
     // Start database transaction
     const session = await mongoose.startSession();
@@ -733,17 +775,15 @@ router.post('/:id/accept', auth, async (req, res) => {
       // Update the bid status
       bid.status = 'accepted';
       bid.acceptedAt = new Date();
-      bid.acceptedBy = req.user.id;
+      bid.acceptedBy = userIdString;
       bid.response = {
         status: 'accepted',
         message: 'Bid accepted by cargo owner',
         respondedAt: new Date(),
-        respondedBy: req.user.id
+        respondedBy: userIdString
       };
       
       await bid.save({ session });
-
-      
 
       // Update the load
       const load = bid.load;
@@ -758,8 +798,6 @@ router.post('/:id/accept', auth, async (req, res) => {
       
       await load.save({ session });
 
-    
-
       // CREATE ACTIVE JOB/BOOKING RECORD
       try {
         const db = mongoose.connection.db;
@@ -769,7 +807,7 @@ router.post('/:id/accept', auth, async (req, res) => {
           loadId: load._id,
           bidId: bid._id,
           driverId: bid.driver._id,
-          cargoOwnerId: req.user.id,
+          cargoOwnerId: userIdString,
           
           // Job details from load
           title: load.title,
@@ -808,7 +846,7 @@ router.post('/:id/accept', auth, async (req, res) => {
             event: 'job_assigned',
             timestamp: new Date(),
             description: `Job assigned to ${bid.driverInfo?.name || bid.driver.name}`,
-            userId: req.user.id
+            userId: userIdString
           }],
           
           // Created/updated timestamps
@@ -816,16 +854,15 @@ router.post('/:id/accept', auth, async (req, res) => {
           updatedAt: new Date()
         };
 
-        const jobResult = await bookingsCollection.insertOne(activeJob, { session });
+        await bookingsCollection.insertOne(activeJob, { session });
         
       } catch (jobError) {
         console.error('Error creating active job:', jobError);
         // Don't fail the entire transaction for job creation error
-        // The main bid acceptance should still succeed
       }
 
       // Reject all other pending bids for this load
-      const otherBidsUpdate = await Bid.updateMany(
+      await Bid.updateMany(
         { 
           load: bid.load._id, 
           _id: { $ne: bid._id },
@@ -836,12 +873,13 @@ router.post('/:id/accept', auth, async (req, res) => {
           'response.status': 'rejected',
           'response.message': 'Load was assigned to another driver',
           'response.respondedAt': new Date(),
-          'response.respondedBy': req.user.id,
+          'response.respondedBy': userIdString,
           rejectedAt: new Date(),
-          rejectedBy: req.user.id
+          rejectedBy: userIdString
         },
         { session }
       );
+
       // Commit the transaction
       await session.commitTransaction();
 
@@ -863,7 +901,7 @@ router.post('/:id/accept', auth, async (req, res) => {
 
         if (notificationUtils && typeof notificationUtils.createNotification === 'function') {
           await notificationUtils.createNotification({
-            userId: req.user.id,
+            userId: userIdString,
             userType: 'cargo_owner',
             type: 'load_assigned',
             title: 'Driver Assigned',
@@ -1004,7 +1042,7 @@ router.post('/:id/reject',  auth, [
     }
 
     // Check if user owns the load
-    if (bid.load.postedBy.toString() !== req.user.id) {
+    if (bid.load.postedBy.toString() !== req.user._id) {
       return res.status(403).json({
         status: 'error',
         message: 'Not authorized to reject this bid'
@@ -1020,7 +1058,7 @@ router.post('/:id/reject',  auth, [
     }
 
     // Reject the bid
-    await bid.reject(req.user.id, reason);
+    await bid.reject(req.user._id, reason);
 
     res.json({
       status: 'success',
