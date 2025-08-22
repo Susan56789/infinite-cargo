@@ -343,6 +343,8 @@ router.get('/dashboard', auth, async (req, res) => {
     
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
+    console.log(`[DEBUG] Fetching dashboard data for driver: ${req.user.id}`);
+
     // Get driver profile first
     const driver = await driversCollection.findOne(
       { _id: driverId },
@@ -370,9 +372,29 @@ router.get('/dashboard', auth, async (req, res) => {
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
+    // COMPREHENSIVE ACTIVE JOB STATUSES - This was a major issue in the original
+    const activeJobStatuses = [
+      // Initial assignment and acceptance
+      'assigned', 'accepted', 'driver_assigned',
+      // Confirmation and preparation
+      'confirmed', 'in_progress', 'started',
+      // Pickup phase
+      'en_route_pickup', 'en_route_to_pickup', 'going_to_pickup',
+      'arrived_pickup', 'at_pickup_location', 'at_pickup',
+      'picked_up', 'pickup_completed', 'loading', 'loaded',
+      // Transit phase
+      'in_transit', 'on_route', 'en_route_delivery', 'en_route_to_delivery',
+      'transporting', 'delivering',
+      // Near completion (still active until fully completed)
+      'arrived_delivery', 'at_delivery_location', 'at_delivery',
+      'unloading', 'delivery_in_progress'
+    ];
+
+    console.log(`[DEBUG] Active job statuses: ${activeJobStatuses.join(', ')}`);
+
     // Parallel queries for dashboard data
     const [
-      // Active bookings with proper status matching
+      // Active bookings with comprehensive status matching
       activeBookings,
       
       // Completed bookings  
@@ -381,10 +403,10 @@ router.get('/dashboard', auth, async (req, res) => {
       // Available loads matching driver criteria
       availableLoads,
       
-      // Driver's bids
+      // Driver's bids with load information
       myBids,
       
-      // Comprehensive statistics
+      // Comprehensive booking statistics
       bookingStats,
       earningsStats,
       ratingStats,
@@ -393,11 +415,15 @@ router.get('/dashboard', auth, async (req, res) => {
       // Notifications
       notifications
     ] = await Promise.all([
-      // Active bookings - match frontend expectations
+      // FIXED: Active bookings with comprehensive status matching
       bookingsCollection.find({
         driverId,
-        status: { $in: ['accepted', 'in_progress', 'driver_assigned', 'picked_up', 'in_transit'] }
-      }).sort({ createdAt: -1 }).limit(10).toArray(),
+        status: { $in: activeJobStatuses }
+      }).sort({ 
+        assignedAt: -1,
+        acceptedAt: -1,
+        createdAt: -1 
+      }).limit(20).toArray(),
 
       // Recent completed bookings
       bookingsCollection.find({
@@ -405,14 +431,18 @@ router.get('/dashboard', auth, async (req, res) => {
         status: 'completed'
       }).sort({ completedAt: -1 }).limit(5).toArray(),
 
-      // Available loads based on driver location and vehicle type
-      loadsCollection.find({
-        status: 'active',
-        $and: [
-          // Exclude loads the driver has already bid on
-          { _id: { $nin: await bidsCollection.distinct('loadId', { driverId }) } },
-          // Match vehicle requirements
-          {
+      // IMPROVED: Available loads with better filtering
+      loadsCollection.aggregate([
+        {
+          $match: {
+            status: 'active',
+            // Exclude loads where driver already has a bid
+            _id: { $nin: await bidsCollection.distinct('loadId', { driverId }) }
+          }
+        },
+        // Add vehicle type matching if driver has vehicle type
+        ...(driver.vehicleType ? [{
+          $match: {
             $or: [
               { vehicleTypeRequired: driver.vehicleType },
               { vehicleTypeRequired: { $exists: false } },
@@ -420,14 +450,31 @@ router.get('/dashboard', auth, async (req, res) => {
               { vehicleTypeRequired: '' }
             ]
           }
-        ]
-      }).sort({ createdAt: -1 }).limit(20).toArray(),
+        }] : []),
+        // Sort by creation date and urgency
+        {
+          $addFields: {
+            urgencyScore: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ['$urgency', 'urgent'] }, then: 3 },
+                  { case: { $eq: ['$urgency', 'high'] }, then: 2 },
+                  { case: { $eq: ['$urgency', 'medium'] }, then: 1 }
+                ],
+                default: 0
+              }
+            }
+          }
+        },
+        { $sort: { urgencyScore: -1, createdAt: -1 } },
+        { $limit: 25 }
+      ]).toArray(),
 
-      // Driver's bids with load info
+      // IMPROVED: Driver's bids with comprehensive load info
       bidsCollection.aggregate([
         { $match: { driverId } },
         { $sort: { createdAt: -1 } },
-        { $limit: 10 },
+        { $limit: 15 },
         {
           $lookup: {
             from: 'loads',
@@ -441,10 +488,28 @@ router.get('/dashboard', auth, async (req, res) => {
             path: '$loadInfo',
             preserveNullAndEmptyArrays: true
           }
+        },
+        // Add cargo owner information
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'cargoOwnerId',
+            foreignField: '_id',
+            as: 'cargoOwnerInfo',
+            pipeline: [
+              { $project: { name: 1, phone: 1, email: 1, companyName: 1 } }
+            ]
+          }
+        },
+        {
+          $unwind: {
+            path: '$cargoOwnerInfo',
+            preserveNullAndEmptyArrays: true
+          }
         }
       ]).toArray(),
 
-      // Booking statistics
+      // COMPREHENSIVE booking statistics
       bookingsCollection.aggregate([
         { $match: { driverId } },
         {
@@ -457,7 +522,7 @@ router.get('/dashboard', auth, async (req, res) => {
             activeJobs: {
               $sum: { 
                 $cond: [
-                  { $in: ['$status', ['accepted', 'in_progress', 'driver_assigned', 'picked_up', 'in_transit']] }, 
+                  { $in: ['$status', activeJobStatuses] }, 
                   1, 
                   0
                 ] 
@@ -465,29 +530,52 @@ router.get('/dashboard', auth, async (req, res) => {
             },
             cancelledJobs: {
               $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+            },
+            pendingJobs: {
+              $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
             }
           }
         }
       ]).toArray(),
 
-      // Earnings statistics
+      // IMPROVED earnings statistics with better date handling
       bookingsCollection.aggregate([
         {
           $match: {
             driverId,
             status: 'completed',
-            totalAmount: { $exists: true, $ne: null, $gt: 0 }
+            $or: [
+              { totalAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { agreedAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { price: { $exists: true, $ne: null, $gt: 0 } }
+            ]
+          }
+        },
+        {
+          $addFields: {
+            earningsAmount: {
+              $ifNull: [
+                '$totalAmount',
+                { $ifNull: ['$agreedAmount', '$price'] }
+              ]
+            },
+            completionDate: {
+              $ifNull: [
+                '$completedAt',
+                { $ifNull: ['$updatedAt', '$createdAt'] }
+              ]
+            }
           }
         },
         {
           $group: {
             _id: null,
-            totalEarnings: { $sum: '$totalAmount' },
+            totalEarnings: { $sum: '$earningsAmount' },
             thisMonthEarnings: {
               $sum: {
                 $cond: [
-                  { $gte: ['$completedAt', startOfMonth] },
-                  '$totalAmount',
+                  { $gte: ['$completionDate', startOfMonth] },
+                  '$earningsAmount',
                   0
                 ]
               }
@@ -497,11 +585,11 @@ router.get('/dashboard', auth, async (req, res) => {
                 $cond: [
                   {
                     $and: [
-                      { $gte: ['$completedAt', startOfLastMonth] },
-                      { $lte: ['$completedAt', endOfLastMonth] }
+                      { $gte: ['$completionDate', startOfLastMonth] },
+                      { $lte: ['$completionDate', endOfLastMonth] }
                     ]
                   },
-                  '$totalAmount',
+                  '$earningsAmount',
                   0
                 ]
               }
@@ -509,17 +597,19 @@ router.get('/dashboard', auth, async (req, res) => {
             yearlyEarnings: {
               $sum: {
                 $cond: [
-                  { $gte: ['$completedAt', startOfYear] },
-                  '$totalAmount',
+                  { $gte: ['$completionDate', startOfYear] },
+                  '$earningsAmount',
                   0
                 ]
               }
-            }
+            },
+            avgEarningsPerJob: { $avg: '$earningsAmount' },
+            totalJobsWithEarnings: { $sum: 1 }
           }
         }
       ]).toArray(),
 
-      // Rating statistics
+      // IMPROVED rating statistics
       bookingsCollection.aggregate([
         {
           $match: {
@@ -533,12 +623,15 @@ router.get('/dashboard', auth, async (req, res) => {
             averageRating: { $avg: '$rating' },
             totalRatings: { $sum: 1 },
             fiveStars: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
-            fourStars: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } }
+            fourStars: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+            threeStars: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+            twoStars: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+            oneStars: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } }
           }
         }
       ]).toArray(),
 
-      // Bid statistics
+      // COMPREHENSIVE bid statistics
       bidsCollection.aggregate([
         { $match: { driverId } },
         {
@@ -553,36 +646,57 @@ router.get('/dashboard', auth, async (req, res) => {
             },
             rejectedBids: {
               $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] }
-            }
+            },
+            withdrawnBids: {
+              $sum: { $cond: [{ $eq: ['$status', 'withdrawn'] }, 1, 0] }
+            },
+            avgBidAmount: { $avg: '$bidAmount' },
+            totalBidValue: { $sum: '$bidAmount' }
           }
         }
       ]).toArray(),
 
-      // Recent notifications
+      // IMPROVED notifications query
       notificationsCollection.find({ 
         userId: driverId,
-        $or: [{ isRead: false }, { isRead: { $exists: false } }]
+        $or: [
+          { isRead: false }, 
+          { isRead: { $exists: false } },
+          { 
+            createdAt: { 
+              $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Last 7 days
+            } 
+          }
+        ]
       })
       .sort({ createdAt: -1 })
-      .limit(10)
+      .limit(15)
       .toArray()
     ]);
 
-    // Process statistics
+    console.log(`[DEBUG] Raw query results:`);
+    console.log(`- Active bookings: ${activeBookings.length}`);
+    console.log(`- Completed bookings: ${completedBookings.length}`);
+    console.log(`- Available loads: ${availableLoads.length}`);
+    console.log(`- My bids: ${myBids.length}`);
+
+    // Process statistics with better error handling
     const bookingData = bookingStats[0] || {
-      totalJobs: 0, completedJobs: 0, activeJobs: 0, cancelledJobs: 0
+      totalJobs: 0, completedJobs: 0, activeJobs: 0, cancelledJobs: 0, pendingJobs: 0
     };
 
     const earningsData = earningsStats[0] || {
-      totalEarnings: 0, thisMonthEarnings: 0, lastMonthEarnings: 0, yearlyEarnings: 0
+      totalEarnings: 0, thisMonthEarnings: 0, lastMonthEarnings: 0, yearlyEarnings: 0,
+      avgEarningsPerJob: 0, totalJobsWithEarnings: 0
     };
 
     const ratingData = ratingStats[0] || {
-      averageRating: 0, totalRatings: 0, fiveStars: 0, fourStars: 0
+      averageRating: 0, totalRatings: 0, fiveStars: 0, fourStars: 0, threeStars: 0, twoStars: 0, oneStars: 0
     };
 
     const bidData = bidStats[0] || {
-      totalBids: 0, acceptedBids: 0, pendingBids: 0, rejectedBids: 0
+      totalBids: 0, acceptedBids: 0, pendingBids: 0, rejectedBids: 0, withdrawnBids: 0,
+      avgBidAmount: 0, totalBidValue: 0
     };
 
     // Calculate derived statistics
@@ -594,22 +708,100 @@ router.get('/dashboard', auth, async (req, res) => {
       ? Math.round((bidData.acceptedBids / bidData.totalBids) * 100)
       : 0;
 
-    // Format active bookings to match frontend expectations
-    const formattedActiveBookings = activeBookings.map(booking => ({
-      _id: booking._id,
-      title: booking.title || booking.loadTitle || 'Transport Job',
-      pickupLocation: booking.pickupLocation || booking.origin || 'Pickup Location',
-      deliveryLocation: booking.deliveryLocation || booking.destination || 'Delivery Location',
-      cargoType: booking.cargoType || booking.loadType || 'General Cargo',
-      budget: booking.totalAmount || booking.agreedAmount || booking.price || 0,
-      price: booking.totalAmount || booking.agreedAmount || booking.price || 0,
-      status: booking.status,
-      pickupDate: booking.pickupDate || booking.scheduledPickupDate || booking.createdAt,
-      createdAt: booking.createdAt,
-      updatedAt: booking.updatedAt
-    }));
+    // IMPROVED: Format active bookings with comprehensive field mapping
+    const formattedActiveBookings = activeBookings.map(booking => {
+      // Helper to get the best available date
+      const getBestDate = (...dateFields) => {
+        for (const field of dateFields) {
+          if (booking[field]) return booking[field];
+        }
+        return null;
+      };
 
-    // Format available loads to match frontend expectations
+      const pickupDate = getBestDate('pickupDate', 'scheduledPickupDate', 'startDate', 'pickupTime');
+      const deliveryDate = getBestDate('deliveryDate', 'scheduledDeliveryDate', 'endDate', 'deliveryTime');
+      
+      // Status normalization for consistent frontend display
+      const normalizeStatus = (status) => {
+        const statusMap = {
+          'driver_assigned': 'assigned',
+          'pickup_completed': 'picked_up',
+          'loading': 'picked_up',
+          'loaded': 'picked_up',
+          'on_route': 'in_transit',
+          'transporting': 'in_transit',
+          'delivering': 'in_transit',
+          'delivery_in_progress': 'at_delivery'
+        };
+        return statusMap[status] || status;
+      };
+
+      const normalizedStatus = normalizeStatus(booking.status);
+
+      // Priority calculation
+      const now = new Date();
+      const isOverdue = deliveryDate ? new Date(deliveryDate) < now : false;
+      const isUrgent = booking.urgency === 'urgent' || booking.isUrgent || 
+                     (pickupDate && new Date(pickupDate) <= new Date(now.getTime() + 24 * 60 * 60 * 1000));
+      
+      return {
+        _id: booking._id,
+        bidId: booking.bidId,
+        loadId: booking.loadId,
+        
+        // Basic information with fallbacks
+        title: booking.title || booking.loadTitle || booking.description || 'Transport Job',
+        pickupLocation: booking.pickupLocation || booking.origin || booking.fromLocation || 'Pickup Location',
+        deliveryLocation: booking.deliveryLocation || booking.destination || booking.toLocation || 'Delivery Location',
+        
+        // Dates
+        pickupDate,
+        deliveryDate,
+        
+        // Cargo information
+        cargoType: booking.cargoType || booking.loadType || booking.type || 'General Cargo',
+        weight: booking.weight || booking.cargoWeight || booking.estimatedWeight,
+        dimensions: booking.dimensions,
+        
+        // Financial details with multiple fallbacks
+        budget: booking.totalAmount || booking.agreedAmount || booking.price || booking.amount || 0,
+        price: booking.totalAmount || booking.agreedAmount || booking.price || booking.amount || 0,
+        totalAmount: booking.totalAmount || booking.agreedAmount || booking.price || booking.amount || 0,
+        agreedAmount: booking.agreedAmount || booking.totalAmount || booking.price || booking.amount || 0,
+        currency: booking.currency || 'KES',
+        
+        // Status information
+        status: normalizedStatus,
+        originalStatus: booking.status,
+        statusDisplay: getStatusDisplayName(normalizedStatus),
+        
+        // Timestamps
+        assignedAt: booking.assignedAt || booking.acceptedAt || booking.createdAt,
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt,
+        
+        // Related entities
+        cargoOwnerId: booking.cargoOwnerId,
+        driverId: booking.driverId,
+        
+        // Additional information
+        specialInstructions: booking.specialInstructions || booking.instructions,
+        trackingUpdates: booking.trackingUpdates || [],
+        timeline: booking.timeline || [],
+        
+        // UI helpers
+        isUrgent,
+        isOverdue,
+        priority: isOverdue ? 'critical' : isUrgent ? 'high' : 'normal',
+        
+        // Action availability
+        availableActions: getAvailableActions(normalizedStatus),
+        canUpdateStatus: true,
+        canViewDetails: true
+      };
+    });
+
+    // IMPROVED: Format available loads with better filtering
     const formattedAvailableLoads = availableLoads.map(load => ({
       _id: load._id,
       title: load.title || 'Transport Required',
@@ -624,10 +816,16 @@ router.get('/dashboard', auth, async (req, res) => {
       urgency: load.urgency || 'normal',
       bidCount: load.bidCount || 0,
       createdAt: load.createdAt,
-      cargoOwnerId: load.cargoOwnerId
+      cargoOwnerId: load.cargoOwnerId || load.postedBy,
+      vehicleTypeRequired: load.vehicleTypeRequired,
+      
+      // UI helpers
+      isUrgent: load.urgency === 'urgent' || load.isUrgent,
+      canBid: true,
+      matchesVehicle: !load.vehicleTypeRequired || load.vehicleTypeRequired === driver.vehicleType
     }));
 
-    // Format bids to match frontend expectations
+    // IMPROVED: Format bids with comprehensive information
     const formattedBids = myBids.map(bid => ({
       _id: bid._id,
       loadId: bid.loadId,
@@ -636,58 +834,133 @@ router.get('/dashboard', auth, async (req, res) => {
       message: bid.message,
       createdAt: bid.createdAt,
       updatedAt: bid.updatedAt,
-      loadTitle: bid.loadInfo?.title || 'Load',
-      pickupLocation: bid.loadInfo?.pickupLocation || bid.loadInfo?.origin,
-      deliveryLocation: bid.loadInfo?.deliveryLocation || bid.loadInfo?.destination,
-      estimatedAmount: bid.loadInfo?.estimatedAmount || bid.loadInfo?.budget
+      acceptedAt: bid.acceptedAt,
+      rejectedAt: bid.rejectedAt,
+      
+      // Load information
+      loadTitle: bid.loadInfo?.title || bid.loadTitle || 'Load',
+      pickupLocation: bid.loadInfo?.pickupLocation || bid.loadInfo?.origin || bid.pickupLocation,
+      deliveryLocation: bid.loadInfo?.deliveryLocation || bid.loadInfo?.destination || bid.deliveryLocation,
+      estimatedAmount: bid.loadInfo?.estimatedAmount || bid.loadInfo?.budget || bid.estimatedAmount,
+      
+      // Cargo owner information
+      cargoOwnerName: bid.cargoOwnerInfo?.name,
+      cargoOwnerCompany: bid.cargoOwnerInfo?.companyName,
+      
+      // Status helpers
+      canWithdraw: bid.status === 'submitted',
+      canUpdate: bid.status === 'submitted',
+      isActive: ['submitted', 'accepted'].includes(bid.status),
+      
+      // Display helpers
+      statusDisplay: getBidStatusDisplay(bid.status),
+      statusColor: getBidStatusColor(bid.status)
     }));
+
+    // Sort active bookings by priority and date
+    formattedActiveBookings.sort((a, b) => {
+      if (a.priority === 'critical' && b.priority !== 'critical') return -1;
+      if (a.priority !== 'critical' && b.priority === 'critical') return 1;
+      if (a.priority === 'high' && b.priority !== 'high') return -1;
+      if (a.priority !== 'high' && b.priority === 'high') return 1;
+      
+      if (a.pickupDate && b.pickupDate) {
+        return new Date(a.pickupDate) - new Date(b.pickupDate);
+      }
+      
+      return new Date(b.assignedAt) - new Date(a.assignedAt);
+    });
+
+    const responseData = {
+      driver,
+      activeBookings: formattedActiveBookings,
+      completedBookings: completedBookings.map(booking => ({
+        _id: booking._id,
+        title: booking.title || booking.loadTitle || 'Transport Job',
+        totalAmount: booking.totalAmount || booking.agreedAmount || booking.price || 0,
+        completedAt: booking.completedAt || booking.updatedAt,
+        rating: booking.rating,
+        review: booking.review,
+        pickupLocation: booking.pickupLocation || booking.origin,
+        deliveryLocation: booking.deliveryLocation || booking.destination,
+        cargoType: booking.cargoType || booking.loadType
+      })),
+      availableLoads: formattedAvailableLoads,
+      myBids: formattedBids,
+      
+      // Comprehensive statistics
+      stats: {
+        totalJobs: bookingData.totalJobs,
+        activeJobs: bookingData.activeJobs,
+        completedJobs: bookingData.completedJobs,
+        cancelledJobs: bookingData.cancelledJobs,
+        pendingJobs: bookingData.pendingJobs,
+        successRate,
+        completionRate: successRate, // Alias for frontend compatibility
+        rating: Math.round(ratingData.averageRating * 10) / 10,
+        averageRating: Math.round(ratingData.averageRating * 10) / 10,
+        totalRatings: ratingData.totalRatings,
+        ratingBreakdown: {
+          five: ratingData.fiveStars,
+          four: ratingData.fourStars,
+          three: ratingData.threeStars,
+          two: ratingData.twoStars,
+          one: ratingData.oneStars
+        },
+        totalBids: bidData.totalBids,
+        acceptedBids: bidData.acceptedBids,
+        pendingBids: bidData.pendingBids,
+        rejectedBids: bidData.rejectedBids,
+        bidAcceptanceRate,
+        monthlyEarnings: earningsData.thisMonthEarnings,
+        avgEarningsPerJob: Math.round(earningsData.avgEarningsPerJob * 100) / 100
+      },
+      
+      // Comprehensive earnings data
+      earnings: {
+        thisMonth: earningsData.thisMonthEarnings,
+        lastMonth: earningsData.lastMonthEarnings,
+        total: earningsData.totalEarnings,
+        yearly: earningsData.yearlyEarnings,
+        avgPerJob: Math.round(earningsData.avgEarningsPerJob * 100) / 100,
+        totalJobsWithEarnings: earningsData.totalJobsWithEarnings
+      },
+      
+      notifications,
+      
+      // Summary for quick overview
+      summary: {
+        activeJobs: formattedActiveBookings.length,
+        urgentJobs: formattedActiveBookings.filter(job => job.isUrgent).length,
+        overdueJobs: formattedActiveBookings.filter(job => job.isOverdue).length,
+        availableLoads: formattedAvailableLoads.length,
+        matchingLoads: formattedAvailableLoads.filter(load => load.matchesVehicle).length,
+        pendingBids: bidData.pendingBids,
+        unreadNotifications: notifications.filter(n => !n.isRead).length,
+        monthlyProgress: {
+          earnings: earningsData.thisMonthEarnings,
+          jobs: bookingData.activeJobs + bookingData.completedJobs,
+          target: 50000 // This could be configurable per driver
+        }
+      },
+      
+      // Metadata
+      lastUpdated: new Date(),
+      dataVersion: '2.0'
+    };
+
+    console.log(`[DEBUG] Final dashboard response summary:`, {
+      activeBookings: responseData.activeBookings.length,
+      availableLoads: responseData.availableLoads.length,
+      myBids: responseData.myBids.length,
+      totalJobs: responseData.stats.totalJobs,
+      completedJobs: responseData.stats.completedJobs,
+      monthlyEarnings: responseData.earnings.thisMonth
+    });
 
     res.json({
       status: 'success',
-      data: {
-        driver,
-        activeBookings: formattedActiveBookings,
-        completedBookings: completedBookings.map(booking => ({
-          _id: booking._id,
-          title: booking.title || booking.loadTitle,
-          totalAmount: booking.totalAmount || booking.agreedAmount,
-          completedAt: booking.completedAt,
-          rating: booking.rating,
-          pickupLocation: booking.pickupLocation || booking.origin,
-          deliveryLocation: booking.deliveryLocation || booking.destination
-        })),
-        availableLoads: formattedAvailableLoads,
-        myBids: formattedBids,
-        stats: {
-          totalJobs: bookingData.totalJobs,
-          activeJobs: bookingData.activeJobs,
-          completedJobs: bookingData.completedJobs,
-          cancelledJobs: bookingData.cancelledJobs,
-          successRate,
-          completionRate: successRate, // Alias for frontend compatibility
-          rating: Math.round(ratingData.averageRating * 10) / 10,
-          averageRating: Math.round(ratingData.averageRating * 10) / 10,
-          totalRatings: ratingData.totalRatings,
-          totalBids: bidData.totalBids,
-          acceptedBids: bidData.acceptedBids,
-          pendingBids: bidData.pendingBids,
-          bidAcceptanceRate,
-          monthlyEarnings: earningsData.thisMonthEarnings
-        },
-        earnings: {
-          thisMonth: earningsData.thisMonthEarnings,
-          lastMonth: earningsData.lastMonthEarnings,
-          total: earningsData.totalEarnings,
-          yearly: earningsData.yearlyEarnings
-        },
-        notifications,
-        summary: {
-          activeJobs: formattedActiveBookings.length,
-          availableLoads: formattedAvailableLoads.length,
-          pendingBids: bidData.pendingBids,
-          unreadNotifications: notifications.length
-        }
-      }
+      data: responseData
     });
 
   } catch (error) {
@@ -699,6 +972,60 @@ router.get('/dashboard', auth, async (req, res) => {
     });
   }
 });
+
+// Helper functions for status handling
+function getStatusDisplayName(status) {
+  const displays = {
+    'assigned': 'Assigned',
+    'accepted': 'Accepted',
+    'confirmed': 'Confirmed',
+    'in_progress': 'In Progress',
+    'en_route_pickup': 'En Route to Pickup',
+    'at_pickup': 'At Pickup Location',
+    'picked_up': 'Cargo Picked Up',
+    'in_transit': 'In Transit',
+    'at_delivery': 'At Delivery Location',
+    'completed': 'Completed'
+  };
+  return displays[status] || status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function getAvailableActions(status) {
+  const actions = {
+    'assigned': ['confirm', 'start'],
+    'accepted': ['confirm', 'start'],
+    'confirmed': ['start', 'pickup'],
+    'in_progress': ['pickup', 'en_route_pickup'],
+    'en_route_pickup': ['arrive_pickup'],
+    'at_pickup': ['pickup_complete'],
+    'picked_up': ['start_transit'],
+    'in_transit': ['arrive_delivery'],
+    'at_delivery': ['complete_delivery']
+  };
+  return actions[status] || [];
+}
+
+function getBidStatusDisplay(status) {
+  const displays = {
+    'submitted': 'Pending Review',
+    'accepted': 'Accepted',
+    'rejected': 'Rejected',
+    'withdrawn': 'Withdrawn',
+    'expired': 'Expired'
+  };
+  return displays[status] || status;
+}
+
+function getBidStatusColor(status) {
+  const colors = {
+    'submitted': 'bg-yellow-100 text-yellow-800',
+    'accepted': 'bg-green-100 text-green-800',
+    'rejected': 'bg-red-100 text-red-800',
+    'withdrawn': 'bg-gray-100 text-gray-800',
+    'expired': 'bg-gray-100 text-gray-600'
+  };
+  return colors[status] || 'bg-gray-100 text-gray-800';
+}
 
 
 // @route   GET /api/drivers/active-jobs
@@ -715,9 +1042,13 @@ router.get('/active-jobs', auth, async (req, res) => {
 
     const db = mongoose.connection.db;
     const bookingsCollection = db.collection('bookings');
+    const bidsCollection = db.collection('bids');
+    const loadsCollection = db.collection('loads');
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
-    // COMPREHENSIVE status matching - includes ALL possible active job states
+    console.log(`[DEBUG] Fetching active jobs for driver: ${req.user.id}`);
+
+    // COMPREHENSIVE status matching - This is the key fix
     const activeStatuses = [
       // Initial assignment states
       'assigned', 'accepted', 'driver_assigned',
@@ -735,10 +1066,9 @@ router.get('/active-jobs', auth, async (req, res) => {
       'unloading', 'delivery_in_progress'
     ];
 
-    console.log(`[DEBUG] Searching for active jobs for driver: ${req.user.id}`);
     console.log(`[DEBUG] Active statuses: ${activeStatuses.join(', ')}`);
 
-    // Get active jobs from bookings collection
+    // Primary query: Get active jobs from bookings collection
     const activeJobs = await bookingsCollection.find({
       driverId,
       status: { $in: activeStatuses }
@@ -751,75 +1081,87 @@ router.get('/active-jobs', auth, async (req, res) => {
     .toArray();
 
     console.log(`[DEBUG] Found ${activeJobs.length} active jobs in bookings collection`);
-    
-    // Log each job for debugging
-    activeJobs.forEach((job, index) => {
-      console.log(`[DEBUG] Job ${index + 1}:`, {
-        _id: job._id,
-        title: job.title,
-        status: job.status,
-        assignedAt: job.assignedAt,
-        pickupLocation: job.pickupLocation,
-        deliveryLocation: job.deliveryLocation
-      });
-    });
 
-    // If no active jobs found, also check bids collection for recently accepted bids
-    // that might not have been converted to bookings yet
+    // Secondary query: Check for recently accepted bids that might not have been converted to bookings yet
     if (activeJobs.length === 0) {
-      console.log('[DEBUG] No active jobs found in bookings, checking bids collection...');
+      console.log('[DEBUG] No active jobs found, checking for recent accepted bids...');
       
-      const bidsCollection = db.collection('bids');
-      const loadsCollection = db.collection('loads');
-      
-      const recentlyAcceptedBids = await bidsCollection.find({
-        driverId,
-        status: 'accepted',
-        acceptedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-      }).toArray();
+      const recentlyAcceptedBids = await bidsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'accepted',
+            acceptedAt: { $gte: new Date(Date.now() - 48 * 60 * 60 * 1000) } // Last 48 hours
+          }
+        },
+        {
+          $lookup: {
+            from: 'loads',
+            localField: 'loadId',
+            foreignField: '_id',
+            as: 'loadInfo'
+          }
+        },
+        {
+          $unwind: {
+            path: '$loadInfo',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'cargoOwnerId',
+            foreignField: '_id',
+            as: 'cargoOwnerInfo',
+            pipeline: [
+              { $project: { name: 1, phone: 1, email: 1, companyName: 1 } }
+            ]
+          }
+        },
+        {
+          $unwind: {
+            path: '$cargoOwnerInfo',
+            preserveNullAndEmptyArrays: true
+          }
+        }
+      ]).toArray();
 
       console.log(`[DEBUG] Found ${recentlyAcceptedBids.length} recently accepted bids`);
 
-      // Get load details for each accepted bid
+      // Convert bids to job-like objects
       for (const bid of recentlyAcceptedBids) {
-        try {
-          const load = await loadsCollection.findOne({ _id: bid.loadId });
-          
-          if (load) {
-            // Create a job-like object from the bid and load
-            const jobFromBid = {
-              _id: bid._id,
-              bidId: bid._id,
-              loadId: bid.loadId,
-              title: load.title || 'Transport Job',
-              pickupLocation: load.pickupLocation || load.origin,
-              deliveryLocation: load.deliveryLocation || load.destination,
-              pickupDate: bid.proposedPickupDate || load.pickupDate,
-              deliveryDate: bid.proposedDeliveryDate || load.deliveryDate,
-              cargoType: load.cargoType || load.loadType,
-              weight: load.weight,
-              dimensions: load.dimensions,
-              agreedAmount: bid.bidAmount,
-              totalAmount: bid.bidAmount,
-              currency: bid.currency || 'KES',
-              status: 'assigned', // Default status for accepted bids
-              assignedAt: bid.acceptedAt,
-              createdAt: bid.createdAt,
-              updatedAt: bid.updatedAt,
-              cargoOwnerId: bid.cargoOwnerId,
-              specialInstructions: load.specialInstructions,
-              source: 'bid' // Mark this as coming from bid
-            };
+        if (bid.loadInfo) {
+          const jobFromBid = {
+            _id: bid._id,
+            bidId: bid._id,
+            loadId: bid.loadId,
+            title: bid.loadInfo.title || 'Transport Job',
+            pickupLocation: bid.loadInfo.pickupLocation || bid.loadInfo.origin,
+            deliveryLocation: bid.loadInfo.deliveryLocation || bid.loadInfo.destination,
+            pickupDate: bid.proposedPickupDate || bid.loadInfo.pickupDate,
+            deliveryDate: bid.proposedDeliveryDate || bid.loadInfo.deliveryDate,
+            cargoType: bid.loadInfo.cargoType || bid.loadInfo.loadType,
+            weight: bid.loadInfo.weight,
+            dimensions: bid.loadInfo.dimensions,
+            agreedAmount: bid.bidAmount,
+            totalAmount: bid.bidAmount,
+            currency: bid.currency || 'KES',
+            status: 'accepted', // Status from bid acceptance
+            assignedAt: bid.acceptedAt,
+            acceptedAt: bid.acceptedAt,
+            createdAt: bid.createdAt,
+            updatedAt: bid.updatedAt,
+            cargoOwnerId: bid.cargoOwnerId,
+            specialInstructions: bid.loadInfo.specialInstructions,
+            source: 'bid', // Mark as coming from bid
             
-            activeJobs.push(jobFromBid);
-            console.log(`[DEBUG] Added job from bid:`, {
-              bidId: bid._id,
-              loadTitle: load.title,
-              status: 'assigned'
-            });
-          }
-        } catch (bidError) {
-          console.error('[DEBUG] Error processing bid:', bidError);
+            // Cargo owner info
+            cargoOwnerInfo: bid.cargoOwnerInfo
+          };
+          
+          activeJobs.push(jobFromBid);
+          console.log(`[DEBUG] Added job from accepted bid: ${bid._id}`);
         }
       }
     }
@@ -886,38 +1228,6 @@ router.get('/active-jobs', auth, async (req, res) => {
 
       const normalizedStatus = normalizeStatus(job.status);
 
-      // Status display helpers
-      const getStatusDisplay = (status) => {
-        const displays = {
-          'assigned': 'Assigned',
-          'accepted': 'Accepted',
-          'confirmed': 'Confirmed',
-          'in_progress': 'In Progress',
-          'en_route_pickup': 'En Route to Pickup',
-          'at_pickup': 'At Pickup Location',
-          'picked_up': 'Cargo Picked Up',
-          'in_transit': 'In Transit',
-          'at_delivery': 'At Delivery Location'
-        };
-        return displays[status] || status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      };
-
-      // Action availability based on status
-      const getAvailableActions = (status) => {
-        const actions = {
-          'assigned': ['confirm', 'start'],
-          'accepted': ['confirm', 'start'],
-          'confirmed': ['start', 'en_route_pickup'],
-          'in_progress': ['pickup', 'en_route_pickup'],
-          'en_route_pickup': ['arrive_pickup'],
-          'at_pickup': ['pickup_complete'],
-          'picked_up': ['start_transit'],
-          'in_transit': ['arrive_delivery'],
-          'at_delivery': ['complete_delivery']
-        };
-        return actions[status] || [];
-      };
-
       return {
         _id: job._id,
         bidId: job.bidId,
@@ -948,10 +1258,11 @@ router.get('/active-jobs', auth, async (req, res) => {
         // Status information
         status: normalizedStatus,
         originalStatus: job.status,
-        statusDisplay: getStatusDisplay(normalizedStatus),
+        statusDisplay: getStatusDisplayName(normalizedStatus),
         
         // Timestamps
         assignedAt: job.assignedAt || job.acceptedAt || job.createdAt,
+        acceptedAt: job.acceptedAt,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         
@@ -983,6 +1294,8 @@ router.get('/active-jobs', auth, async (req, res) => {
         canUpdateLocation: ['in_progress', 'picked_up', 'in_transit'].includes(normalizedStatus),
         canCompletePickup: ['en_route_pickup', 'at_pickup'].includes(normalizedStatus),
         canCompleteDelivery: ['in_transit', 'at_delivery'].includes(normalizedStatus),
+        canUpdateStatus: true,
+        canViewDetails: true,
         
         // Source tracking
         source: job.source || 'booking'
@@ -997,7 +1310,7 @@ router.get('/active-jobs', auth, async (req, res) => {
       
       // High priority jobs next
       if (a.priority === 'high' && b.priority !== 'high') return -1;
-      if (!a.priority === 'high' && b.priority === 'high') return 1;
+      if (a.priority !== 'high' && b.priority === 'high') return 1;
       
       // Then by pickup date (soonest first)
       if (a.pickupDate && b.pickupDate) {
@@ -1015,6 +1328,8 @@ router.get('/active-jobs', auth, async (req, res) => {
       total: formattedJobs.length,
       urgent: formattedJobs.filter(job => job.isUrgent).length,
       overdue: formattedJobs.filter(job => job.isOverdue).length,
+      critical: formattedJobs.filter(job => job.priority === 'critical').length,
+      high: formattedJobs.filter(job => job.priority === 'high').length,
       today: formattedJobs.filter(job => 
         job.pickupDate && 
         new Date(job.pickupDate).toDateString() === new Date().toDateString()
@@ -1030,11 +1345,19 @@ router.get('/active-jobs', auth, async (req, res) => {
         acc[job.status] = (acc[job.status] || 0) + 1;
         return acc;
       }, {}),
-      totalValue: formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0)
+      totalValue: formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0),
+      avgValue: formattedJobs.length > 0 
+        ? Math.round((formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0) / formattedJobs.length) * 100) / 100 
+        : 0
     };
 
-    console.log(`[DEBUG] Final response: ${formattedJobs.length} active jobs`);
-    console.log(`[DEBUG] Summary:`, summary);
+    console.log(`[DEBUG] Final active jobs response:`, {
+      totalJobs: formattedJobs.length,
+      urgentJobs: summary.urgent,
+      overdueJobs: summary.overdue,
+      todayJobs: summary.today,
+      statusBreakdown: summary.byStatus
+    });
 
     res.json({
       status: 'success',
@@ -1042,7 +1365,8 @@ router.get('/active-jobs', auth, async (req, res) => {
         activeJobs: formattedJobs,
         total: formattedJobs.length,
         summary,
-        message: formattedJobs.length === 0 ? 'No active jobs found. Check for new opportunities in available loads!' : undefined
+        message: formattedJobs.length === 0 ? 'No active jobs found. Check for new opportunities in available loads!' : undefined,
+        lastUpdated: new Date()
       }
     });
 
@@ -2270,16 +2594,30 @@ router.get('/stats', auth, async (req, res) => {
     const bidsCollection = db.collection('bids');
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
+    console.log(`[DEBUG] Fetching stats for driver: ${req.user.id}`);
+
     // Get current date for monthly calculations
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
 
+    // Active job statuses for consistency
+    const activeStatuses = [
+      'assigned', 'accepted', 'driver_assigned', 'confirmed', 'in_progress', 'started',
+      'en_route_pickup', 'en_route_to_pickup', 'going_to_pickup',
+      'arrived_pickup', 'at_pickup_location', 'at_pickup',
+      'picked_up', 'pickup_completed', 'loading', 'loaded',
+      'in_transit', 'on_route', 'en_route_delivery', 'en_route_to_delivery',
+      'transporting', 'delivering',
+      'arrived_delivery', 'at_delivery_location', 'at_delivery',
+      'unloading', 'delivery_in_progress'
+    ];
+
     // Parallel queries for better performance
     const [
       totalBookings,
-      completedBookings,
+      completedBookings, 
       activeBookings,
       cancelledBookings,
       ratingStats,
@@ -2287,7 +2625,9 @@ router.get('/stats', auth, async (req, res) => {
       lastMonthEarnings,
       totalEarnings,
       totalBids,
-      acceptedBids
+      acceptedBids,
+      pendingBids,
+      rejectedBids
     ] = await Promise.all([
       // Total bookings
       bookingsCollection.countDocuments({ driverId }),
@@ -2295,32 +2635,70 @@ router.get('/stats', auth, async (req, res) => {
       // Completed bookings
       bookingsCollection.countDocuments({ driverId, status: 'completed' }),
       
-      // Active bookings (accepted, in_progress, driver_assigned)
+      // Active bookings (using comprehensive status list)
       bookingsCollection.countDocuments({ 
         driverId, 
-        status: { $in: ['accepted', 'in_progress', 'driver_assigned', 'picked_up', 'in_transit'] } 
+        status: { $in: activeStatuses } 
       }),
       
       // Cancelled bookings
       bookingsCollection.countDocuments({ driverId, status: 'cancelled' }),
       
-      // Average rating
+      // Average rating with comprehensive calculation
       bookingsCollection.aggregate([
-        { $match: { driverId, rating: { $exists: true, $ne: null } } },
-        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+        { 
+          $match: { 
+            driverId, 
+            rating: { $exists: true, $ne: null, $gte: 1, $lte: 5 } 
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            avgRating: { $avg: '$rating' },
+            count: { $sum: 1 },
+            totalRating: { $sum: '$rating' },
+            fiveStars: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+            fourStars: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } }
+          } 
+        }
       ]).toArray(),
       
-      // Current month earnings
+      // Current month earnings with multiple amount field fallbacks
       bookingsCollection.aggregate([
         {
           $match: {
             driverId,
             status: 'completed',
-            completedAt: { $gte: startOfMonth },
-            totalAmount: { $exists: true, $ne: null }
+            $or: [
+              { completedAt: { $gte: startOfMonth } },
+              { updatedAt: { $gte: startOfMonth } }
+            ],
+            $or: [
+              { totalAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { agreedAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { price: { $exists: true, $ne: null, $gt: 0 } }
+            ]
           }
         },
-        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+        {
+          $addFields: {
+            earningsAmount: {
+              $ifNull: [
+                '$totalAmount',
+                { $ifNull: ['$agreedAmount', '$price'] }
+              ]
+            }
+          }
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$earningsAmount' },
+            count: { $sum: 1 },
+            avg: { $avg: '$earningsAmount' }
+          } 
+        }
       ]).toArray(),
       
       // Last month earnings
@@ -2329,11 +2707,43 @@ router.get('/stats', auth, async (req, res) => {
           $match: {
             driverId,
             status: 'completed',
-            completedAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
-            totalAmount: { $exists: true, $ne: null }
+            $or: [
+              { 
+                completedAt: { 
+                  $gte: startOfLastMonth, 
+                  $lte: endOfLastMonth 
+                } 
+              },
+              { 
+                updatedAt: { 
+                  $gte: startOfLastMonth, 
+                  $lte: endOfLastMonth 
+                } 
+              }
+            ],
+            $or: [
+              { totalAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { agreedAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { price: { $exists: true, $ne: null, $gt: 0 } }
+            ]
           }
         },
-        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+        {
+          $addFields: {
+            earningsAmount: {
+              $ifNull: [
+                '$totalAmount',
+                { $ifNull: ['$agreedAmount', '$price'] }
+              ]
+            }
+          }
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$earningsAmount' } 
+          } 
+        }
       ]).toArray(),
       
       // Total earnings
@@ -2342,54 +2752,136 @@ router.get('/stats', auth, async (req, res) => {
           $match: {
             driverId,
             status: 'completed',
-            totalAmount: { $exists: true, $ne: null }
+            $or: [
+              { totalAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { agreedAmount: { $exists: true, $ne: null, $gt: 0 } },
+              { price: { $exists: true, $ne: null, $gt: 0 } }
+            ]
           }
         },
-        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+        {
+          $addFields: {
+            earningsAmount: {
+              $ifNull: [
+                '$totalAmount',
+                { $ifNull: ['$agreedAmount', '$price'] }
+              ]
+            }
+          }
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$earningsAmount' },
+            count: { $sum: 1 }
+          } 
+        }
       ]).toArray(),
       
       // Total bids
       bidsCollection.countDocuments({ driverId }),
       
       // Accepted bids
-      bidsCollection.countDocuments({ driverId, status: 'accepted' })
+      bidsCollection.countDocuments({ driverId, status: 'accepted' }),
+      
+      // Pending bids
+      bidsCollection.countDocuments({ driverId, status: 'submitted' }),
+      
+      // Rejected bids
+      bidsCollection.countDocuments({ driverId, status: 'rejected' })
     ]);
 
-    // Calculate success rate
+    // Calculate success/completion rate
     const successRate = totalBookings > 0 ? 
       Math.round((completedBookings / totalBookings) * 100) : 0;
 
-    // Get average rating
+    // Get average rating with fallback
     const averageRating = ratingStats.length > 0 ? 
       Math.round(ratingStats[0].avgRating * 10) / 10 : 0;
 
-    // Extract earnings
+    const totalRatings = ratingStats.length > 0 ? ratingStats[0].count : 0;
+
+    // Extract earnings with fallbacks
     const currentMonthEarnings = monthlyEarnings.length > 0 ? monthlyEarnings[0].total : 0;
+    const currentMonthJobs = monthlyEarnings.length > 0 ? monthlyEarnings[0].count : 0;
+    const avgMonthlyEarnings = monthlyEarnings.length > 0 ? monthlyEarnings[0].avg : 0;
+
     const previousMonthEarnings = lastMonthEarnings.length > 0 ? lastMonthEarnings[0].total : 0;
     const allTimeEarnings = totalEarnings.length > 0 ? totalEarnings[0].total : 0;
+    const totalJobsWithEarnings = totalEarnings.length > 0 ? totalEarnings[0].count : 0;
+
+    // Calculate bid acceptance rate
+    const bidAcceptanceRate = totalBids > 0 ? 
+      Math.round((acceptedBids / totalBids) * 100) : 0;
+
+    // Calculate growth rates
+    const earningsGrowth = previousMonthEarnings > 0 ? 
+      Math.round(((currentMonthEarnings - previousMonthEarnings) / previousMonthEarnings) * 100) : 0;
+
+    const statsResponse = {
+      // Core statistics
+      totalJobs: totalBookings,
+      activeJobs: activeBookings,
+      completedJobs: completedBookings,
+      cancelledJobs: cancelledBookings,
+      pendingJobs: totalBookings - completedBookings - cancelledBookings - activeBookings,
+      
+      // Performance metrics
+      successRate,
+      completionRate: successRate, // Alias for compatibility
+      averageRating,
+      rating: averageRating, // Alias for compatibility
+      totalRatings,
+      
+      // Bid statistics
+      totalBids,
+      acceptedBids,
+      pendingBids,
+      rejectedBids,
+      bidAcceptanceRate,
+      
+      // Financial metrics
+      monthlyEarnings: currentMonthEarnings,
+      totalEarnings: allTimeEarnings,
+      avgEarningsPerJob: totalJobsWithEarnings > 0 ? 
+        Math.round((allTimeEarnings / totalJobsWithEarnings) * 100) / 100 : 0,
+      avgMonthlyEarnings: Math.round(avgMonthlyEarnings * 100) / 100,
+      
+      // Growth metrics
+      earningsGrowth,
+      jobsThisMonth: currentMonthJobs,
+      
+      // Rating breakdown
+      ratingBreakdown: ratingStats.length > 0 ? {
+        five: ratingStats[0].fiveStars || 0,
+        four: ratingStats[0].fourStars || 0,
+        total: ratingStats[0].count || 0
+      } : { five: 0, four: 0, total: 0 }
+    };
+
+    const earningsResponse = {
+      thisMonth: currentMonthEarnings,
+      lastMonth: previousMonthEarnings,
+      total: allTimeEarnings,
+      growth: earningsGrowth,
+      avgPerJob: statsResponse.avgEarningsPerJob,
+      jobsWithEarnings: totalJobsWithEarnings
+    };
+
+    console.log(`[DEBUG] Stats calculated:`, {
+      totalJobs: totalBookings,
+      activeJobs: activeBookings,
+      completedJobs: completedBookings,
+      rating: averageRating,
+      monthlyEarnings: currentMonthEarnings,
+      totalEarnings: allTimeEarnings
+    });
 
     res.json({
       status: 'success',
       data: {
-        stats: {
-          totalJobs: totalBookings,
-          activeJobs: activeBookings,
-          completedJobs: completedBookings,
-          cancelledJobs: cancelledBookings,
-          successRate,
-          completionRate: successRate, // Alias for compatibility
-          averageRating,
-          rating: averageRating, // Alias for compatibility
-          totalBids,
-          acceptedBids,
-          monthlyEarnings: currentMonthEarnings,
-          totalEarnings: allTimeEarnings
-        },
-        earnings: {
-          thisMonth: currentMonthEarnings,
-          lastMonth: previousMonthEarnings,
-          total: allTimeEarnings
-        }
+        stats: statsResponse,
+        earnings: earningsResponse
       }
     });
 
@@ -2403,9 +2895,89 @@ router.get('/stats', auth, async (req, res) => {
   }
 });
 
+// @route   GET /api/drivers/quick-stats
+// @desc    Get essential driver statistics quickly
+// @access  Private (Driver only)
+router.get('/quick-stats', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can view driver statistics'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    const bidsCollection = db.collection('bids');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Active statuses for consistency
+    const activeStatuses = [
+      'assigned', 'accepted', 'driver_assigned', 'confirmed', 'in_progress', 
+      'picked_up', 'in_transit'
+    ];
+
+    // Quick parallel queries
+    const [activeJobs, pendingBids, totalJobs, monthlyEarnings] = await Promise.all([
+      bookingsCollection.countDocuments({ 
+        driverId, 
+        status: { $in: activeStatuses } 
+      }),
+      
+      bidsCollection.countDocuments({ 
+        driverId, 
+        status: 'submitted' 
+      }),
+      
+      bookingsCollection.countDocuments({ driverId }),
+      
+      bookingsCollection.aggregate([
+        {
+          $match: {
+            driverId,
+            status: 'completed',
+            $or: [
+              { completedAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) } },
+              { updatedAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) } }
+            ],
+            totalAmount: { $exists: true, $ne: null, $gt: 0 }
+          }
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$totalAmount' } 
+          } 
+        }
+      ]).toArray()
+    ]);
+
+    const currentMonthEarnings = monthlyEarnings.length > 0 ? monthlyEarnings[0].total : 0;
+
+    res.json({
+      status: 'success',
+      data: {
+        activeJobs,
+        pendingBids,
+        totalJobs,
+        monthlyEarnings: currentMonthEarnings,
+        lastUpdated: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Get quick stats error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching quick statistics'
+    });
+  }
+});
+
 
 // @route   POST /api/drivers/rate
-// @desc    Rate a driver (Cargo Owner only) - NEW ENDPOINT
+// @desc    Rate a driver (Cargo Owner only) 
 // @access  Private (Cargo Owner only)
 router.post('/rate/:driverId', auth, [
   body('rating').isFloat({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
