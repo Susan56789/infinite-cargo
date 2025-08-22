@@ -219,16 +219,26 @@ const LoadSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User' 
   },
-  acceptedBid: {
+  aacceptedBid: {
+  bidId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Bid'
   },
+  amount: {
+    type: Number,
+    min: 0
+  },
+  acceptedDate: {
+    type: Date,
+    default: Date.now
+  }
+},
 
   // Status and lifecycle
   status: { 
     type: String,
     enum: [
-      'posted', 'receiving_bids', 'driver_assigned', 'assigned', 
+      'posted','available' ,'receiving_bids', 'driver_assigned', 'assigned', 
       'in_transit', 'delivered', 'cancelled', 'expired', 'on_hold'
     ],
     default: 'posted'
