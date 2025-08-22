@@ -32,6 +32,48 @@ const Header = () => {
     });
   }, []);
 
+  const forceSync = useCallback(() => {
+  authManager._syncFromStorage();
+  updateUser();
+}, [updateUser]);
+
+
+useEffect(() => {
+  const handleUserLoggedIn = (e) => {
+
+    // Force immediate sync
+    setTimeout(() => {
+      forceSync();
+    }, 100);
+    
+    if (e.detail?.user) {
+      setUser(e.detail.user);
+    }
+  };
+
+  const handleUserLoggedOut = () => {
+   
+    setUser(null);
+  };
+
+  const handleAuthStateChanged = () => {
+    
+    setTimeout(() => {
+      forceSync();
+    }, 50);
+  };
+
+  window.addEventListener('userLoggedIn', handleUserLoggedIn);
+  window.addEventListener('userLoggedOut', handleUserLoggedOut);
+  window.addEventListener('authStateChanged', handleAuthStateChanged);
+
+  return () => {
+    window.removeEventListener('userLoggedIn', handleUserLoggedIn);
+    window.removeEventListener('userLoggedOut', handleUserLoggedOut);
+    window.removeEventListener('authStateChanged', handleAuthStateChanged);
+  };
+}, [forceSync]);
+
   // Initialize and setup auth listeners
   useEffect(() => {
     mountedRef.current = true;

@@ -20,7 +20,6 @@ const Login = () => {
   useEffect(() => {
     // Check if user is already authenticated
     if (authManager.isAuthenticated()) {
-      console.log('User already authenticated, redirecting to:', authManager.getDefaultDashboard());
       window.location.href = authManager.getDefaultDashboard();
       return;
     }
@@ -80,7 +79,6 @@ const Login = () => {
         password: formData.password
       };
 
-      console.log('Login attempt for:', loginData.email);
 
       const response = await fetch(`${API_BASE_URL}/users/login`, {
         method: 'POST',
@@ -118,38 +116,26 @@ const Login = () => {
         }
       }
 
-      // FIXED: Validate that we have both token and user data
       if (!result.token || !result.user) {
         throw new Error('Invalid login response: missing token or user data');
       }
 
-      console.log('Login successful for user:', result.user.email);
-      console.log('User type:', result.user.userType);
-
+    
       // Login successful
       setSuccess('🎉 Login successful! Welcome back.');
 
-      // FIXED: Store auth data and verify it was stored correctly
+      
       authManager.setAuth(result.token, result.user, rememberMe);
       
-      // FIXED: Add a small delay to ensure storage is complete
+     
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      // FIXED: Verify authentication was stored correctly before proceeding
       if (!authManager.isAuthenticated()) {
         console.error('Authentication failed to store properly');
         throw new Error('Failed to authenticate user. Please try again.');
       }
 
-      console.log('Authentication verified, user authenticated:', {
-        userType: result.user.userType,
-        email: result.user.email,
-        rememberMe: rememberMe,
-        tokenExists: !!authManager.getToken(),
-        userExists: !!authManager.getUser()
-      });
 
-      // FIXED: Dispatch events to notify header and other components
       window.dispatchEvent(new CustomEvent('userLoggedIn', { 
         detail: { user: result.user, token: result.token } 
       }));
@@ -161,26 +147,25 @@ const Login = () => {
         password: ''
       });
 
-      // FIXED: Get redirect URL and validate it
+   
       const redirectUrl = authManager.getDefaultDashboard();
-      console.log('Redirecting to:', redirectUrl);
-      
+     
       if (!redirectUrl || redirectUrl === '/dashboard') {
         console.warn('Default dashboard URL may be incorrect, using fallback');
       }
 
-      // FIXED: Longer delay to ensure UI updates and shorter to prevent user confusion
+     
       setTimeout(() => {
-        // FIXED: Double-check authentication before redirecting
+        
         if (authManager.isAuthenticated()) {
-          console.log('Final redirect to:', redirectUrl);
+         
           window.location.href = redirectUrl;
         } else {
           console.error('User no longer authenticated at redirect time');
           setError('Authentication lost during login. Please try again.');
           setLoading(false);
         }
-      }, 1500); // Reduced from 2000ms to 1500ms
+      }, 1500); 
 
     } catch (error) {
       console.error('Login error:', error);
