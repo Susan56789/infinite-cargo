@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, Lock, ArrowLeft, Shield, CheckCircle, AlertCircle, Loader2, Key, RefreshCw, Truck } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 
 const ResetPassword = () => {
   const [formData, setFormData] = useState({
@@ -18,6 +19,7 @@ const ResetPassword = () => {
   const [timeRemaining, setTimeRemaining] = useState(null);
 
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
+   const navigate = useNavigate();
 
   useEffect(() => {
     // Simulate extracting token and email from URL parameters
@@ -76,116 +78,166 @@ const ResetPassword = () => {
   };
 
   const validateForm = () => {
-    if (!formData.password) {
-      setError('Password is required');
+  const { password, confirmPassword } = formData;
+  
+  if (!password.trim()) {
+    setError('Password is required');
+    return false;
+  }
+
+  if (password.length < 8) {
+    setError('Password must be at least 8 characters long');
+    return false;
+  }
+
+  if (password.length > 128) {
+    setError('Password must not exceed 128 characters');
+    return false;
+  }
+
+  const passwordRequirements = [
+    { test: /[a-z]/, message: 'at least one lowercase letter' },
+    { test: /[A-Z]/, message: 'at least one uppercase letter' },
+    { test: /\d/, message: 'at least one number' },
+    { test: /[@$!%*?&]/, message: 'at least one special character (@$!%*?&)' }
+  ];
+
+  for (const requirement of passwordRequirements) {
+    if (!requirement.test.test(password)) {
+      setError(`Password must contain ${requirement.message}`);
       return false;
     }
+  }
 
-    if (formData.password.length < 8) {
-      setError('Password must be at least 8 characters long');
-      return false;
-    }
+  if (!confirmPassword.trim()) {
+    setError('Please confirm your password');
+    return false;
+  }
 
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
-    if (!passwordRegex.test(formData.password)) {
-      setError('Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character');
-      return false;
-    }
+  if (password !== confirmPassword) {
+    setError('Passwords do not match');
+    return false;
+  }
 
-    if (!formData.confirmPassword) {
-      setError('Please confirm your password');
-      return false;
-    }
-
-    if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match');
-      return false;
-    }
-
-    return true;
-  };
+  return true;
+};
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!validateForm()) return;
+  e.preventDefault();
+  
+  if (!validateForm()) return;
 
-    setLoading(true);
-    setError('');
-    setSuccess('');
+  setLoading(true);
+  setError('');
+  setSuccess('');
 
+  try {
+    const requestBody = {
+      token,
+      email,
+      password: formData.password
+    };
+
+    // Debug logging
+    console.log('Reset password request:', {
+      email: requestBody.email,
+      hasToken: !!requestBody.token,
+      tokenLength: requestBody.token?.length,
+      hasPassword: !!requestBody.password,
+      passwordLength: requestBody.password?.length
+    });
+
+    const response = await fetch(`${API_BASE_URL}/users/reset-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      mode: 'cors',
+      body: JSON.stringify(requestBody)
+    });
+
+    let result;
     try {
-      const response = await fetch(`${API_BASE_URL}/users/reset-password`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-        mode: 'cors',
-        body: JSON.stringify({
-          token,
-          email,
-          password: formData.password
-        })
-      });
+      result = await response.json();
+    } catch (parseError) {
+      console.error('Failed to parse response:', parseError);
+      throw new Error('Invalid response from server');
+    }
 
-      let result;
-      try {
-        result = await response.json();
-      } catch (parseError) {
-        throw new Error('Invalid response from server');
-      }
+    console.log('Reset password response:', { 
+      status: response.status, 
+      result: result 
+    });
 
-      if (!response.ok) {
-        if (response.status === 400) {
-          if (result.errors) {
-            const errorMessages = result.errors.map(err => err.message).join('. ');
-            throw new Error(errorMessages);
-          } else if (result.message.includes('Invalid or expired')) {
+    if (!response.ok) {
+      if (response.status === 400) {
+        if (result.errors && Array.isArray(result.errors)) {
+          const errorMessages = result.errors.map(err => err.message).join('. ');
+          throw new Error(errorMessages);
+        } else if (result.message) {
+          if (result.message.includes('Invalid or expired')) {
             throw new Error('This reset link has expired or is invalid. Please request a new password reset.');
           } else if (result.message.includes('verification code not confirmed')) {
             throw new Error('Verification code was not properly confirmed. Please start the reset process again.');
+          } else if (result.message.includes('Validation failed')) {
+            throw new Error('Password does not meet security requirements. Please check the requirements below.');
+          } else {
+            throw new Error(result.message);
           }
-        } else if (response.status === 500) {
-          throw new Error('Server error. Please try again later');
         } else {
-          throw new Error(result.message || `Request failed (${response.status})`);
+          throw new Error('Invalid request. Please check your information and try again.');
         }
-      }
-
-      // Success
-      setSuccess('Password has been reset successfully! Redirecting to login...');
-      
-      // Clear form
-      setFormData({
-        password: '',
-        confirmPassword: ''
-      });
-
-      // Simulate redirect to login after 3 seconds
-      setTimeout(() => {
-        alert('Redirecting to login page...');
-        // In real implementation: navigate('/login', { state: { message: 'Password reset successful!', email: email }});
-      }, 3000);
-
-    } catch (error) {
-      console.error('Reset password error:', error);
-      
-      // Handle specific network errors
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        setError('Network error: Unable to connect to server. Please check your internet connection and try again.');
-      } else if (error.message.includes('CORS')) {
-        setError('Connection error: Unable to communicate with server. Please try again.');
-      } else if (error.message.includes('Failed to fetch')) {
-        setError('Connection failed: Please check your internet connection and try again.');
+      } else if (response.status === 500) {
+        throw new Error('Server error. Please try again in a few moments.');
+      } else if (response.status === 503) {
+        throw new Error('Service temporarily unavailable. Please try again later.');
       } else {
-        setError(error.message || 'Failed to reset password. Please try again.');
+        throw new Error(result.message || `Request failed (${response.status})`);
       }
-    } finally {
-      setLoading(false);
     }
-  };
+
+    // Success
+    setSuccess('Password has been reset successfully! Redirecting to login...');
+    
+    // Clear form
+    setFormData({
+      password: '',
+      confirmPassword: ''
+    });
+
+    // Redirect to login after 3 seconds
+    setTimeout(() => {
+      
+    navigate('/login', { 
+        state: { 
+          message: 'Password reset successful! Please sign in with your new password.',
+          email: email 
+        }
+      });
+      alert('Redirecting to login page...');
+    }, 3000);
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    
+    // Handle specific network errors
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error: Unable to connect to server. Please check your internet connection and try again.');
+    } else if (error.message.includes('CORS')) {
+      setError('Connection error: Unable to communicate with server. Please try again.');
+    } else if (error.message.includes('Failed to fetch')) {
+      setError('Connection failed: Please check your internet connection and try again.');
+    } else if (error.message.includes('Invalid response from server')) {
+      setError('Server communication error. Please try again.');
+    } else {
+      setError(error.message || 'Failed to reset password. Please try again.');
+    }
+  } finally {
+    setLoading(false);
+  }
+};
 
   const getPasswordStrength = () => {
     const password = formData.password;

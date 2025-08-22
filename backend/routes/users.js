@@ -1263,7 +1263,7 @@ async function sendPasswordResetCodeEmail(email, name, code, userType) {
               <div style="margin-bottom: 20px;">
                 <a href="https://infinitecargo.co.ke" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Website</a>
                 <a href="mailto:support@infinitecargo.co.ke" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Support</a>
-                <a href="tel:+254700000000" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Call Us</a>
+                <a href="tel:+254723139610" style="color: #3b82f6; text-decoration: none; margin: 0 15px; font-size: 14px;">Call Us</a>
               </div>
               
               <p style="color: #94a3b8; font-size: 12px; margin: 0; line-height: 1.5;">
@@ -1285,6 +1285,85 @@ async function sendPasswordResetCodeEmail(email, name, code, userType) {
     throw error;
   }
 }
+
+async function sendPasswordChangeConfirmationEmail(email, name, userType) {
+  try {
+    const transporter = createEmailTransporter();
+    
+    const mailOptions = {
+      from: `"Infinite Cargo" <${process.env.GMAIL_EMAIL}>`,
+      to: email,
+      subject: '✅ Password Successfully Changed - Infinite Cargo',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Password Changed</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center;">
+              <div style="background-color: rgba(255, 255, 255, 0.2); width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                <div style="color: white; font-size: 36px; font-weight: bold;">✅</div>
+              </div>
+              <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Password Changed Successfully</h1>
+              <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0; font-size: 16px;">Your account is now secure</p>
+            </div>
+
+            <!-- Content -->
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #1e293b; margin: 0 0 20px; font-size: 24px; font-weight: 600;">Hello ${name}!</h2>
+              
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 25px; font-size: 16px;">
+                Your password has been successfully changed for your Infinite Cargo ${userType === 'driver' ? 'Driver' : 'Cargo Owner'} account.
+              </p>
+
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 30px; font-size: 16px;">
+                You can now sign in with your new password. For security reasons, you have been signed out of all devices.
+              </p>
+
+              <!-- Security Notice -->
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
+                <h3 style="color: #92400e; margin: 0 0 10px; font-size: 16px; font-weight: 600;">🛡️ Security Alert</h3>
+                <p style="color: #92400e; margin: 0; font-size: 14px; line-height: 1.5;">
+                  If you did not make this change, please contact our support team immediately at support@infinitecargo.co.ke
+                </p>
+              </div>
+
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="https://infinitecargo.co.ke/login" style="display: inline-block; padding: 15px 30px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                  Sign In Now
+                </a>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+              <h3 style="color: #1e293b; margin: 0 0 10px; font-size: 18px; font-weight: 700;">Infinite Cargo</h3>
+              <p style="color: #64748b; margin: 0; font-size: 14px;">Connecting Kenya, One Load at a Time</p>
+              <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0; line-height: 1.5;">
+                © 2024 Infinite Cargo. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Password change confirmation email sent successfully to:', email);
+    
+  } catch (error) {
+    console.error('Failed to send password change confirmation email:', error);
+    // Don't throw error - email failure shouldn't fail password reset
+  }
+}
+
 // @route   POST /api/users/reset-password
 // @desc    Reset password with token
 // @access  Public
@@ -1309,12 +1388,15 @@ router.post('/reset-password', corsHandler, [
   try {
     console.log('Password reset submission received:', {
       email: req.body.email,
+      hasToken: !!req.body.token,
+      hasPassword: !!req.body.password,
       ip: req.ip,
       userAgent: req.get('User-Agent')
     });
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('Validation errors in reset-password:', errors.array());
       return res.status(400).json({
         status: 'error',
         message: 'Validation failed',
@@ -1326,11 +1408,26 @@ router.post('/reset-password', corsHandler, [
     }
 
     const { token, email, password } = req.body;
-    const mongoose = require('mongoose');
+    
+    // Check database connection
+    if (!mongoose.connection?.db) {
+      console.error('MongoDB not connected at reset-password route');
+      return res.status(500).json({
+        status: 'error',
+        message: 'Database not available, please try again later.'
+      });
+    }
+    
     const db = mongoose.connection.db;
 
     // Hash the provided token to match stored hash
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    console.log('Searching for user with reset token:', {
+      email: email.toLowerCase().trim(),
+      hashedTokenLength: hashedToken.length,
+      currentTime: new Date()
+    });
 
     // Find user with valid reset token and verified code
     const [driverUser, cargoOwnerUser] = await Promise.all([
@@ -1348,10 +1445,40 @@ router.post('/reset-password', corsHandler, [
       })
     ]);
 
+    console.log('User search results:', {
+      driverFound: !!driverUser,
+      cargoOwnerFound: !!cargoOwnerUser
+    });
+
+    // Debug: Check if user exists but token/conditions don't match
+    const [driverUserAny, cargoOwnerUserAny] = await Promise.all([
+      db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
+      db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
+    ]);
+
+    const userAny = driverUserAny || cargoOwnerUserAny;
+    if (userAny && !driverUser && !cargoOwnerUser) {
+      console.log('User exists but conditions not met:', {
+        hasResetToken: !!userAny.passwordResetToken,
+        storedToken: userAny.passwordResetToken?.substring(0, 10) + '...',
+        submittedHashedToken: hashedToken.substring(0, 10) + '...',
+        tokenMatch: userAny.passwordResetToken === hashedToken,
+        resetExpires: userAny.passwordResetExpires,
+        currentTime: new Date(),
+        isExpired: userAny.passwordResetExpires ? new Date() > userAny.passwordResetExpires : 'no expiry set',
+        resetCodeVerified: userAny.resetCodeVerified
+      });
+    }
+
     const user = driverUser || cargoOwnerUser;
     const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
 
     if (!user) {
+      console.log('No user found matching reset criteria:', {
+        email: email.toLowerCase().trim(),
+        processingTime: `${Date.now() - startTime}ms`
+      });
+      
       return res.status(400).json({
         status: 'error',
         message: 'Invalid or expired reset token, or verification code not confirmed'
@@ -1359,13 +1486,16 @@ router.post('/reset-password', corsHandler, [
     }
 
     // Hash new password
+    console.log('Hashing new password...');
     const saltRounds = process.env.NODE_ENV === 'production' ? 14 : 12;
     const salt = await bcrypt.genSalt(saltRounds);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    console.log('Updating user password in database...');
+    
     // Update user with new password and clear all reset-related fields
     const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
-    await collection.updateOne(
+    const updateResult = await collection.updateOne(
       { _id: user._id },
       {
         $set: {
@@ -1385,8 +1515,23 @@ router.post('/reset-password', corsHandler, [
       }
     );
 
-    // Send password change confirmation email
-    await sendPasswordChangeConfirmationEmail(user.email, user.name, userType);
+    console.log('Password update result:', {
+      matchedCount: updateResult.matchedCount,
+      modifiedCount: updateResult.modifiedCount,
+      acknowledged: updateResult.acknowledged
+    });
+
+    if (updateResult.matchedCount === 0) {
+      throw new Error('Failed to update password - user not found during update');
+    }
+
+    // Send password change confirmation email (don't let this fail the request)
+    try {
+      await sendPasswordChangeConfirmationEmail(user.email, user.name, userType);
+    } catch (emailError) {
+      console.error('Failed to send confirmation email:', emailError);
+      // Continue - don't fail the request for email issues
+    }
 
     console.log('Password reset completed successfully:', {
       userId: user._id,
@@ -1404,13 +1549,47 @@ router.post('/reset-password', corsHandler, [
     console.error('Reset password error:', {
       error: error.message,
       stack: error.stack,
-      email: req.body.email,
+      email: req.body?.email,
       processingTime: `${Date.now() - startTime}ms`
     });
 
+    // Handle specific error types
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Password validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+
+    if (error.message.includes('Database')) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database service temporarily unavailable. Please try again later.'
+      });
+    }
+
+    if (error.message.includes('Failed to update password')) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Failed to update password. Please try the reset process again.'
+      });
+    }
+
+    // Generic server error
+    const errorId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    
     res.status(500).json({
       status: 'error',
-      message: 'Unable to reset password. Please try again later.'
+      message: 'Unable to reset password. Please try again later.',
+      errorId,
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message,
+        stack: error.stack 
+      })
     });
   }
 });
