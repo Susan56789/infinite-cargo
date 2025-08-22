@@ -133,7 +133,7 @@ const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate,isAuthenticated
           </button>
           <Link
             to={`/driver/load/${load._id}`}
-            target="_blank"
+           
             className="inline-flex items-center px-3 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors"
           >
             <Eye size={14} className="mr-1" />
@@ -193,7 +193,7 @@ const AvailableLoadsSection = ({
             </p>
             <Link
               to="/search-loads"
-              target="_blank"
+             
               className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
               <Search size={16} className="mr-2" />

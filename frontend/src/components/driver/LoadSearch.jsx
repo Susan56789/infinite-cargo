@@ -436,7 +436,7 @@ const LoadSearch = () => {
   const [user, setUser] = useState(null);
   const [bidStates, setBidStates] = useState({}); 
   const [successMessage, setSuccessMessage] = useState('');
-  const [userBids, setUserBids] = useState(new Set()); // Track loads user has bid on
+  const [userBids, setUserBids] = useState(new Set()); 
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
