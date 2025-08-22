@@ -11,7 +11,7 @@ const SubscriptionStatusCard = ({ subscription, formatDate }) => {
         planName: 'Basic Plan',
         status: 'loading',
         price: 0,
-        usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3, usagePercentage: 0 },
+        usage: { loadsThisMonth: 0, maxLoads: 1, remainingLoads: 1, usagePercentage: 0 },
         isExpired: false,
         expiresAt: null
       };
@@ -26,7 +26,7 @@ const SubscriptionStatusCard = ({ subscription, formatDate }) => {
       expiresAt: subscription.expiresAt || null,
       usage: {
         loadsThisMonth: subscription.usage?.loadsThisMonth || 0,
-        maxLoads: subscription.usage?.maxLoads || subscription.maxLoads || 3,
+        maxLoads: subscription.usage?.maxLoads || subscription.maxLoads || 1,
         remainingLoads: subscription.usage?.remainingLoads ?? 
                        (subscription.usage?.maxLoads ? Math.max(0, subscription.usage.maxLoads - (subscription.usage.loadsThisMonth || 0)) : 3),
         usagePercentage: subscription.usage?.usagePercentage || 

@@ -1030,109 +1030,128 @@ router.post('/verify-reset-code', corsHandler, [
 });
 
 // Enhanced forgot-password endpoint to send verification codes instead of links
-router.post('/forgot-password-code', corsHandler, resetPasswordLimiter, [
-  body('email')
-    .trim()
-    .normalizeEmail()
-    .isEmail()
-    .withMessage('Please provide a valid email address')
-], async (req, res) => {
-  const startTime = Date.now();
-  
-  try {
-    console.log('Password reset code request received:', {
-      email: req.body.email,
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
-    });
+router.post(
+  '/forgot-password-code',
+  corsHandler,
+  resetPasswordLimiter,
+  [
+    body('email')
+      .trim()
+      .normalizeEmail()
+      .isEmail()
+      .withMessage('Please provide a valid email address')
+  ],
+  async (req, res) => {
+    const startTime = Date.now();
 
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array().map(error => ({
-          field: error.path || error.param,
-          message: error.msg
-        }))
+    try {
+      const { email } = req.body;
+      console.log('Password reset code request received:', {
+        email,
+        ip: req.ip,
+        userAgent: req.get('User-Agent')
       });
-    }
 
-    const { email } = req.body;
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
+      // Validation errors
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: errors.array().map(err => ({
+            field: err.path || err.param,
+            message: err.msg
+          }))
+        });
+      }
 
-    // Check both collections for user
-    const [driverUser, cargoOwnerUser] = await Promise.all([
-      db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
-      db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
-    ]);
+      // Ensure DB is connected
+      if (!mongoose.connection?.db) {
+        console.error('MongoDB not connected at forgot-password-code route');
+        return res.status(500).json({
+          status: 'error',
+          message: 'Database not available, please try again later.'
+        });
+      }
 
-    const user = driverUser || cargoOwnerUser;
-    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+      const db = mongoose.connection.db;
 
-    // Always return success message to prevent email enumeration
-    if (user) {
-      // Generate 6-digit verification code
-      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      // Search in both collections
+      const [driverUser, cargoOwnerUser] = await Promise.all([
+        db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
+        db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
+      ]);
 
-      // Store reset code in user document
-      const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
-      await collection.updateOne(
-        { _id: user._id },
-        {
-          $set: {
-            passwordResetCode: resetCode,
-            passwordResetCodeExpires: resetCodeExpiry,
-            passwordResetRequestedAt: new Date(),
-            resetCodeVerified: false,
-            updatedAt: new Date()
-          },
-          // Remove any existing reset tokens
-          $unset: {
-            passwordResetToken: "",
-            passwordResetExpires: "",
-            resetCodeVerifiedAt: ""
+      const user = driverUser || cargoOwnerUser;
+      const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+
+      if (user) {
+        // Generate code
+        const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+        // Update user record
+        const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
+        await collection.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              passwordResetCode: resetCode,
+              passwordResetCodeExpires: resetCodeExpiry,
+              passwordResetRequestedAt: new Date(),
+              resetCodeVerified: false,
+              updatedAt: new Date()
+            },
+            $unset: {
+              passwordResetToken: '',
+              passwordResetExpires: '',
+              resetCodeVerifiedAt: ''
+            }
           }
+        );
+
+        // Send email (wrapped in try/catch so it doesn't crash whole route)
+        try {
+          await sendPasswordResetCodeEmail(user.email, user.name, resetCode, userType);
+          console.log('Password reset code sent:', {
+            userId: user._id,
+            email: user.email,
+            userType,
+            codeExpiry: resetCodeExpiry,
+            processingTime: `${Date.now() - startTime}ms`
+          });
+        } catch (mailErr) {
+          console.error('Email sending failed:', mailErr);
+          // Don’t expose email issues to client, still return success
         }
-      );
+      } else {
+        console.log('Password reset requested for non-existent email:', email);
+      }
 
-      // Send reset code email
-      await sendPasswordResetCodeEmail(user.email, user.name, resetCode, userType);
-
-      console.log('Password reset code sent successfully:', {
-        userId: user._id,
-        email: user.email,
-        userType,
-        codeExpiry: resetCodeExpiry,
+      // Always return success
+      res.json({
+        status: 'success',
+        message:
+          'If an account with that email exists, a 6-digit verification code has been sent.',
+        expiresIn: '10 minutes'
+      });
+    } catch (error) {
+      console.error('Forgot password code error:', {
+        error: error.message,
+        stack: error.stack,
+        email: req.body.email,
         processingTime: `${Date.now() - startTime}ms`
       });
-    } else {
-      console.log('Password reset code requested for non-existent email:', email);
+
+      res.status(500).json({
+        status: 'error',
+        message: 'Unable to process password reset request. Please try again later.'
+      });
     }
-
-    // Always return success to prevent email enumeration
-    res.json({
-      status: 'success',
-      message: 'If an account with that email exists, we have sent a 6-digit verification code to your email address.',
-      expiresIn: '10 minutes'
-    });
-
-  } catch (error) {
-    console.error('Forgot password code error:', {
-      error: error.message,
-      stack: error.stack,
-      email: req.body.email,
-      processingTime: `${Date.now() - startTime}ms`
-    });
-
-    res.status(500).json({
-      status: 'error',
-      message: 'Unable to process password reset request. Please try again later.'
-    });
   }
-});
+);
+
+
 
 // Helper function to send password reset code email
 async function sendPasswordResetCodeEmail(email, name, code, userType) {
