@@ -16,11 +16,11 @@ router.use(corsHandler);
 
 // Gmail transporter configuration
 const createEmailTransporter = () => {
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     service: 'gmail',
     auth: {
-      user: process.env.GMAIL_EMAIL, // Your Gmail address
-      pass: process.env.GMAIL_APP_PASSWORD // Your Gmail App Password (not regular password)
+      user: process.env.GMAIL_EMAIL, 
+      pass: process.env.GMAIL_APP_PASSWORD 
     },
     tls: {
       rejectUnauthorized: false
@@ -901,7 +901,7 @@ router.get('/me',  auth, async (req, res) => {
   }
 });
 
-// Add these endpoints to your routes/users.js file after the existing forgot-password endpoint
+
 
 // @route   POST /api/users/verify-reset-code
 // @desc    Verify password reset code
@@ -1029,7 +1029,8 @@ router.post('/verify-reset-code', corsHandler, [
   }
 });
 
-// Enhanced forgot-password endpoint to send verification codes instead of links
+//@ruoute POST /api/users/fogot-password-code
+// @desc send verification codes instead of links
 router.post(
   '/forgot-password-code',
   corsHandler,
