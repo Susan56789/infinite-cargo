@@ -1094,7 +1094,7 @@ router.post(
           {
             $set: {
               passwordResetCode: resetCode,
-              passwordResetCodeExpires: resetCodeExpiry,
+              passwordResetCodeExpires: { $gt: new Date() },
               passwordResetRequestedAt: new Date(),
               resetCodeVerified: false,
               updatedAt: new Date()
