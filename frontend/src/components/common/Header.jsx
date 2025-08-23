@@ -286,7 +286,7 @@ useEffect(() => {
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-3 group" onClick={closeAllMenus}>
             <img 
-              src="/logo.png" 
+              src="/logo.webp" 
               alt="Infinite Cargo" 
               className="w-10 h-10 rounded-full object-cover border-2 border-primary-500 shadow-sm transition-transform duration-300 group-hover:scale-110"
             />

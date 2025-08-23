@@ -73,7 +73,7 @@ const Footer = () => {
             <div className="lg:col-span-2 animate-fade-up">
               <div className="flex items-center mb-4">
                 <img 
-                  src="/logo.png" 
+                  src="/logo.webp" 
                   alt="Infinite Cargo" 
                   className="w-12 h-12 rounded-full object-cover border-2 border-primary-500 shadow-md mr-3"
                   onError={(e) => {

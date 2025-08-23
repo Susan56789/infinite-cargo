@@ -4,8 +4,8 @@ const fs = require('fs');
 const path = require('path');
 
 const optimizeImages = async () => {
-  const inputDir = './public/images';
-  const outputDir = './public/images/optimized';
+  const inputDir = './public/';
+  const outputDir = './public/';
   
   // Create output directory if it doesn't exist
   if (!fs.existsSync(outputDir)) {
