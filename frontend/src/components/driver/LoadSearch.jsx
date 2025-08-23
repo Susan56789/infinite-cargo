@@ -570,7 +570,7 @@ const LoadSearch = () => {
               .map(bid => typeof bid.load === 'object' ? bid.load._id : bid.load)
           );
           
-          console.log('User has bid on loads:', Array.from(bidLoadIds));
+          
           setUserBids(bidLoadIds);
         } else {
           setUserBids(new Set());
@@ -627,7 +627,7 @@ const LoadSearch = () => {
       params.append('sortOrder', 'desc');
 
       const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
-      console.log('Fetching loads from:', url);
+      
 
       const headers = {
         'Content-Type': 'application/json',
@@ -641,8 +641,6 @@ const LoadSearch = () => {
         credentials: 'include'
       });
 
-      console.log('Response status:', response.status);
-      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
         let serverError = 'Failed to fetch loads.';
@@ -665,13 +663,7 @@ const LoadSearch = () => {
       }
 
       const data = await response.json();
-      console.log('Response data structure:', {
-        status: data.status,
-        hasData: !!data.data,
-        hasLoads: !!(data.data && data.data.loads),
-        loadCount: data.data?.loads?.length || 0,
-        hasPagination: !!(data.data && data.data.pagination)
-      });
+      
 
       if (data.status !== 'success') {
         throw new Error(data.message || 'Unexpected server response format.');
@@ -718,7 +710,7 @@ const LoadSearch = () => {
         }
       }));
 
-      console.log(`Successfully processed ${processedLoads.length} loads`);
+      
 
       // Update state
       setLoads(processedLoads);
@@ -735,7 +727,6 @@ const LoadSearch = () => {
         setTotalLoads(processedLoads.length);
       }
 
-      console.log('State updated successfully');
 
     } catch (err) {
       console.error('Error loading loads:', err);
@@ -814,7 +805,7 @@ const LoadSearch = () => {
         }
       };
 
-      console.log('Submitting bid payload:', payload);
+      
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
         method: 'POST',
@@ -822,8 +813,6 @@ const LoadSearch = () => {
         credentials: 'include',
         body: JSON.stringify(payload)
       });
-
-      console.log('Bid response status:', response.status);
 
       if (!response.ok) {
         let errorMsg = 'Failed to place bid';
@@ -860,7 +849,7 @@ const LoadSearch = () => {
       }
 
       const result = await response.json();
-      console.log('Bid submission successful:', result);
+     
 
       if (result.status === 'success') {
         setSuccessMessage('Bid placed successfully! The cargo owner will be notified.');

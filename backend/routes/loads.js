@@ -1369,17 +1369,7 @@ router.get('/', optionalAuth, [
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    // Log sample data for debugging
-    if (loads.length > 0) {
-      console.log('Sample load structure:', {
-        id: loads[0]._id,
-        title: loads[0].title,
-        cargoOwnerName: loads[0].cargoOwnerName,
-        status: loads[0].status,
-        hasPostedBy: !!loads[0].postedBy,
-        bidCount: loads[0].bidCount
-      });
-    }
+    
 
     // Return successful response
     return res.json({
@@ -1425,54 +1415,6 @@ router.get('/', optionalAuth, [
     });
   }
 });
-
-// HELPER: Add this endpoint for debugging database contents
-if (process.env.NODE_ENV === 'development') {
-  router.get('/debug', async (req, res) => {
-    try {
-      const db = mongoose.connection.db;
-      
-      // Get collections
-      const collections = await db.listCollections().toArray();
-      console.log('Available collections:', collections.map(c => c.name));
-      
-      // Get loads count and sample
-      const totalLoads = await db.collection('loads').countDocuments({});
-      const sampleLoads = await db.collection('loads').find({}).limit(5).toArray();
-      
-      // Get users count from different collections
-      const cargoOwnersCount = await db.collection('cargo-owners').countDocuments({});
-      const driversCount = await db.collection('drivers').countDocuments({});
-      const usersCount = await db.collection('users').countDocuments({});
-      
-      return res.json({
-        status: 'success',
-        debug: {
-          collections: collections.map(c => c.name),
-          totalLoads,
-          cargoOwnersCount,
-          driversCount,
-          usersCount,
-          sampleLoads: sampleLoads.map(load => ({
-            id: load._id,
-            title: load.title,
-            status: load.status,
-            isActive: load.isActive,
-            cargoOwnerName: load.cargoOwnerName,
-            postedBy: load.postedBy,
-            createdAt: load.createdAt
-          }))
-        }
-      });
-    } catch (error) {
-      return res.status(500).json({
-        status: 'error',
-        error: error.message
-      });
-    }
-  });
-}
-
 
 // @route   PUT /api/loads/:id
 // @desc    Update a load (cargo owners only)

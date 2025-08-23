@@ -123,7 +123,6 @@ const DriverDashboard = () => {
 
       if (response.ok) {
         const result = await response.json();
-        console.log('[DEBUG] Raw stats response:', result);
         
         // Handle both nested and flat response structures
         const statsData = result.data?.stats || result.stats || result.data || {};
@@ -153,8 +152,6 @@ const DriverDashboard = () => {
           yearly: earningsData.yearly || earningsData.year || 0
         };
 
-        console.log('[DEBUG] Mapped stats:', mappedStats);
-        console.log('[DEBUG] Mapped earnings:', mappedEarnings);
         
         setDashboardData(prev => ({
           ...prev,
@@ -217,8 +214,7 @@ const DriverDashboard = () => {
     setLoadingStates(prev => ({ ...prev, bookings: true }));
     
     try {
-      console.log('[DEBUG] Fetching active jobs...');
-      
+       
       // Use the dedicated active jobs endpoint
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/active-jobs', {
         headers: getAuthHeaders()
@@ -228,7 +224,7 @@ const DriverDashboard = () => {
 
       if (response.ok) {
         const result = await response.json();
-        console.log('[DEBUG] Active jobs response:', result);
+        
         
         const activeJobs = result.data?.activeJobs || result.activeJobs || result.data || [];
         
@@ -257,7 +253,6 @@ const DriverDashboard = () => {
           availableActions: job.availableActions || []
         }));
 
-        console.log('[DEBUG] Formatted active jobs:', formattedJobs);
 
         setDashboardData(prev => ({
           ...prev,
@@ -267,14 +262,12 @@ const DriverDashboard = () => {
         console.error('Failed to fetch active jobs:', response.status, response.statusText);
         
         // Fallback: try the regular bookings endpoint
-        console.log('[DEBUG] Falling back to regular bookings endpoint...');
         await fetchDriverBookingsFallback();
       }
     } catch (error) {
       console.error('Error fetching active jobs:', error);
       
       // Fallback: try the regular bookings endpoint
-      console.log('[DEBUG] Error occurred, falling back to regular bookings endpoint...');
       await fetchDriverBookingsFallback();
     } finally {
       setLoadingStates(prev => ({ ...prev, bookings: false }));
@@ -294,7 +287,6 @@ const DriverDashboard = () => {
         const bookingsData = await response.json();
         const bookings = bookingsData.data?.bookings || bookingsData.bookings || [];
         
-        console.log('[DEBUG] Fallback bookings response:', bookings);
         
         // Filter for active statuses - comprehensive list
         const activeStatuses = [
@@ -328,7 +320,6 @@ const DriverDashboard = () => {
             cargoOwnerId: booking.cargoOwnerId
           }));
 
-        console.log('[DEBUG] Fallback active jobs:', activeJobs);
 
         setDashboardData(prev => ({
           ...prev,
@@ -415,7 +406,6 @@ const DriverDashboard = () => {
   setLoadingStates(prev => ({ ...prev, bids: true }));
   
   try {
-    console.log('[DEBUG] Fetching driver bids...');
     
     const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
       headers: getAuthHeaders()
@@ -425,7 +415,6 @@ const DriverDashboard = () => {
 
     if (response.ok) {
       const bidsData = await response.json();
-      console.log('[DEBUG] Raw bids response:', bidsData);
       
       // FIXED: Extract bids exactly like BidsPage does
       let bids = [];
@@ -439,9 +428,7 @@ const DriverDashboard = () => {
         bids = bidsData;
       }
 
-      console.log('[DEBUG] Extracted bids array:', bids);
-      console.log('[DEBUG] Number of bids:', bids.length);
-      
+    
       // Format bids to ensure consistent structure (matching BidsPage format)
       const formattedBids = bids.map(bid => ({
         _id: bid._id,
@@ -474,8 +461,7 @@ const DriverDashboard = () => {
         estimatedAmount: bid.estimatedAmount || bid.load?.budget || bid.loadInfo?.budget
       }));
       
-      console.log('[DEBUG] Formatted bids:', formattedBids);
-      console.log('[DEBUG] Sample formatted bid:', formattedBids[0]);
+      
       
       setDashboardData(prev => ({
         ...prev,
@@ -536,7 +522,6 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
   setError('');
   
   try {
-    console.log('[DEBUG] Starting dashboard data fetch...');
     
     // OPTION 1: Try the comprehensive dashboard endpoint first
     try {
@@ -546,7 +531,7 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
 
       if (dashboardResponse.ok && !(await handleApiError(dashboardResponse, 'fetchDashboardData'))) {
         const dashboardResult = await dashboardResponse.json();
-        console.log('[DEBUG] Dashboard endpoint response:', dashboardResult);
+       
         
         const data = dashboardResult.data;
         
@@ -568,7 +553,7 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
           myBidsFromDashboard = data.bids;
         }
 
-        console.log('[DEBUG] Bids from dashboard endpoint:', myBidsFromDashboard.length);
+      
 
         // Update dashboard data with the comprehensive response
         setDashboardData(prev => ({
@@ -597,14 +582,14 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
 
         setNotifications(data.notifications || []);
         
-        // CRITICAL: If dashboard didn't return bids or returned empty bids, fetch them separately
+        
         if (myBidsFromDashboard.length === 0) {
-          console.log('[DEBUG] Dashboard returned no bids, fetching separately...');
+          
           await fetchDriverBids();
         }
         
-        console.log('[DEBUG] Dashboard data updated successfully');
-        return; // Successfully used dashboard endpoint
+       
+        return; 
 
       } else {
         console.log('[DEBUG] Dashboard endpoint failed or auth error, falling back...');
@@ -613,8 +598,6 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
       console.log('[DEBUG] Dashboard endpoint error:', dashboardError);
     }
 
-    // OPTION 2: Fallback to individual API calls (like BidsPage does)
-    console.log('[DEBUG] Using individual API calls...');
     
     await Promise.all([
       fetchUserProfile(),
@@ -929,17 +912,7 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
     fetchDashboardData(false);
   };
 
-  // Debug logging for state changes
-  useEffect(() => {
-    console.log('[DEBUG] Dashboard data updated:', {
-      activeBookings: dashboardData.activeBookings.length,
-      availableLoads: dashboardData.availableLoads.length,
-      myBids: dashboardData.myBids.length,
-      stats: dashboardData.stats,
-      earnings: dashboardData.earnings
-    });
-  }, [dashboardData]);
-
+  
   // Loading screen
   if (loading) {
     return (

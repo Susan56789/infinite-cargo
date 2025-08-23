@@ -454,16 +454,6 @@ router.get('/:id', auth, async (req, res) => {
         message: 'Bid not found'
       });
     }
-
-    // Debug logging
-    console.log('Access check debug:');
-    console.log('req.user:', req.user);
-    console.log('req.user.id:', req.user.id);
-    console.log('req.user._id:', req.user._id);
-    console.log('bid.driver._id:', bid.driver._id);
-    console.log('bid.cargoOwner._id:', bid.cargoOwner?._id);
-    console.log('bid.load.postedBy:', bid.load?.postedBy);
-
     // More robust access control check
     const userId = req.user.id || req.user._id;
     const userIdString = userId.toString();
@@ -600,6 +590,142 @@ router.put('/:id',  auth, bidValidation, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Server error updating bid',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/bids/:id/message
+// @desc    Send message from driver to cargo owner about a bid
+// @access  Private (Driver only)
+router.post('/:id/message', auth, [
+  body('message')
+    .notEmpty()
+    .isLength({ min: 1, max: 1000 })
+    .withMessage('Message is required and cannot exceed 1000 characters')
+    .trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const { message } = req.body;
+
+    // Validate bid ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid bid ID'
+      });
+    }
+
+    // Only drivers can send messages through bids
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can send messages about bids'
+      });
+    }
+
+    // Find the bid with populated data
+    const bid = await Bid.findById(id)
+      .populate('driver', 'name phone email')
+      .populate('load', 'title postedBy pickupLocation deliveryLocation')
+      .populate('cargoOwner', 'name email');
+
+    if (!bid) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bid not found'
+      });
+    }
+
+    // Verify the driver owns this bid
+    if (bid.driver._id.toString() !== req.user.id) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'You can only send messages about your own bids'
+      });
+    }
+
+    // Create the message object
+    const messageData = {
+      _id: new mongoose.Types.ObjectId(),
+      sender: 'driver',
+      senderId: new mongoose.Types.ObjectId(req.user.id),
+      senderName: bid.driver.name,
+      content: message,
+      createdAt: new Date(),
+      isRead: false
+    };
+
+    // Add message to bid
+    await Bid.findByIdAndUpdate(id, {
+      $push: { messages: messageData },
+      $set: { updatedAt: new Date() }
+    });
+
+    // Get cargo owner ID (from bid.cargoOwner or bid.load.postedBy)
+    const cargoOwnerId = bid.cargoOwner?._id || bid.load?.postedBy;
+    
+    if (!cargoOwnerId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Unable to identify cargo owner for this bid'
+      });
+    }
+
+    // Import notification utils
+    const { notificationUtils } = require('./notifications');
+
+    // Create notification for cargo owner
+    const notificationData = {
+      userId: cargoOwnerId,
+      userType: 'cargo_owner',
+      type: 'bid_message',
+      title: 'New Message About Your Load',
+      message: `${bid.driver.name} sent a message about their bid for "${bid.load.title}": "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`,
+      priority: 'medium',
+      icon: 'message-circle',
+      data: {
+        bidId: bid._id,
+        loadId: bid.load._id,
+        driverId: bid.driver._id,
+        driverName: bid.driver.name,
+        messagePreview: message.substring(0, 200),
+        loadTitle: bid.load.title
+      },
+      actionUrl: `/cargo-owner/loads/${bid.load._id}/bids/${bid._id}`
+    };
+
+    await notificationUtils.createNotification(notificationData);
+
+    // Optionally, also send email notification
+    // await sendEmailNotification(cargoOwner.email, notificationData);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Message sent successfully',
+      data: {
+        messageId: messageData._id,
+        bidId: bid._id,
+        createdAt: messageData.createdAt,
+        notificationSent: true
+      }
+    });
+
+  } catch (error) {
+    console.error('Send bid message error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error sending message',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -944,14 +1070,6 @@ router.post('/:id/accept', auth, async (req, res) => {
 
       // Insert the active job
       const insertResult = await bookingsCollection.insertOne(activeJob, { session });
-      
-      console.log('Active job created successfully:', {
-        insertedId: insertResult.insertedId,
-        loadId: load._id,
-        driverId: bid.driver._id,
-        status: 'assigned'
-      });
-
       // Reject all other pending bids for this load
       await Bid.updateMany(
         { 
@@ -1169,14 +1287,7 @@ router.post('/:id/reject', auth, [
     const userIdString = req.user.id || req.user._id?.toString();
     let isAuthorized = false;
 
-    // Debug logging
-    console.log('=== BID REJECTION AUTHORIZATION DEBUG ===');
-    console.log('User ID from req.user:', userIdString);
-    console.log('User Type:', req.user.userType);
-    console.log('Bid ID:', bid._id);
-    console.log('Bid cargoOwner ID:', bid.cargoOwner?._id?.toString());
-    console.log('Load postedBy ID:', bid.load.postedBy?.toString());
-
+    
     // Method 1: Check against bid's cargoOwner field (if populated)
     if (bid.cargoOwner && bid.cargoOwner._id) {
       isAuthorized = bid.cargoOwner._id.toString() === userIdString;

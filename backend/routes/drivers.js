@@ -343,8 +343,6 @@ router.get('/dashboard', auth, async (req, res) => {
     
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
-    console.log(`[DEBUG] Fetching dashboard data for driver: ${req.user.id}`);
-
     // Get driver profile first
     const driver = await driversCollection.findOne(
       { _id: driverId },
@@ -389,8 +387,6 @@ router.get('/dashboard', auth, async (req, res) => {
       'arrived_delivery', 'at_delivery_location', 'at_delivery',
       'unloading', 'delivery_in_progress'
     ];
-
-    console.log(`[DEBUG] Active job statuses: ${activeJobStatuses.join(', ')}`);
 
     // Parallel queries for dashboard data
     const [
@@ -674,12 +670,6 @@ router.get('/dashboard', auth, async (req, res) => {
       .toArray()
     ]);
 
-    console.log(`[DEBUG] Raw query results:`);
-    console.log(`- Active bookings: ${activeBookings.length}`);
-    console.log(`- Completed bookings: ${completedBookings.length}`);
-    console.log(`- Available loads: ${availableLoads.length}`);
-    console.log(`- My bids: ${myBids.length}`);
-
     // Process statistics with better error handling
     const bookingData = bookingStats[0] || {
       totalJobs: 0, completedJobs: 0, activeJobs: 0, cancelledJobs: 0, pendingJobs: 0
@@ -949,15 +939,6 @@ router.get('/dashboard', auth, async (req, res) => {
       dataVersion: '2.0'
     };
 
-    console.log(`[DEBUG] Final dashboard response summary:`, {
-      activeBookings: responseData.activeBookings.length,
-      availableLoads: responseData.availableLoads.length,
-      myBids: responseData.myBids.length,
-      totalJobs: responseData.stats.totalJobs,
-      completedJobs: responseData.stats.completedJobs,
-      monthlyEarnings: responseData.earnings.thisMonth
-    });
-
     res.json({
       status: 'success',
       data: responseData
@@ -1046,7 +1027,7 @@ router.get('/active-jobs', auth, async (req, res) => {
     const loadsCollection = db.collection('loads');
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
-    console.log(`[DEBUG] Fetching active jobs for driver: ${req.user.id}`);
+   
 
     // COMPREHENSIVE status matching - This is the key fix
     const activeStatuses = [
@@ -1066,8 +1047,6 @@ router.get('/active-jobs', auth, async (req, res) => {
       'unloading', 'delivery_in_progress'
     ];
 
-    console.log(`[DEBUG] Active statuses: ${activeStatuses.join(', ')}`);
-
     // Primary query: Get active jobs from bookings collection
     const activeJobs = await bookingsCollection.find({
       driverId,
@@ -1080,12 +1059,10 @@ router.get('/active-jobs', auth, async (req, res) => {
     })
     .toArray();
 
-    console.log(`[DEBUG] Found ${activeJobs.length} active jobs in bookings collection`);
+   
 
     // Secondary query: Check for recently accepted bids that might not have been converted to bookings yet
     if (activeJobs.length === 0) {
-      console.log('[DEBUG] No active jobs found, checking for recent accepted bids...');
-      
       const recentlyAcceptedBids = await bidsCollection.aggregate([
         {
           $match: {
@@ -1127,8 +1104,6 @@ router.get('/active-jobs', auth, async (req, res) => {
         }
       ]).toArray();
 
-      console.log(`[DEBUG] Found ${recentlyAcceptedBids.length} recently accepted bids`);
-
       // Convert bids to job-like objects
       for (const bid of recentlyAcceptedBids) {
         if (bid.loadInfo) {
@@ -1161,7 +1136,7 @@ router.get('/active-jobs', auth, async (req, res) => {
           };
           
           activeJobs.push(jobFromBid);
-          console.log(`[DEBUG] Added job from accepted bid: ${bid._id}`);
+          
         }
       }
     }
@@ -1350,14 +1325,6 @@ router.get('/active-jobs', auth, async (req, res) => {
         ? Math.round((formattedJobs.reduce((sum, job) => sum + (job.agreedAmount || 0), 0) / formattedJobs.length) * 100) / 100 
         : 0
     };
-
-    console.log(`[DEBUG] Final active jobs response:`, {
-      totalJobs: formattedJobs.length,
-      urgentJobs: summary.urgent,
-      overdueJobs: summary.overdue,
-      todayJobs: summary.today,
-      statusBreakdown: summary.byStatus
-    });
 
     res.json({
       status: 'success',
@@ -2594,8 +2561,6 @@ router.get('/stats', auth, async (req, res) => {
     const bidsCollection = db.collection('bids');
     const driverId = new mongoose.Types.ObjectId(req.user.id);
 
-    console.log(`[DEBUG] Fetching stats for driver: ${req.user.id}`);
-
     // Get current date for monthly calculations
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -2867,15 +2832,6 @@ router.get('/stats', auth, async (req, res) => {
       avgPerJob: statsResponse.avgEarningsPerJob,
       jobsWithEarnings: totalJobsWithEarnings
     };
-
-    console.log(`[DEBUG] Stats calculated:`, {
-      totalJobs: totalBookings,
-      activeJobs: activeBookings,
-      completedJobs: completedBookings,
-      rating: averageRating,
-      monthlyEarnings: currentMonthEarnings,
-      totalEarnings: allTimeEarnings
-    });
 
     res.json({
       status: 'success',

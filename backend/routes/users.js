@@ -944,12 +944,12 @@ router.post('/verify-reset-code', corsHandler, [
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
 
-    // FIX: Use correct field name and add debugging
+    //  Use correct field name and add debugging
     const [driverUser, cargoOwnerUser] = await Promise.all([
       db.collection('drivers').findOne({
         email: email.toLowerCase().trim(),
         passwordResetCode: code.toString(),
-        passwordResetCodeExpires: { $gt: new Date() } // FIX: Use correct field name
+        passwordResetCodeExpires: { $gt: new Date() } //Use correct field name
       }),
       db.collection('cargo-owners').findOne({
         email: email.toLowerCase().trim(),

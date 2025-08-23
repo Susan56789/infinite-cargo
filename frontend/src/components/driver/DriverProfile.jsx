@@ -99,9 +99,6 @@ const DriverProfile = () => {
       const authHeaders = getAuthHeader();
       const currentUser = getUser();
       
-      // Debug: Check if we have proper auth headers and user data
-      console.log('Auth headers:', authHeaders);
-      console.log('Current user from getUser():', currentUser);
       
       if (!authHeaders.Authorization) {
         setError('No authentication token found. Please login again.');
@@ -116,7 +113,7 @@ const DriverProfile = () => {
         return;
       }
 
-      console.log('Making request to fetch driver profile...');
+     
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'GET',
         headers: {
@@ -125,11 +122,10 @@ const DriverProfile = () => {
         }
       });
 
-      console.log('Response status:', response.status);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('Profile data:', data);
+        
         const profile = data.data.driver;
         setUser(profile);
         populateFormData(profile);
@@ -181,8 +177,6 @@ const DriverProfile = () => {
       const authHeaders = getAuthHeader();
       const currentUser = getUser();
       
-      console.log('Auth headers for update:', authHeaders);
-      console.log('Current user for update:', currentUser);
       
       if (!authHeaders.Authorization) {
         setError('No authentication token found. Please login again.');
@@ -204,7 +198,6 @@ const DriverProfile = () => {
         vehicleYear: formData.vehicleYear ? parseInt(formData.vehicleYear) : null
       };
 
-      console.log('Sending update data:', updateData);
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'PUT',
@@ -215,8 +208,7 @@ const DriverProfile = () => {
         body: JSON.stringify(updateData)
       });
 
-      console.log('Update response status:', response.status);
-
+      
       if (response.ok) {
         const data = await response.json();
         const updatedProfile = data.data.driver;
