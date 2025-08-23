@@ -283,9 +283,8 @@ const ResetPassword = () => {
   if (isValidToken === false) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
-        <Breadcrumb items={[{text: 'Reset Password'}]} />
-        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
-          
+         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
+          <Breadcrumb items={[{text: 'Reset Password'}]} />
           {/* Header */}
           <div className="bg-gradient-to-r from-red-500 to-red-600 p-8 text-white text-center">
             <div className="mb-4">

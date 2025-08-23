@@ -267,8 +267,9 @@ const Register = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
-     <Breadcrumb items={[{text: 'Register'}]} />
+    
       <div className="w-full max-w-7xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+        <Breadcrumb items={[{text: 'Register'}]} />
         <div className="flex flex-col xl:flex-row min-h-[900px]">
           
           {/* Left Side - Enhanced Branding & Benefits */}
