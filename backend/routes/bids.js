@@ -432,10 +432,10 @@ router.get('/',  auth, [
 // @route   GET /api/bids/:id
 // @desc    Get single bid by ID
 // @access  Private (Bid owner, load owner, or admin)
-router.get('/:id',  auth, async (req, res) => {
+router.get('/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-
+    
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         status: 'error',
@@ -455,22 +455,45 @@ router.get('/:id',  auth, async (req, res) => {
       });
     }
 
-    // Check if user has access to this bid
+    // Debug logging
+    console.log('Access check debug:');
+    console.log('req.user:', req.user);
+    console.log('req.user.id:', req.user.id);
+    console.log('req.user._id:', req.user._id);
+    console.log('bid.driver._id:', bid.driver._id);
+    console.log('bid.cargoOwner._id:', bid.cargoOwner?._id);
+    console.log('bid.load.postedBy:', bid.load?.postedBy);
+
+    // More robust access control check
+    const userId = req.user.id || req.user._id;
+    const userIdString = userId.toString();
+    
     const hasAccess = (
-      bid.driver._id.toString() === req.user.id ||  // Driver who made the bid
-      bid.cargoOwner._id.toString() === req.user.id ||  // Cargo owner
-      bid.load.postedBy.toString() === req.user.id  // Load owner (should be same as cargo owner)
+      bid.driver._id.toString() === userIdString ||  // Driver who made the bid
+      (bid.cargoOwner && bid.cargoOwner._id.toString() === userIdString) ||  // Cargo owner
+      (bid.load && bid.load.postedBy && bid.load.postedBy.toString() === userIdString) ||  // Load owner
+      req.user.userType === 'admin'  // Admin access
     );
+
+    console.log('hasAccess:', hasAccess);
 
     if (!hasAccess) {
       return res.status(403).json({
         status: 'error',
-        message: 'Not authorized to view this bid'
+        message: 'Not authorized to view this bid',
+        debug: {
+          userId: userIdString,
+          driverId: bid.driver._id.toString(),
+          cargoOwnerId: bid.cargoOwner?._id?.toString(),
+          loadPostedBy: bid.load?.postedBy?.toString()
+        }
       });
     }
 
     // Mark as viewed if cargo owner is viewing
-    if (req.user.userType === 'cargo_owner' && bid.cargoOwner._id.toString() === req.user.id) {
+    if (req.user.userType === 'cargo_owner' && 
+        bid.cargoOwner && 
+        bid.cargoOwner._id.toString() === userIdString) {
       await bid.markAsViewed();
     }
 

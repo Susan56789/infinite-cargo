@@ -411,54 +411,99 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError, user?.location, user?.coordinates, user?.vehicleType]);
 
-  // FIXED: Fetch driver bids with load information
   const fetchDriverBids = useCallback(async () => {
-    setLoadingStates(prev => ({ ...prev, bids: true }));
+  setLoadingStates(prev => ({ ...prev, bids: true }));
+  
+  try {
+    console.log('[DEBUG] Fetching driver bids...');
     
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
-        headers: getAuthHeaders()
-      });
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
+      headers: getAuthHeaders()
+    });
 
-      if (await handleApiError(response, 'fetchDriverBids')) return;
+    if (await handleApiError(response, 'fetchDriverBids')) return;
 
-      if (response.ok) {
-        const bidsData = await response.json();
-        const bids = bidsData.data?.bids || bidsData.bids || [];
-        
-        // Format bids with consistent structure
-        const formattedBids = bids.slice(0, 10).map(bid => ({
-          _id: bid._id,
-          loadId: bid.loadId,
-          bidAmount: bid.bidAmount,
-          status: bid.status,
-          message: bid.message,
-          createdAt: bid.createdAt,
-          updatedAt: bid.updatedAt,
-          acceptedAt: bid.acceptedAt,
-          // Load information (may be populated or separate)
-          loadTitle: bid.loadInfo?.title || bid.loadTitle || 'Load',
-          pickupLocation: bid.loadInfo?.pickupLocation || bid.pickupLocation,
-          deliveryLocation: bid.loadInfo?.deliveryLocation || bid.deliveryLocation,
-          estimatedAmount: bid.loadInfo?.estimatedAmount || bid.estimatedAmount,
-          // Status helpers
-          canWithdraw: bid.status === 'submitted',
-          canUpdate: bid.status === 'submitted'
-        }));
-        
-        setDashboardData(prev => ({
-          ...prev,
-          myBids: formattedBids
-        }));
-      } else {
-        console.error('Failed to fetch driver bids:', response.status);
+    if (response.ok) {
+      const bidsData = await response.json();
+      console.log('[DEBUG] Raw bids response:', bidsData);
+      
+      // FIXED: Extract bids exactly like BidsPage does
+      let bids = [];
+      if (bidsData.data?.bids) {
+        bids = bidsData.data.bids;
+      } else if (bidsData.bids) {
+        bids = bidsData.bids;
+      } else if (Array.isArray(bidsData.data)) {
+        bids = bidsData.data;
+      } else if (Array.isArray(bidsData)) {
+        bids = bidsData;
       }
-    } catch (error) {
-      console.error('Error fetching driver bids:', error);
-    } finally {
-      setLoadingStates(prev => ({ ...prev, bids: false }));
+
+      console.log('[DEBUG] Extracted bids array:', bids);
+      console.log('[DEBUG] Number of bids:', bids.length);
+      
+      // Format bids to ensure consistent structure (matching BidsPage format)
+      const formattedBids = bids.map(bid => ({
+        _id: bid._id,
+        loadId: bid.loadId,
+        bidAmount: bid.bidAmount || 0,
+        currency: bid.currency || 'KES',
+        status: bid.status,
+        message: bid.message,
+        coverLetter: bid.coverLetter,
+        proposedPickupDate: bid.proposedPickupDate,
+        proposedDeliveryDate: bid.proposedDeliveryDate,
+        vehicleDetails: bid.vehicleDetails,
+        counterOffer: bid.counterOffer,
+        createdAt: bid.createdAt,
+        updatedAt: bid.updatedAt,
+        submittedAt: bid.submittedAt || bid.createdAt,
+        viewedAt: bid.viewedAt,
+        acceptedAt: bid.acceptedAt,
+        expiresAt: bid.expiresAt,
+        
+        // Load information - handle multiple possible structures
+        load: bid.load,
+        loadInfo: bid.loadInfo || bid.load,
+        loadDetails: bid.loadDetails,
+        
+        // Fallback load properties if not nested
+        loadTitle: bid.loadTitle || bid.load?.title,
+        pickupLocation: bid.pickupLocation || bid.load?.pickupLocation || bid.loadInfo?.pickupLocation,
+        deliveryLocation: bid.deliveryLocation || bid.load?.deliveryLocation || bid.loadInfo?.deliveryLocation,
+        estimatedAmount: bid.estimatedAmount || bid.load?.budget || bid.loadInfo?.budget
+      }));
+      
+      console.log('[DEBUG] Formatted bids:', formattedBids);
+      console.log('[DEBUG] Sample formatted bid:', formattedBids[0]);
+      
+      setDashboardData(prev => ({
+        ...prev,
+        myBids: formattedBids // This should now match what BidsPage gets
+      }));
+      
+    } else {
+      const errorText = await response.text();
+      console.error('Failed to fetch driver bids:', response.status, errorText);
+      
+      // Set empty array instead of leaving undefined
+      setDashboardData(prev => ({
+        ...prev,
+        myBids: []
+      }));
     }
-  }, [getAuthHeaders, handleApiError]);
+  } catch (error) {
+    console.error('Error fetching driver bids:', error);
+    
+    // Set empty array on error
+    setDashboardData(prev => ({
+      ...prev,
+      myBids: []
+    }));
+  } finally {
+    setLoadingStates(prev => ({ ...prev, bids: false }));
+  }
+}, [getAuthHeaders, handleApiError]);
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
@@ -481,27 +526,25 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // UPDATED: Comprehensive dashboard data fetch using the new dashboard endpoint
-  const fetchDashboardData = useCallback(async (showLoader = true) => {
-    if (showLoader) {
-      setLoading(true);
-    } else {
-      setRefreshing(true);
-    }
+const fetchDashboardData = useCallback(async (showLoader = true) => {
+  if (showLoader) {
+    setLoading(true);
+  } else {
+    setRefreshing(true);
+  }
+  
+  setError('');
+  
+  try {
+    console.log('[DEBUG] Starting dashboard data fetch...');
     
-    setError('');
-    
+    // OPTION 1: Try the comprehensive dashboard endpoint first
     try {
-      console.log('[DEBUG] Starting dashboard data fetch...');
-      
-      // Try the comprehensive dashboard endpoint first
       const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
         headers: getAuthHeaders()
       });
 
-      if (await handleApiError(dashboardResponse, 'fetchDashboardData')) return;
-
-      if (dashboardResponse.ok) {
+      if (dashboardResponse.ok && !(await handleApiError(dashboardResponse, 'fetchDashboardData'))) {
         const dashboardResult = await dashboardResponse.json();
         console.log('[DEBUG] Dashboard endpoint response:', dashboardResult);
         
@@ -517,21 +560,23 @@ const DriverDashboard = () => {
           );
         }
 
+        // FIXED: Better bids extraction from dashboard endpoint
+        let myBidsFromDashboard = [];
+        if (data.myBids && Array.isArray(data.myBids)) {
+          myBidsFromDashboard = data.myBids;
+        } else if (data.bids && Array.isArray(data.bids)) {
+          myBidsFromDashboard = data.bids;
+        }
+
+        console.log('[DEBUG] Bids from dashboard endpoint:', myBidsFromDashboard.length);
+
         // Update dashboard data with the comprehensive response
         setDashboardData(prev => ({
           ...prev,
-          // Active bookings - already formatted by backend
           activeBookings: data.activeBookings || [],
-          
-          // Available loads - already formatted by backend
           availableLoads: data.availableLoads || [],
-          
           completedBookings: data.completedBookings || [],
-          
-          // Bids - already formatted by backend
-          myBids: data.myBids || [],
-          
-          // Stats with fallback mapping
+          myBids: myBidsFromDashboard, // Use dashboard bids if available
           stats: {
             totalJobs: data.stats?.totalJobs || 0,
             activeJobs: data.stats?.activeJobs || 0,
@@ -543,8 +588,6 @@ const DriverDashboard = () => {
             acceptedBids: data.stats?.acceptedBids || 0,
             monthlyEarnings: data.stats?.monthlyEarnings || data.earnings?.thisMonth || 0
           },
-          
-          // Earnings
           earnings: {
             thisMonth: data.earnings?.thisMonth || 0,
             lastMonth: data.earnings?.lastMonth || 0,
@@ -554,55 +597,51 @@ const DriverDashboard = () => {
 
         setNotifications(data.notifications || []);
         
+        // CRITICAL: If dashboard didn't return bids or returned empty bids, fetch them separately
+        if (myBidsFromDashboard.length === 0) {
+          console.log('[DEBUG] Dashboard returned no bids, fetching separately...');
+          await fetchDriverBids();
+        }
+        
         console.log('[DEBUG] Dashboard data updated successfully');
+        return; // Successfully used dashboard endpoint
 
       } else {
-        console.log('[DEBUG] Dashboard endpoint failed, falling back to individual calls...');
-        
-        // Fallback to individual API calls
-        await Promise.all([
-          fetchUserProfile(),
-          fetchDriverStats(),
-          fetchActiveJobs(), // Use the improved active jobs fetch
-          fetchAvailableLoads(),
-          fetchDriverBids(),
-          fetchNotifications()
-        ]);
+        console.log('[DEBUG] Dashboard endpoint failed or auth error, falling back...');
       }
-
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      setError('Failed to load dashboard data');
-      
-      // Try individual calls as final fallback
-      try {
-        console.log('[DEBUG] Trying individual API calls as final fallback...');
-        await Promise.all([
-          fetchUserProfile(),
-          fetchDriverStats(),
-          fetchActiveJobs(),
-          fetchAvailableLoads(),
-          fetchDriverBids(),
-          fetchNotifications()
-        ]);
-      } catch (fallbackError) {
-        console.error('Fallback fetch also failed:', fallbackError);
-        setError('Failed to load dashboard data. Please try refreshing the page.');
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    } catch (dashboardError) {
+      console.log('[DEBUG] Dashboard endpoint error:', dashboardError);
     }
-  }, [
-    getAuthHeaders, 
-    handleApiError,
-    fetchUserProfile,
-    fetchDriverStats,
-    fetchActiveJobs,
-    fetchAvailableLoads,
-    fetchDriverBids,
-    fetchNotifications
-  ]);
+
+    // OPTION 2: Fallback to individual API calls (like BidsPage does)
+    console.log('[DEBUG] Using individual API calls...');
+    
+    await Promise.all([
+      fetchUserProfile(),
+      fetchDriverStats(),
+      fetchActiveJobs(),
+      fetchAvailableLoads(),
+      fetchDriverBids(), // Use the fixed bids fetch
+      fetchNotifications()
+    ]);
+
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    setError('Failed to load dashboard data');
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+}, [
+  getAuthHeaders, 
+  handleApiError,
+  fetchUserProfile,
+  fetchDriverStats,
+  fetchActiveJobs,
+  fetchAvailableLoads,
+  fetchDriverBids, // Updated dependency
+  fetchNotifications
+]);
 
   // Initial load and auth setup
   useEffect(() => {
@@ -614,7 +653,7 @@ const DriverDashboard = () => {
     }
     
     fetchDashboardData();
-  }, [checkAuth, fetchDashboardData]);
+  }, []);
 
   // Listen for auth state changes
   useEffect(() => {
@@ -648,16 +687,7 @@ const DriverDashboard = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-refresh dashboard data every 5 minutes
-  useEffect(() => {
-    const autoRefreshInterval = setInterval(() => {
-      if (isAuthenticated()) {
-        fetchDashboardData(false); // Refresh without showing loader
-      }
-    }, 5 * 60 * 1000); // 5 minutes
-
-    return () => clearInterval(autoRefreshInterval);
-  }, [fetchDashboardData]);
+  
 
   // Toggle driver availability
   const toggleAvailability = async () => {

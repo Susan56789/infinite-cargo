@@ -1,284 +1,50 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { 
   User, 
   Truck, 
-  Phone, 
-  Mail, 
-  Calendar,
-  Star,
-  Edit3, 
-  Save, 
-  X,
-  Shield,
-  CheckCircle,
+  MapPin, 
+  Phone,
+  Save,
   AlertCircle,
-  FileText,
+  CheckCircle,
+  Loader,
+  ArrowLeft,
+  Shield,
+  Star
 } from 'lucide-react';
-import { isAuthenticated, getUser, getAuthHeader } from '../../utils/auth';
+import { getAuthHeader, authManager, getUser } from '../../utils/auth';
 
 const DriverProfile = () => {
-  const navigate = useNavigate();
-  const [profile, setProfile] = useState(null);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [editedProfile, setEditedProfile] = useState({});
-  const [activeTab, setActiveTab] = useState('personal');
-
-  useEffect(() => {
-    if (!isAuthenticated()) {
-      navigate('/login');
-      return;
-    }
-
-    const user = getUser();
-    if (user?.userType !== 'driver') {
-      navigate('/driver-dashboard');
-      return;
-    }
-
-    fetchProfile();
-  }, [navigate]);
-
-  const fetchProfile = async () => {
-    try {
-      setLoading(true);
-      setError('');
-
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
-        headers: {
-          'Authorization': getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          navigate('/login');
-          return;
-        }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      const profileData = data.data?.driver || data.driver || data;
-
-      if (!profileData?._id) {
-        throw new Error('Invalid profile data received');
-      }
-
-      // Ensure profile structure
-      const formattedProfile = {
-        ...profileData,
-        driverProfile: profileData.driverProfile || {},
-        statistics: profileData.statistics || {
-          totalJobs: 0,
-          completedJobs: 0,
-          averageRating: 0,
-          totalRatingsReceived: 0,
-          successRate: 0
-        },
-        profileCompletion: profileData.profileCompletion || calculateProfileCompletion(profileData)
-      };
-
-      setProfile(formattedProfile);
-      setEditedProfile(formattedProfile);
-
-    } catch (err) {
-      console.error('Fetch profile error:', err);
-      setError(err.message || 'Failed to fetch profile data');
-      
-      if (err.message.includes('401') || err.message.includes('Unauthorized')) {
-        navigate('/login');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const calculateProfileCompletion = (profile) => {
-    if (!profile) return 0;
-    
-    const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber', 'licenseExpiry'];
-    const optionalFields = ['dateOfBirth', 'address', 'city', 'state', 'vehicleMake', 'vehicleModel', 'vehicleYear', 'vehiclePlate', 'nationalId', 'experienceYears'];
-    
-    let completed = 0;
-    let total = requiredFields.length + optionalFields.length;
-    
-    requiredFields.forEach(field => {
-      if (profile[field]) completed += 1.5;
-    });
-    
-    optionalFields.forEach(field => {
-      if (profile[field]) completed += 1;
-    });
-    
-    total = requiredFields.length * 1.5 + optionalFields.length;
-    return Math.round((completed / total) * 100);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError('');
-    
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
-        method: 'PUT',
-        headers: {
-          'Authorization': getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(editedProfile)
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          navigate('/login');
-          return;
-        }
-        throw new Error(`Failed to update profile (${response.status})`);
-      }
-
-      const data = await response.json();
-      const updatedProfile = data.data?.driver || data.driver || data;
-      
-      const formattedProfile = {
-        ...updatedProfile,
-        driverProfile: updatedProfile.driverProfile || {},
-        statistics: updatedProfile.statistics || profile.statistics,
-        profileCompletion: updatedProfile.profileCompletion || calculateProfileCompletion(updatedProfile)
-      };
-      
-      setProfile(formattedProfile);
-      setEditedProfile(formattedProfile);
-      setEditing(false);
-      alert('Profile updated successfully!');
-      
-    } catch (err) {
-      console.error('Update profile error:', err);
-      const errorMessage = err.message || 'Network error occurred while updating profile';
-      setError(errorMessage);
-      alert(errorMessage);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleInputChange = (field, value) => {
-    if (field.includes('.')) {
-      const [parent, child] = field.split('.');
-      setEditedProfile(prev => ({
-        ...prev,
-        [parent]: {
-          ...prev[parent],
-          [child]: value
-        }
-      }));
-    } else {
-      setEditedProfile(prev => ({
-        ...prev,
-        [field]: value
-      }));
-    }
-  };
-
-  const getCompletionColor = (percentage) => {
-    if (percentage >= 80) return 'text-green-600 bg-green-100';
-    if (percentage >= 60) return 'text-yellow-600 bg-yellow-100';
-    return 'text-red-600 bg-red-100';
-  };
-
-  const FormField = ({ label, field, type = "text", required = false, options = null }) => (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">
-        {label} {required && '*'}
-      </label>
-      {editing ? (
-        options ? (
-          <select
-            value={editedProfile?.[field] || ''}
-            onChange={(e) => handleInputChange(field, e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="">Select {label}</option>
-            {options.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        ) : type === 'textarea' ? (
-          <textarea
-            value={editedProfile?.[field] || ''}
-            onChange={(e) => handleInputChange(field, e.target.value)}
-            rows={3}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        ) : (
-          <input
-            type={type}
-            value={editedProfile?.[field] || ''}
-            onChange={(e) => handleInputChange(field, type === 'number' ? parseFloat(e.target.value) : e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        )
-      ) : (
-        <p className="py-2 text-gray-900">
-          {type === 'date' && profile?.[field] 
-            ? new Date(profile[field]).toLocaleDateString('en-KE') 
-            : profile?.[field] || 'Not set'}
-        </p>
-      )}
-    </div>
-  );
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="flex items-center space-x-2">
-          <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-          <span className="text-gray-600">Loading profile...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center max-w-md mx-auto">
-          <AlertCircle className="mx-auto h-12 w-12 text-red-500 mb-4" />
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Error Loading Profile</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
-          <div className="space-x-3">
-            <button onClick={() => fetchProfile()} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-              Try Again
-            </button>
-            <button onClick={() => navigate('/driver-dashboard')} className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition">
-              Return to Dashboard
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!profile) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle className="mx-auto h-12 w-12 text-yellow-500 mb-4" />
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Profile Not Found</h2>
-          <button onClick={() => fetchProfile()} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-            Try Again
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    location: '',
+    address: '',
+    city: '',
+    state: '',
+    zipCode: '',
+    vehicleType: '',
+    vehicleCapacity: '',
+    vehiclePlate: '',
+    vehicleModel: '',
+    vehicleYear: '',
+    licenseNumber: '',
+    licenseExpiry: '',
+    experienceYears: '',
+    emergencyContact: '',
+    emergencyPhone: '',
+    bio: ''
+  });
 
   const vehicleTypes = [
-    { value: 'pickup', label: 'Pickup' },
+    { value: 'pickup', label: 'Pickup Truck' },
     { value: 'van', label: 'Van' },
     { value: 'small_truck', label: 'Small Truck' },
     { value: 'medium_truck', label: 'Medium Truck' },
@@ -290,279 +56,679 @@ const DriverProfile = () => {
     { value: 'container_truck', label: 'Container Truck' }
   ];
 
-  const genderOptions = [
-    { value: 'male', label: 'Male' },
-    { value: 'female', label: 'Female' },
-    { value: 'other', label: 'Other' }
-  ];
+  useEffect(() => {
+    // Try to get user from local storage first
+    const currentUser = getUser();
+    if (currentUser) {
+      setUser(currentUser);
+      populateFormData(currentUser);
+    }
+    
+    // Then fetch fresh data from API
+    fetchProfile();
+  }, []);
+
+  const populateFormData = (profile) => {
+    setFormData({
+      firstName: profile.firstName || '',
+      lastName: profile.lastName || '',
+      email: profile.email || '',
+      phone: profile.phone || '',
+      location: profile.location || '',
+      address: profile.address || '',
+      city: profile.city || '',
+      state: profile.state || '',
+      zipCode: profile.zipCode || '',
+      vehicleType: profile.vehicleType || '',
+      vehicleCapacity: profile.vehicleCapacity || '',
+      vehiclePlate: profile.vehiclePlate || '',
+      vehicleModel: profile.vehicleModel || '',
+      vehicleYear: profile.vehicleYear || '',
+      licenseNumber: profile.licenseNumber || '',
+      licenseExpiry: profile.licenseExpiry ? profile.licenseExpiry.split('T')[0] : '',
+      experienceYears: profile.experienceYears || '',
+      emergencyContact: profile.emergencyContact || '',
+      emergencyPhone: profile.emergencyPhone || '',
+      bio: profile.driverProfile?.bio || profile.bio || ''
+    });
+  };
+
+  const fetchProfile = async () => {
+    try {
+      setError('');
+      const authHeaders = getAuthHeader();
+      const currentUser = getUser();
+      
+      // Debug: Check if we have proper auth headers and user data
+      console.log('Auth headers:', authHeaders);
+      console.log('Current user from getUser():', currentUser);
+      
+      if (!authHeaders.Authorization) {
+        setError('No authentication token found. Please login again.');
+        setLoading(false);
+        return;
+      }
+
+      // Check if we have a valid user with driver userType
+      if (!currentUser || currentUser.userType !== 'driver') {
+        setError('Invalid user type. This page is only for drivers.');
+        setLoading(false);
+        return;
+      }
+
+      console.log('Making request to fetch driver profile...');
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
+        method: 'GET',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log('Response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Profile data:', data);
+        const profile = data.data.driver;
+        setUser(profile);
+        populateFormData(profile);
+      } else {
+        const errorData = await response.json();
+        console.error('Error response:', errorData);
+        
+        // Handle specific error cases
+        if (response.status === 400 && errorData.message === 'Invalid driver ID') {
+          setError('Authentication issue detected. Please logout and login again to refresh your session.');
+        } else if (response.status === 403) {
+          setError('Access denied. Make sure you are logged in as a driver.');
+        } else {
+          setError(errorData.message || `Failed to load profile (${response.status})`);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      setError('Network error loading profile. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      // Validate required fields
+      const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
+      const missingFields = requiredFields.filter(field => !formData[field] || formData[field].toString().trim() === '');
+      
+      if (missingFields.length > 0) {
+        setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
+        setSaving(false);
+        return;
+      }
+
+      const authHeaders = getAuthHeader();
+      const currentUser = getUser();
+      
+      console.log('Auth headers for update:', authHeaders);
+      console.log('Current user for update:', currentUser);
+      
+      if (!authHeaders.Authorization) {
+        setError('No authentication token found. Please login again.');
+        setSaving(false);
+        return;
+      }
+
+      // Check if we have a valid user with driver userType
+      if (!currentUser || currentUser.userType !== 'driver') {
+        setError('Invalid user type. This page is only for drivers.');
+        setSaving(false);
+        return;
+      }
+
+      const updateData = {
+        ...formData,
+        vehicleCapacity: formData.vehicleCapacity ? parseFloat(formData.vehicleCapacity) : null,
+        experienceYears: formData.experienceYears ? parseInt(formData.experienceYears) : null,
+        vehicleYear: formData.vehicleYear ? parseInt(formData.vehicleYear) : null
+      };
+
+      console.log('Sending update data:', updateData);
+
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
+        method: 'PUT',
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updateData)
+      });
+
+      console.log('Update response status:', response.status);
+
+      if (response.ok) {
+        const data = await response.json();
+        const updatedProfile = data.data.driver;
+        setUser(updatedProfile);
+        
+        // Update auth storage
+        authManager.setAuth(
+          authManager.getToken(),
+          updatedProfile,
+          localStorage.getItem('infiniteCargoRememberMe') === 'true'
+        );
+        
+        // Update form data with the latest profile data
+        populateFormData(updatedProfile);
+        
+        setSuccess('Profile updated successfully!');
+        setTimeout(() => setSuccess(''), 5000);
+      } else {
+        const errorData = await response.json();
+        console.error('Update error response:', errorData);
+        
+        // Handle specific error cases
+        if (response.status === 400 && errorData.message === 'Invalid driver ID') {
+          setError('Authentication issue detected. Please logout and login again to refresh your session.');
+        } else if (response.status === 403) {
+          setError('Access denied. Make sure you are logged in as a driver.');
+        } else if (errorData.errors && Array.isArray(errorData.errors)) {
+          const errorMessages = errorData.errors.map(err => err.msg || err.message).join(', ');
+          setError(`Validation errors: ${errorMessages}`);
+        } else {
+          setError(errorData.message || `Failed to update profile (${response.status})`);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      setError('Network error updating profile. Please check your connection.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const calculateProfileCompletion = () => {
+    const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
+    const optionalFields = ['location', 'address', 'city', 'vehiclePlate', 'vehicleModel', 'experienceYears', 'bio'];
+    
+    const completedRequired = requiredFields.filter(field => formData[field] && formData[field].toString().trim() !== '').length;
+    const completedOptional = optionalFields.filter(field => formData[field] && formData[field].toString().trim() !== '').length;
+    
+    const requiredPercentage = (completedRequired / requiredFields.length) * 70;
+    const optionalPercentage = (completedOptional / optionalFields.length) * 30;
+    
+    return Math.round(requiredPercentage + optionalPercentage);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader className="mx-auto h-12 w-12 text-blue-600 animate-spin" />
+          <p className="mt-4 text-gray-600">Loading profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const profileCompletion = calculateProfileCompletion();
+  const fullName = `${formData.firstName} ${formData.lastName}`.trim();
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <button onClick={() => navigate('/driver-dashboard')} className="text-blue-600 hover:text-blue-800 mb-2">
-                ← Back to Dashboard
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <button
+                onClick={() => window.history.back()}
+                className="mr-4 p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                <ArrowLeft size={20} className="text-gray-600" />
               </button>
-              <h1 className="text-2xl font-bold text-gray-900">Driver Profile</h1>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Update Profile</h1>
+                <p className="text-sm text-gray-600">
+                  {fullName ? `Welcome, ${fullName}` : 'Manage your driver profile and vehicle information'}
+                </p>
+              </div>
             </div>
-            <div className="flex items-center space-x-3">
-              {!editing ? (
-                <button onClick={() => setEditing(true)} className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-                  <Edit3 className="w-4 h-4" />
-                  <span>Edit Profile</span>
-                </button>
-              ) : (
-                <>
-                  <button onClick={() => { setEditedProfile(profile); setEditing(false); setError(''); }} className="flex items-center space-x-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition">
-                    <X className="w-4 h-4" />
-                    <span>Cancel</span>
-                  </button>
-                  <button onClick={handleSave} disabled={saving} className="flex items-center space-x-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 transition">
-                    <Save className="w-4 h-4" />
-                    <span>{saving ? 'Saving...' : 'Save Changes'}</span>
-                  </button>
-                </>
-              )}
+            <div className="text-right">
+              <div className="text-sm text-gray-600">Profile Completion</div>
+              <div className="flex items-center mt-1">
+                <div className="w-24 bg-gray-200 rounded-full h-2 mr-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${profileCompletion}%` }}
+                  />
+                </div>
+                <span className="text-sm font-medium text-gray-900">{profileCompletion}%</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Error Banner */}
-      {error && (
-        <div className="bg-red-50 border-l-4 border-red-400 p-4">
-          <div className="flex">
-            <AlertCircle className="h-5 w-5 text-red-400" />
-            <div className="ml-3">
-              <p className="text-sm text-red-700">{error}</p>
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Success/Error Messages */}
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex">
+              <AlertCircle className="h-5 w-5 text-red-400" />
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-red-800">Error</h3>
+                <p className="mt-1 text-sm text-red-700">{error}</p>
+              </div>
             </div>
-            <button onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600">×</button>
           </div>
-        </div>
-      )}
+        )}
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          {/* Profile Overview Card */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow p-6">
+        {success && (
+          <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
+            <div className="flex">
+              <CheckCircle className="h-5 w-5 text-green-400" />
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-green-800">Success</h3>
+                <p className="mt-1 text-sm text-green-700">{success}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Profile Stats */}
+        {user?.statistics && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <Star size={18} className="mr-2 text-yellow-500" />
+              Driver Statistics
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="text-center">
-                <div className="w-24 h-24 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <User className="w-12 h-12 text-blue-600" />
+                <div className="text-2xl font-bold text-blue-600">{user.statistics.totalJobs}</div>
+                <div className="text-sm text-gray-600">Total Jobs</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">{user.statistics.completedJobs}</div>
+                <div className="text-sm text-gray-600">Completed</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-yellow-600 flex items-center justify-center">
+                  <Star className="h-5 w-5 mr-1 fill-current" />
+                  {user.statistics.averageRating.toFixed(1)}
                 </div>
-                
-                <h2 className="text-xl font-semibold text-gray-900">
-                  {profile?.firstName} {profile?.lastName}
-                </h2>
-                <p className="text-gray-600">{profile?.vehicleType?.replace(/_/g, ' ').toUpperCase()}</p>
-                
-                {/* Rating */}
-                <div className="flex items-center justify-center space-x-1 mt-2">
-                  <Star className="w-5 h-5 text-yellow-400 fill-current" />
-                  <span className="font-medium">{profile?.statistics?.averageRating?.toFixed(1) || '0.0'}</span>
-                  <span className="text-gray-500">({profile?.statistics?.totalRatingsReceived || 0} reviews)</span>
-                </div>
+                <div className="text-sm text-gray-600">Rating</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">{user.statistics.successRate}%</div>
+                <div className="text-sm text-gray-600">Success Rate</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-6">
+          {/* Personal Information */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <User size={18} className="mr-2 text-gray-600" />
+              Personal Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  First Name *
+                </label>
+                <input
+                  type="text"
+                  name="firstName"
+                  value={formData.firstName}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
               </div>
 
-              {/* Profile Completion */}
-              <div className="mt-6">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium text-gray-700">Profile Completion</span>
-                  <span className={`text-sm font-medium px-2 py-1 rounded ${getCompletionColor(profile?.profileCompletion || 0)}`}>
-                    {profile?.profileCompletion || 0}%
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div 
-                    className={`h-2 rounded-full transition-all duration-300 ${
-                      (profile?.profileCompletion || 0) >= 80 ? 'bg-green-500' : 
-                      (profile?.profileCompletion || 0) >= 60 ? 'bg-yellow-500' : 'bg-red-500'
-                    }`}
-                    style={{ width: `${profile?.profileCompletion || 0}%` }}
-                  ></div>
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Last Name *
+                </label>
+                <input
+                  type="text"
+                  name="lastName"
+                  value={formData.lastName}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
               </div>
 
-              {/* Quick Stats */}
-              <div className="mt-6 space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Total Jobs</span>
-                  <span className="font-medium">{profile?.statistics?.totalJobs || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Completed</span>
-                  <span className="font-medium text-green-600">{profile?.statistics?.completedJobs || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Success Rate</span>
-                  <span className="font-medium">{profile?.statistics?.successRate || 0}%</span>
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address *
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone Number *
+                </label>
+                <input
+                  type="tel"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Current Location
+                </label>
+                <input
+                  type="text"
+                  name="location"
+                  value={formData.location}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Nairobi, Kenya"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Experience Years
+                </label>
+                <input
+                  type="number"
+                  name="experienceYears"
+                  value={formData.experienceYears}
+                  onChange={handleInputChange}
+                  min="0"
+                  max="50"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
               </div>
             </div>
           </div>
 
-          {/* Main Content */}
-          <div className="lg:col-span-3">
-            {/* Navigation Tabs */}
-            <div className="bg-white rounded-lg shadow mb-6">
-              <div className="border-b border-gray-200">
-                <nav className="flex space-x-8 px-6">
-                  {[
-                    { id: 'personal', label: 'Personal Info', icon: User },
-                    { id: 'vehicle', label: 'Vehicle Info', icon: Truck },
-                    { id: 'documents', label: 'Documents', icon: FileText },
-                    { id: 'settings', label: 'Settings', icon: Shield }
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${
-                        activeTab === tab.id
-                          ? 'border-blue-500 text-blue-600'
-                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                      }`}
-                    >
-                      <tab.icon className="w-4 h-4" />
-                      <span>{tab.label}</span>
-                    </button>
-                  ))}
-                </nav>
+          {/* Address Information */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <MapPin size={18} className="mr-2 text-gray-600" />
+              Address Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Street Address
+                </label>
+                <input
+                  type="text"
+                  name="address"
+                  value={formData.address}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  City
+                </label>
+                <input
+                  type="text"
+                  name="city"
+                  value={formData.city}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  State/County
+                </label>
+                <input
+                  type="text"
+                  name="state"
+                  value={formData.state}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Zip/Postal Code
+                </label>
+                <input
+                  type="text"
+                  name="zipCode"
+                  value={formData.zipCode}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
               </div>
             </div>
+          </div>
 
-            {/* Tab Content */}
-            <div className="bg-white rounded-lg shadow p-6">
-              {activeTab === 'personal' && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Personal Information</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <FormField label="First Name" field="firstName" required />
-                    <FormField label="Last Name" field="lastName" required />
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                      <div className="flex items-center space-x-2">
-                        <Mail className="w-4 h-4 text-gray-400" />
-                        <p className="py-2 text-gray-900">{profile?.email}</p>
-                        {profile?.emailVerified && <CheckCircle className="w-4 h-4 text-green-500" />}
-                      </div>
-                    </div>
-                    <FormField label="Phone" field="phone" type="tel" required />
-                    <FormField label="Date of Birth" field="dateOfBirth" type="date" />
-                    <FormField label="Gender" field="gender" options={genderOptions} />
-                    <div className="md:col-span-2">
-                      <FormField label="Address" field="address" />
-                    </div>
-                    <FormField label="City" field="city" />
-                    <FormField label="State/County" field="state" />
-                    <div className="md:col-span-2">
-                      <FormField label="Bio" field="driverProfile.bio" type="textarea" />
-                    </div>
-                    <FormField label="Emergency Contact Name" field="emergencyContact" />
-                    <FormField label="Emergency Contact Phone" field="emergencyPhone" type="tel" />
-                  </div>
-                </div>
-              )}
+          {/* Vehicle Information */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <Truck size={18} className="mr-2 text-gray-600" />
+              Vehicle Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Vehicle Type *
+                </label>
+                <select
+                  name="vehicleType"
+                  value={formData.vehicleType}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">Select Vehicle Type</option>
+                  {vehicleTypes.map(type => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              {activeTab === 'vehicle' && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Vehicle Information</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <FormField label="Vehicle Type" field="vehicleType" options={vehicleTypes} required />
-                    <FormField label="Vehicle Capacity (tonnes)" field="vehicleCapacity" type="number" required />
-                    <FormField label="Vehicle Make" field="vehicleMake" />
-                    <FormField label="Vehicle Model" field="vehicleModel" />
-                    <FormField label="Vehicle Year" field="vehicleYear" type="number" />
-                    <FormField label="License Plate" field="vehiclePlate" />
-                    <FormField label="Experience Years" field="experienceYears" type="number" />
-                    <FormField label="Insurance Valid Until" field="insuranceExpiry" type="date" />
-                  </div>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Vehicle Capacity (Tonnes) *
+                </label>
+                <input
+                  type="number"
+                  name="vehicleCapacity"
+                  value={formData.vehicleCapacity}
+                  onChange={handleInputChange}
+                  min="0.1"
+                  step="0.1"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
 
-              {activeTab === 'documents' && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Documents & Licenses</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <FormField label="Driving License Number" field="licenseNumber" required />
-                    <FormField label="License Expiry Date" field="licenseExpiry" type="date" required />
-                    <FormField label="National ID Number" field="nationalId" />
-                    <FormField label="KRA PIN" field="kraPin" />
-                    
-                    <div className="md:col-span-2">
-                      <h4 className="font-medium text-gray-900 mb-3">Document Status</h4>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        <div className="flex items-center space-x-2">
-                          {profile?.driverProfile?.verified ? (
-                            <CheckCircle className="w-5 h-5 text-green-500" />
-                          ) : (
-                            <AlertCircle className="w-5 h-5 text-red-500" />
-                          )}
-                          <span className="text-sm">Profile Verified</span>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          {profile?.documentsVerified ? (
-                            <CheckCircle className="w-5 h-5 text-green-500" />
-                          ) : (
-                            <AlertCircle className="w-5 h-5 text-red-500" />
-                          )}
-                          <span className="text-sm">Documents Verified</span>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          {profile?.backgroundCheckPassed ? (
-                            <CheckCircle className="w-5 h-5 text-green-500" />
-                          ) : (
-                            <AlertCircle className="w-5 h-5 text-yellow-500" />
-                          )}
-                          <span className="text-sm">Background Check</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Vehicle Model
+                </label>
+                <input
+                  type="text"
+                  name="vehicleModel"
+                  value={formData.vehicleModel}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Toyota Hiace, Isuzu NPR"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
 
-              {activeTab === 'settings' && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-6">Account Settings</h3>
-                  <div className="space-y-6">
-                    <div>
-                      <h4 className="font-medium text-gray-900 mb-3">Account Information</h4>
-                      <div className="bg-gray-50 p-4 rounded-md space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Account Created</span>
-                          <span className="text-sm text-gray-900">
-                            {profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString('en-KE') : 'Unknown'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Last Updated</span>
-                          <span className="text-sm text-gray-900">
-                            {profile?.updatedAt ? new Date(profile.updatedAt).toLocaleDateString('en-KE') : 'Unknown'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Account Status</span>
-                          <span className={`text-sm px-2 py-1 rounded ${profile?.isActive !== false ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                            {profile?.isActive !== false ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Verification Status</span>
-                          <span className={`text-sm px-2 py-1 rounded ${profile?.driverProfile?.verified ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                            {profile?.driverProfile?.verified ? 'Verified' : 'Pending Verification'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Vehicle Year
+                </label>
+                <input
+                  type="number"
+                  name="vehicleYear"
+                  value={formData.vehicleYear}
+                  onChange={handleInputChange}
+                  min="1990"
+                  max="2030"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  License Plate Number
+                </label>
+                <input
+                  type="text"
+                  name="vehiclePlate"
+                  value={formData.vehiclePlate}
+                  onChange={handleInputChange}
+                  placeholder="e.g., KBZ 123A"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
             </div>
+          </div>
+
+          {/* License Information */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <Shield size={18} className="mr-2 text-gray-600" />
+              License Information
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  License Number *
+                </label>
+                <input
+                  type="text"
+                  name="licenseNumber"
+                  value={formData.licenseNumber}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  License Expiry Date
+                </label>
+                <input
+                  type="date"
+                  name="licenseExpiry"
+                  value={formData.licenseExpiry}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Emergency Contact */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <Phone size={18} className="mr-2 text-gray-600" />
+              Emergency Contact
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Emergency Contact Name
+                </label>
+                <input
+                  type="text"
+                  name="emergencyContact"
+                  value={formData.emergencyContact}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Emergency Contact Phone
+                </label>
+                <input
+                  type="tel"
+                  name="emergencyPhone"
+                  value={formData.emergencyPhone}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Bio */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Professional Bio
+            </h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Brief Description (Optional)
+              </label>
+              <textarea
+                name="bio"
+                value={formData.bio}
+                onChange={handleInputChange}
+                rows={4}
+                maxLength={1000}
+                placeholder="Tell cargo owners about your experience, specializations, and what makes you a reliable driver..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <p className="mt-1 text-sm text-gray-600">
+                {formData.bio.length}/1000 characters
+              </p>
+            </div>
+          </div>
+
+          {/* Submit Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center transition-colors"
+            >
+              {saving ? (
+                <>
+                  <Loader className="animate-spin h-5 w-5 mr-2" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-5 w-5 mr-2" />
+                  Update Profile
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>

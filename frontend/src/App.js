@@ -37,6 +37,10 @@ const DriverDashboard = lazy(() => import('./components/driver/DriverDashboard')
 const CargoOwnerDashboard = lazy(() => import('./components/cargoowner/CargoOwnerDashboard'));
 const DriverProfile = lazy(() => import('./components/driver/DriverProfile'));
 const DriverJobDetails = lazy(() => import('./components/driver/DriverJobDetails'));
+const DriverEarnings = lazy(() => import('./components/driver/DriverEarnings'));
+const DriverVehiclesPage = lazy(() => import('./components/driver/DriverVehiclesPage'));
+const DriverBidsPage = lazy(() => import('./components/driver/DriverBidsPage'));
+const BidDetails = lazy(() => import('./components/driver/BidDetails'));
 
 // Core Functionality Pages
 const LoadSearch = lazy(() => import('./components/driver/LoadSearch'));
@@ -266,7 +270,62 @@ function App() {
                     </>
                   }
                 />
-                
+                 <Route 
+                  path="/driver/bids"
+                  element={
+                    <>
+                      <SEOHelmet 
+                        title="My Bids"
+                        description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                        keywords="driver profile, update details, vehicle information, contact preferences"
+                        canonicalUrl="https://infinitecargo.co.ke/driver/bids"
+                      />
+                      <DriverBidsPage />
+                    </>
+                  }
+                />
+                 <Route 
+                  path="/bids/:id"
+                  element={
+                    <>
+                      <SEOHelmet 
+                        title="My Bids"
+                        description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                        keywords="driver profile, update details, vehicle information, contact preferences"
+                        canonicalUrl="https://infinitecargo.co.ke/bids/:id"
+                      />
+                      <BidDetails />
+                    </>
+                  }
+                />
+                 <Route 
+                  path="/driver/earnings"
+                  element={
+                    <>
+                      <SEOHelmet 
+                        title="My Earnings"
+                        description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                        keywords="driver profile, update details, vehicle information, contact preferences"
+                        canonicalUrl="https://infinitecargo.co.ke/driver/earnings"
+                      />
+                      <DriverEarnings />
+                    </>
+                  }
+                />
+                <Route 
+                  path="/driver/vehicles"
+                  element={
+                    <>
+                      <SEOHelmet 
+                        title="My Earnings"
+                        description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                        keywords="driver profile, update details, vehicle information, contact preferences"
+                        canonicalUrl="https://infinitecargo.co.ke/driver/vehicles"
+                      />
+                      <DriverVehiclesPage />
+                    </>
+                  }
+                />
                 <Route 
                   path="/cargo-dashboard" 
                   element={
