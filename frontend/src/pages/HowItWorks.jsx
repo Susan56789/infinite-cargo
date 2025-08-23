@@ -14,6 +14,7 @@ import {
   Shield,
   Clock
 } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const HowItWorks = () => {
   const cargoOwnerSteps = [
@@ -176,6 +177,7 @@ const HowItWorks = () => {
 
   return (
     <section className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-blue-50">
+      <Breadcrumb items={[{text: 'How It Works'}]} />
       <div className="container mx-auto px-4 py-16">
         {/* Header Section */}
         <div className="text-center mb-20">

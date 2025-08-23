@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, Truck, Package, Mail, Lock, AlertCircle, CheckCircle, Loader2, Shield, Star, Users, Clock, ArrowRight } from 'lucide-react';
 import { authManager } from '../utils/auth'; 
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const Login = () => {
   const [formData, setFormData] = useState({
@@ -188,11 +189,10 @@ const Login = () => {
     }
   };
 
-  // FIXED: Removed the auto-logout warning effect that was checking expiry too frequently
-  // This was causing premature logouts
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
+     <Breadcrumb items={[{text: 'Login'}]} />
       <div className="w-full max-w-7xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
         <div className="flex flex-col xl:flex-row min-h-[800px]">
           

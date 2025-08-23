@@ -60,7 +60,7 @@ const Footer = () => {
     { icon: faFacebook, href: 'https://www.facebook.com/infinitecargo254', label: 'Facebook' },
     { icon: faTwitter, href: 'https://twitter.com/infinitecargo254', label: 'Twitter' },
     { icon: faLinkedin, href: 'https://www.linkedin.com/company/infinitecargo254', label: 'LinkedIn' },
-    { icon: faWhatsapp, href: 'https://wa.me/254722483468', label: 'WhatsApp' }
+    { icon: faWhatsapp, href: 'https://wa.me/254723139610', label: 'WhatsApp' }
   ];
 
   return (

@@ -1,9 +1,12 @@
 // CookiePolicy.jsx
 import React from 'react';
+import RelatedPages from '../components/common/RelatedPages';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const CookiePolicy = () => {
   return (
     <section className="max-w-4xl mx-auto px-8 py-16 font-sans leading-relaxed text-gray-800 bg-white">
+       <Breadcrumb items={[{text: 'Cookie Polocy'}]} />
       <h1 className="text-4xl font-bold text-primary-600 text-center mb-8">
         Cookie Policy
       </h1>
@@ -56,6 +59,7 @@ const CookiePolicy = () => {
       <p className="text-base mt-4">
         For questions, please contact us at <strong className="text-primary-600">support@infinitecargo.co.ke</strong>.
       </p>
+    <RelatedPages currentPage="aboutpricing" />
     </section>
   );
 };

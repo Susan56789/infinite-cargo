@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Check, Star, Building, Zap, Shield, Headphones, BarChart3, Settings, CreditCard, Smartphone, Building2, AlertCircle, Clock, CheckCircle2, X, User, Mail, Phone, Copy } from 'lucide-react';
 import {getUser, getToken, isAuthenticated } from '../utils/auth';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const Pricing = () => {
   const [currentPlan, setCurrentPlan] = useState(null);
@@ -331,6 +332,7 @@ const Pricing = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-primary-50">
+      <Breadcrumb items={[{text: 'Pricing'}]} />
       {/* Hero Section */}
       <section className="bg-gradient-to-r from-primary-600 via-primary-700 to-secondary-800 text-white py-20">
         <div className="max-w-4xl mx-auto px-6 text-center">

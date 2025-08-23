@@ -1,5 +1,6 @@
 import React from 'react';
 import { Shield, FileText, CreditCard, RefreshCw, AlertTriangle, Edit, Mail, Phone } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const TermsOfService = () => {
   const sections = [
@@ -43,6 +44,7 @@ const TermsOfService = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
+      <Breadcrumb items={[{text: 'Terms of Service'}]} />
       {/* Hero Section */}
       <section className="bg-gradient-to-r from-primary-600 via-primary-700 to-secondary-800 text-white py-20">
         <div className="max-w-4xl mx-auto px-6 text-center">

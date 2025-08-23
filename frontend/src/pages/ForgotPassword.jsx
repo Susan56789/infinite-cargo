@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, ArrowLeft, Truck, Package, AlertCircle, CheckCircle, Loader2, Shield, Star, Users, Clock, Send, Key, RefreshCw } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const ForgotPassword = () => {
   const [formData, setFormData] = useState({
@@ -271,6 +272,7 @@ const ForgotPassword = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 flex items-center justify-center p-4">
+       <Breadcrumb items={[{text: 'Forgot Password'}]} />
       <div className="w-full max-w-7xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
         <div className="flex flex-col xl:flex-row min-h-[800px]">
           

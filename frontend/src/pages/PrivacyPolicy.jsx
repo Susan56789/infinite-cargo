@@ -1,5 +1,6 @@
 import React from 'react';
 import { Shield, Database, Users, Lock, UserCheck, RefreshCw, Calendar, Eye, Share, CheckCircle } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const PrivacyPolicy = () => {
   const sections = [
@@ -78,6 +79,7 @@ const PrivacyPolicy = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50">
+      <Breadcrumb items={[{text: 'Privacy Polocy'}]} />
       {/* Hero Section */}
       <section className="bg-gradient-to-r from-primary-600 via-primary-700 to-secondary-800 text-white py-20">
         <div className="max-w-4xl mx-auto px-6 text-center">

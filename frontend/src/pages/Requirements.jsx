@@ -18,6 +18,7 @@ import {
   Award,
   Target
 } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const Requirements = () => {
   const [activeTab, setActiveTab] = useState('driver');
@@ -195,6 +196,7 @@ const Requirements = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Breadcrumb items={[{text: 'Requirements'}]} />
       {/* Hero Section */}
       <section className="relative bg-gradient-to-br from-blue-900 via-blue-800 to-sky-700 py-20 overflow-hidden">
         <div className="absolute inset-0">

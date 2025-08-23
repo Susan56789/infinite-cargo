@@ -1,8 +1,11 @@
 import React from 'react';
+import RelatedPages from '../components/common/RelatedPages';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const About = () => {
   return (
     <section className="min-h-screen bg-gradient-to-br from-gray-50 to-white py-16">
+      <Breadcrumb items={[{text: 'About Us'}]} />
       <div className="container mx-auto px-4 py-12">
         <div className="max-w-4xl mx-auto text-center">
           <h1 className="text-4xl md:text-5xl font-bold mb-8 text-primary-600 leading-tight">
@@ -88,6 +91,7 @@ const About = () => {
           </div>
         </div>
       </div>
+      <RelatedPages currentPage="about" />
     </section>
   );
 };

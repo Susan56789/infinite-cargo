@@ -26,6 +26,7 @@ import {
   Star,
   ExternalLink
 } from 'lucide-react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 import { 
   isAuthenticated, 
@@ -759,6 +760,7 @@ const LoadDetail = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Breadcrumb items={[{text: 'Load Detail'}]} />
       {/* Header */}
       <div className="bg-white shadow-sm border-b">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">

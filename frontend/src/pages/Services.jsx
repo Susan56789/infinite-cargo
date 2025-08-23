@@ -1,8 +1,10 @@
 import React from 'react';
+import Breadcrumb from '../components/common/Breadcrumb';
 
 const Services = () => {
   return (
     <section className="max-w-6xl mx-auto px-4 py-12 font-sans text-gray-800">
+      <Breadcrumb items={[{text: 'Services'}]} />
       <h1 className="text-center text-4xl text-primary-600 font-bold mb-4 animate-fade-up">
         Our Services
       </h1>
