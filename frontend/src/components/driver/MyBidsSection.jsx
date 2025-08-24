@@ -289,61 +289,35 @@ const BidCard = ({ bid, formatCurrency, formatDate }) => {
 };
 
 const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = false, error = null }) => {
-  // ENHANCED: More detailed debug logging
-  console.log('[MyBidsSection] =================================');
-  console.log('[MyBidsSection] Received props:', { 
-    myBids,
-    myBidsType: typeof myBids,
-    isArray: Array.isArray(myBids),
-    bidsLength: Array.isArray(myBids) ? myBids.length : 'not array',
-    loading, 
-    error
-  });
   
-  if (Array.isArray(myBids) && myBids.length > 0) {
-    console.log('[MyBidsSection] Sample bid structure:', myBids[0]);
-    console.log('[MyBidsSection] All bids IDs:', myBids.map(b => b._id));
-    console.log('[MyBidsSection] All bids statuses:', myBids.map(b => b.status));
-  }
-
-  // FIXED: Ensure myBids is always an array with better validation
   const validBids = React.useMemo(() => {
-    console.log('[MyBidsSection] Processing myBids:', myBids);
     
     if (!myBids) {
-      console.log('[MyBidsSection] ❌ No myBids data provided');
+     
       return [];
     }
 
     if (Array.isArray(myBids)) {
-      console.log('[MyBidsSection] ✅ Valid array with', myBids.length, 'items');
-      if (myBids.length > 0) {
-        console.log('[MyBidsSection] First bid sample:', myBids[0]);
-      }
+     
       return myBids;
     }
 
     // Handle case where myBids might be an object with a nested array
     if (typeof myBids === 'object') {
-      console.log('[MyBidsSection] Object detected, checking nested properties...');
       
       if (myBids.bids && Array.isArray(myBids.bids)) {
-        console.log('[MyBidsSection] ✅ Found nested bids array with', myBids.bids.length, 'items');
         return myBids.bids;
       }
       
       if (myBids.data && Array.isArray(myBids.data)) {
-        console.log('[MyBidsSection] ✅ Found nested data array with', myBids.data.length, 'items');
         return myBids.data;
       }
 
       // Check for other possible nested structures
       if (myBids.myBids && Array.isArray(myBids.myBids)) {
-        console.log('[MyBidsSection] ✅ Found nested myBids array with', myBids.myBids.length, 'items');
         return myBids.myBids;
       }
 
-      console.log('[MyBidsSection] Object properties:', Object.keys(myBids));
     }
 
     console.warn('[MyBidsSection] ❌ Invalid myBids format:', typeof myBids, myBids);
@@ -362,8 +336,6 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
       return { total: 0, pending: 0, accepted: 0, counterOffers: 0 };
     }
 
-    console.log('[MyBidsSection] Calculating stats for', validBids.length, 'bids');
-
     const total = validBids.length;
     
     // Define pending statuses more comprehensively
@@ -371,7 +343,6 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
     const pending = validBids.filter(bid => {
       const status = bid.status;
       const isPending = pendingStatuses.includes(status);
-      console.log(`[MyBidsSection] Bid ${bid._id} status: ${status}, isPending: ${isPending}`);
       return isPending;
     }).length;
     
@@ -379,7 +350,7 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
     const counterOffers = validBids.filter(bid => bid.status === 'counter_offered').length;
 
     const stats = { total, pending, accepted, counterOffers };
-    console.log('[MyBidsSection] Calculated stats:', stats);
+    
 
     return stats;
   };

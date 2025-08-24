@@ -29,13 +29,9 @@ const BidsTab = ({
           acceptButton.innerHTML = '<span class="animate-spin">⏳</span> Accepting...';
         }
 
-        console.log('=== BID ACCEPTANCE DEBUG ===');
-        console.log('Bid ID:', bid._id);
-        console.log('Bid data:', bid);
-        console.log('API URL:', `${API_BASE_URL}/bids/${bid._id}/accept`);
         
         const authHeaders = getAuthHeaders();
-        console.log('Auth headers:', authHeaders);
+       
 
         // Validate required data before making request
         if (!bid._id) {
@@ -53,9 +49,6 @@ const BidsTab = ({
             'Accept': 'application/json'
           }
         });
-
-        console.log('Response status:', response.status);
-        console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
         // Handle different response statuses with specific error messages
         if (response.status === 401) {
@@ -78,7 +71,6 @@ const BidsTab = ({
         let responseData;
         try {
           const responseText = await response.text();
-          console.log('Raw response:', responseText);
           
           if (responseText) {
             responseData = JSON.parse(responseText);
@@ -95,7 +87,7 @@ const BidsTab = ({
           }
         }
 
-        console.log('Parsed response data:', responseData);
+       
 
         if (!response.ok) {
           // Use server error message if available, otherwise use status-specific message
@@ -120,7 +112,6 @@ const BidsTab = ({
 
         // Call the parent's refresh function to update the UI
         if (onRefresh) {
-          console.log('Refreshing data after successful bid acceptance...');
           await onRefresh();
         }
         
@@ -180,9 +171,6 @@ const BidsTab = ({
           rejectButton.innerHTML = '<span class="animate-spin">⏳</span> Rejecting...';
         }
 
-        console.log('=== BID REJECTION DEBUG ===');
-        console.log('Bid ID:', bid._id);
-        console.log('Rejection reason:', reason);
         
         const authHeaders = getAuthHeaders();
         
@@ -200,7 +188,7 @@ const BidsTab = ({
           body: JSON.stringify({ reason: reason?.trim() || 'No reason provided' })
         });
 
-        console.log('Reject response status:', response.status);
+        
 
         if (response.status === 401) {
           throw new Error('Your session has expired. Please refresh the page and log in again.');
@@ -218,7 +206,7 @@ const BidsTab = ({
         let responseData;
         try {
           const responseText = await response.text();
-          console.log('Reject response text:', responseText);
+          
           responseData = responseText ? JSON.parse(responseText) : {};
         } catch (parseError) {
           console.error('Failed to parse reject response:', parseError);
