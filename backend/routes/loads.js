@@ -1511,6 +1511,7 @@ router.put('/:id', auth, [
 ], async (req, res) => {
   try {
     console.log('Update load request for ID:', req.params.id);
+    console.log('User details:', { id: req.user.id, userType: req.user.userType, email: req.user.email });
     
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -1529,11 +1530,22 @@ router.put('/:id', auth, [
       });
     }
 
-    // Role check
-    if (req.user.userType !== 'cargo_owner') {
+    // FIXED: More flexible userType check
+    const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
+    if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
+      console.log('Access denied - userType check failed:', {
+        provided: req.user.userType,
+        allowed: allowedUserTypes,
+        userId: req.user.id
+      });
+      
       return res.status(403).json({
         status: 'error',
-        message: 'Access denied. Only cargo owners can update loads.'
+        message: 'Access denied. Only cargo owners can update loads.',
+        debug: {
+          userType: req.user.userType,
+          userId: req.user.id
+        }
       });
     }
 
@@ -1554,16 +1566,29 @@ router.put('/:id', auth, [
       });
     }
 
-    // Check ownership
-    if (load.postedBy.toString() !== req.user.id) {
+    // Check ownership - be more flexible with ID comparison
+    const userIdStr = req.user.id.toString();
+    const loadOwnerStr = load.postedBy.toString();
+    
+    if (loadOwnerStr !== userIdStr) {
+      console.log('Ownership check failed:', {
+        userId: userIdStr,
+        loadOwner: loadOwnerStr,
+        match: loadOwnerStr === userIdStr
+      });
+      
       return res.status(403).json({
         status: 'error',
-        message: 'You can only update your own loads'
+        message: 'You can only update your own loads',
+        debug: {
+          userId: userIdStr,
+          loadOwner: loadOwnerStr
+        }
       });
     }
 
     // FIXED: Allow editing of more statuses, but with restrictions
-    const editableStatuses = ['posted', 'available', 'receiving_bids'];
+    const editableStatuses = ['posted', 'available', 'receiving_bids','expired'];
     const restrictedEditStatuses = ['assigned', 'driver_assigned', 'in_transit'];
     
     if (!editableStatuses.includes(load.status) && !restrictedEditStatuses.includes(load.status)) {
@@ -1618,7 +1643,8 @@ router.put('/:id', auth, [
     
     updateData.updatedAt = new Date();
 
-    console.log('Updating load with data:', updateData);
+   // Set who modified the load for status history
+    updateData.modifiedBy = req.user.id;
 
     const updatedLoad = await Load.findByIdAndUpdate(
       req.params.id,
@@ -1865,11 +1891,22 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // Role check
-    if (req.user.userType !== 'cargo_owner') {
+    // FIXED: More flexible userType check
+    const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
+    if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
+      console.log('Access denied - userType check failed:', {
+        provided: req.user.userType,
+        allowed: allowedUserTypes,
+        userId: req.user.id
+      });
+      
       return res.status(403).json({
         status: 'error',
-        message: 'Access denied. Only cargo owners can update load status.'
+        message: 'Access denied. Only cargo owners can update load status.',
+        debug: {
+          userType: req.user.userType,
+          userId: req.user.id
+        }
       });
     }
 
@@ -1893,27 +1930,35 @@ router.patch('/:id/status', auth, [
     }
 
     // Check ownership
-    if (load.postedBy.toString() !== req.user.id) {
+    const userIdStr = req.user.id.toString();
+    const loadOwnerStr = load.postedBy.toString();
+    
+    if (loadOwnerStr !== userIdStr) {
+      console.log('Ownership check failed for status update:', {
+        userId: userIdStr,
+        loadOwner: loadOwnerStr
+      });
+      
       return res.status(403).json({
         status: 'error',
         message: 'You can only update your own loads'
       });
     }
 
-    // FIXED: More flexible status transitions
+    // Status transition validation
     const statusTransitions = {
       posted: ['available', 'receiving_bids', 'not_available', 'cancelled'],
       available: ['receiving_bids', 'assigned', 'driver_assigned', 'not_available', 'cancelled'],
       receiving_bids: ['assigned', 'driver_assigned', 'not_available', 'cancelled'],
-      assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'], // Allow back to receiving bids
+      assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'],
       driver_assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'],
       in_transit: ['delivered', 'on_hold'],
       on_hold: ['in_transit', 'cancelled', 'receiving_bids'],
       delivered: ['completed'],
-      completed: [], // Final state
+      completed: [],
       not_available: ['posted', 'available', 'receiving_bids'],
-      cancelled: ['posted', 'available'], // Allow reposting cancelled loads
-      expired: ['available', 'posted'] // Allow reactivating expired loads
+      cancelled: ['posted', 'available'],
+      expired: ['available', 'posted']
     };
 
     const currentStatus = load.status || 'posted';
@@ -1926,7 +1971,7 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // FIXED: Proper status history handling
+    // Status history entry
     const statusHistoryEntry = {
       status,
       changedAt: new Date(),
@@ -1955,7 +2000,7 @@ router.patch('/:id/status', auth, [
       updateData.deliveredAt = new Date();
     }
 
-    console.log('Updating load with data:', updateData);
+    console.log('Updating load status with data:', updateData);
 
     const updatedLoad = await Load.findByIdAndUpdate(
       req.params.id,
