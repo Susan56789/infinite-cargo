@@ -1,21 +1,21 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Search, RefreshCw, Package, Eye, Ban, 
-  MapPin, ArrowRight, ChevronLeft, Calendar, Clock, 
-  Zap, Loader2, Filter, SortAsc, SortDesc, Truck,
-  AlertCircle, CheckCircle, XCircle,
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {  Package, Eye, Ban, 
+  MapPin, ArrowRight, ChevronLeft, Calendar, 
+  Zap, Loader2,SortAsc, SortDesc, Truck, CheckCircle, XCircle,
   Download, ChevronRight, Trash2, Edit2,
-   Pause,  CheckCircle2, 
-  X, Save, Settings, MoreVertical
+  Pause, CheckCircle2, 
+  X, MoreVertical, Clock
 } from 'lucide-react';
 
-import {getAuthHeader, logout, getUser} from '../../utils/auth'; 
+import { getAuthHeader, logout, getUser } from '../../utils/auth';
+import StatusUpdateModal from './modals/StatusUpdateModal';
+import EditLoadModal from './modals/EditLoadModal';
 
 const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   // State management
   const [filters, setFilters] = useState({
     search: '',
-    status: '',
+    status: 'all',
     minBudget: '',
     maxBudget: '',
     pickupDate: '',
@@ -30,11 +30,9 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [error, setError] = useState('');
   const [selectedLoads, setSelectedLoads] = useState(new Set());
-  const [loads, setLoads] = useState([]); 
-  const [Summary, setSummary] = useState('');
+  const [loads, setLoads] = useState([]);
   const [user, setUser] = useState(null);
   const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
@@ -45,6 +43,32 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     total: 0,
     totalPages: 0
   });
+
+  // Edit Load Modal State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingLoad, setEditingLoad] = useState(null);
+  const [editFormData, setEditFormData] = useState({
+    title: '',
+    description: '',
+    cargoType: '',
+    weight: '',
+    pickupLocation: '',
+    deliveryLocation: '',
+    pickupDate: '',
+    deliveryDate: '',
+    budget: '',
+    vehicleType: '',
+    specialRequirements: '',
+    isUrgent: false,
+    contactPhone: '',
+    contactEmail: ''
+  });
+  const [editFormErrors, setEditFormErrors] = useState({});
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+
+  // Prevent excessive re-renders
+  const lastFetchRef = useRef(null);
+  const fetchTimeoutRef = useRef(null);
 
   // API Configuration
   const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
@@ -57,82 +81,116 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     };
   };
 
-  // Status configuration with icons and colors
+  // Status configuration
   const statusConfig = {
     posted: {
       label: 'Posted',
       icon: <Package className="h-3 w-3" />,
-      color: 'bg-blue-100 text-blue-800',
-      nextStates: ['receiving_bids', 'not_available', 'cancelled']
+      color: 'bg-blue-100 text-blue-800 border-blue-200',
+      nextStates: ['available', 'receiving_bids', 'not_available', 'cancelled']
     },
-     available: {  
-    label: 'Available',
-    icon: <Package className="h-3 w-3" />,
-    color: 'bg-blue-100 text-blue-800',
-    nextStates: ['receiving_bids', 'not_available', 'cancelled']
-  },
+    available: {  
+      label: 'Available',
+      icon: <Package className="h-3 w-3" />,
+      color: 'bg-green-100 text-green-800 border-green-200',
+      nextStates: ['receiving_bids', 'assigned', 'driver_assigned', 'not_available', 'cancelled']
+    },
     receiving_bids: {
       label: 'Receiving Bids',
       icon: <Clock className="h-3 w-3" />,
-      color: 'bg-yellow-100 text-yellow-800',
+      color: 'bg-yellow-100 text-yellow-800 border-yellow-200',
       nextStates: ['assigned', 'driver_assigned', 'not_available', 'cancelled']
     },
     assigned: {
       label: 'Assigned',
       icon: <Truck className="h-3 w-3" />,
-      color: 'bg-purple-100 text-purple-800',
-      nextStates: ['in_transit', 'on_hold', 'cancelled']
+      color: 'bg-purple-100 text-purple-800 border-purple-200',
+      nextStates: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids']
     },
     driver_assigned: {
       label: 'Driver Assigned',
       icon: <Truck className="h-3 w-3" />,
-      color: 'bg-purple-100 text-purple-800',
-      nextStates: ['in_transit', 'on_hold', 'cancelled']
+      color: 'bg-purple-100 text-purple-800 border-purple-200',
+      nextStates: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids']
     },
     in_transit: {
       label: 'In Transit',
       icon: <ArrowRight className="h-3 w-3" />,
-      color: 'bg-orange-100 text-orange-800',
+      color: 'bg-orange-100 text-orange-800 border-orange-200',
       nextStates: ['delivered', 'on_hold']
     },
     on_hold: {
       label: 'On Hold',
       icon: <Pause className="h-3 w-3" />,
-      color: 'bg-gray-100 text-gray-800',
-      nextStates: ['in_transit', 'cancelled']
+      color: 'bg-gray-100 text-gray-800 border-gray-200',
+      nextStates: ['in_transit', 'cancelled', 'receiving_bids']
     },
     delivered: {
       label: 'Delivered',
       icon: <CheckCircle2 className="h-3 w-3" />,
-      color: 'bg-green-100 text-green-800',
+      color: 'bg-green-100 text-green-800 border-green-200',
       nextStates: ['completed']
     },
     completed: {
       label: 'Completed',
       icon: <CheckCircle className="h-3 w-3" />,
-      color: 'bg-green-200 text-green-900',
+      color: 'bg-green-200 text-green-900 border-green-300',
       nextStates: []
     },
     not_available: {
       label: 'Not Available',
       icon: <XCircle className="h-3 w-3" />,
-      color: 'bg-gray-100 text-gray-800',
-      nextStates: ['posted']
+      color: 'bg-gray-100 text-gray-800 border-gray-200',
+      nextStates: ['posted', 'available', 'receiving_bids']
+    },
+    expired: {
+      label: 'Expired',
+      icon: <Clock className="h-3 w-3" />,
+      color: 'bg-orange-100 text-orange-800 border-orange-200',
+      nextStates: ['available', 'posted']
     },
     cancelled: {
       label: 'Cancelled',
       icon: <Ban className="h-3 w-3" />,
-      color: 'bg-red-100 text-red-800',
-      nextStates: []
+      color: 'bg-red-100 text-red-800 border-red-200',
+      nextStates: ['posted', 'available']
     }
   };
 
-  
+  // Dropdown options for form fields
+  const cargoTypeOptions = [
+    { value: 'general_cargo', label: 'General Cargo' },
+    { value: 'food_beverage', label: 'Food & Beverage' },
+    { value: 'electronics', label: 'Electronics' },
+    { value: 'clothing_textile', label: 'Clothing & Textile' },
+    { value: 'construction_materials', label: 'Construction Materials' },
+    { value: 'furniture', label: 'Furniture' },
+    { value: 'automotive_parts', label: 'Automotive Parts' },
+    { value: 'machinery', label: 'Machinery' },
+    { value: 'chemicals', label: 'Chemicals' },
+    { value: 'pharmaceuticals', label: 'Pharmaceuticals' },
+    { value: 'hazardous_materials', label: 'Hazardous Materials' },
+    { value: 'livestock', label: 'Livestock' },
+    { value: 'documents', label: 'Documents' },
+    { value: 'other', label: 'Other' }
+  ];
+
+  const vehicleTypeOptions = [
+    { value: 'pickup', label: 'Pickup' },
+    { value: 'van', label: 'Van' },
+    { value: 'truck_small', label: 'Small Truck' },
+    { value: 'truck_medium', label: 'Medium Truck' },
+    { value: 'truck_large', label: 'Large Truck' },
+    { value: 'container_truck', label: 'Container Truck' },
+    { value: 'flatbed', label: 'Flatbed' },
+    { value: 'refrigerated', label: 'Refrigerated' },
+    { value: 'tanker', label: 'Tanker' },
+    { value: 'any', label: 'Any Vehicle Type' }
+  ];
 
   const fetchUserProfile = () => {
     const user = getUser();
     
-    // Try multiple sources for the display name
     const sources = [
       user?.cargoOwnerProfile?.companyName,
       user?.companyName,
@@ -157,9 +215,26 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     setUser({ displayName: 'Anonymous Cargo Owner', ...user });
   };
 
-  // Fixed API endpoint to use the correct route
-  const fetchLoads = useCallback(
-  async (page = 1, customFilters = null) => {
+  //  Improved fetch loads function with better debouncing
+  const fetchLoads = useCallback(async (page = 1, customFilters = null, force = false) => {
+    // Create a unique key for this fetch request
+    const requestKey = JSON.stringify({
+      page,
+      filters: customFilters || filters,
+      sortConfig,
+      limit: pagination.limit
+    });
+
+    // If this is the same request as last time and not forced, skip it
+    if (lastFetchRef.current === requestKey && !force) {
+      return;
+    }
+
+    // Clear any existing timeout
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
+    }
+
     try {
       if (page === 1) {
         setInitialLoading(true);
@@ -180,17 +255,16 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         queryParams.append('search', currentFilters.search.trim());
       }
 
-      // FIXED: Only append status if it's not 'all' or empty
-      if (currentFilters.status && currentFilters.status !== 'all') {
-        queryParams.append('status', currentFilters.status);
+      if (currentFilters.status && currentFilters.status !== 'all' && currentFilters.status.trim()) {
+        queryParams.append('status', currentFilters.status.trim());
       }
 
-      if (currentFilters.minBudget !== undefined && currentFilters.minBudget !== null && currentFilters.minBudget !== '') {
-        queryParams.append('minBudget', String(currentFilters.minBudget));
+      if (currentFilters.minBudget && !isNaN(parseFloat(currentFilters.minBudget))) {
+        queryParams.append('minBudget', currentFilters.minBudget);
       }
 
-      if (currentFilters.maxBudget !== undefined && currentFilters.maxBudget !== null && currentFilters.maxBudget !== '') {
-        queryParams.append('maxBudget', String(currentFilters.maxBudget));
+      if (currentFilters.maxBudget && !isNaN(parseFloat(currentFilters.maxBudget))) {
+        queryParams.append('maxBudget', currentFilters.maxBudget);
       }
 
       if (currentFilters.urgent === true) {
@@ -198,18 +272,13 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       }
 
       const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
-      console.log('Fetching loads from:', endpoint);
       
       const headers = getAuthHeaders();
-      console.log('Request headers:', headers);
-
       const response = await fetch(endpoint, { 
         method: 'GET', 
         headers,
-        credentials: 'include' // Add credentials for better auth handling
+        credentials: 'include'
       });
-
-      console.log('Fetch response:', response.status, response.statusText);
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -222,7 +291,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           return;
         }
 
-        // Better error handling
         let errorMessage = `Request failed with status ${response.status}`;
         try {
           const errorData = await response.json();
@@ -235,37 +303,36 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       }
 
       const data = await response.json();
-      console.log('Fetch loads response data:', data);
 
       if (data.status === 'success') {
         const loadsData = data.data?.loads || [];
         
-        // FIXED: Ensure each load has a valid status
         const normalizedLoads = loadsData.map(load => ({
           ...load,
-          status: load.status || 'posted', // Default status if missing
-          // Ensure other critical fields exist
+          status: load.status || 'posted',
           title: load.title || 'Untitled Load',
           budget: load.budget || 0,
           createdAt: load.createdAt || new Date().toISOString(),
-          bidCount: load.bidCount || 0
+          bidCount: load.bidCount || 0,
+          isActive: load.isActive !== undefined ? load.isActive : true,
+          weight: load.weight || 0,
+          cargoType: load.cargoType || 'other',
+          vehicleType: load.vehicleType || 'any'
         }));
 
         setLoads(normalizedLoads);
 
         if (data.data?.pagination) {
           setPagination({
-            page: data.data.pagination.currentPage,
+            page: data.data.pagination.currentPage || page,
             limit: data.data.pagination.limit || pagination.limit,
-            total: data.data.pagination.totalLoads,
-            totalPages: data.data.pagination.totalPages
+            total: data.data.pagination.totalLoads || 0,
+            totalPages: data.data.pagination.totalPages || 1
           });
         }
 
-        // FIXED: Set summary data if available
-        if (data.data?.summary) {
-          setSummary(data.data.summary);
-        }
+        // Store this request as the last successful one
+        lastFetchRef.current = requestKey;
 
       } else {
         throw new Error(data.message || 'Failed to fetch loads.');
@@ -275,391 +342,441 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       const errorMessage = err.message || 'Failed to load data. Please try again.';
       setError(errorMessage);
       
-      // Don't clear loads on error unless it's a 401
       if (!err.message?.includes('Session expired')) {
         // Keep existing loads visible with error message
       } else {
         setLoads([]);
+        setPagination({
+          page: 1,
+          limit: 10,
+          total: 0,
+          totalPages: 0
+        });
       }
     } finally {
       setLoading(false);
       setInitialLoading(false);
     }
-  },
-  [filters, sortConfig, pagination.limit, getAuthHeaders, logout, setLoads, setPagination, setSummary, setError, setLoading, setInitialLoading]
-);
+  }, [filters, sortConfig, pagination.limit]);
 
-
-  // Update load status with modal confirmation
+  // Update load status function
   const updateLoadStatus = async () => {
-  try {
-    setLoading(true);
-    setError('');
+    try {
+      setLoading(true);
+      setError('');
 
-    // FIXED: Better validation
-    if (!statusUpdateData.loadId) {
-      throw new Error('Load ID is required');
-    }
-
-    if (!statusUpdateData.newStatus) {
-      throw new Error('New status is required');
-    }
-
-    // Validate that the new status is different from current
-    const currentLoad = loads.find(load => load._id === statusUpdateData.loadId);
-    if (!currentLoad) {
-      throw new Error('Load not found');
-    }
-
-    if (currentLoad.status === statusUpdateData.newStatus) {
-      throw new Error('Load is already in this status');
-    }
-
-    const authHeaders = getAuthHeaders();
-    
-    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
-      throw new Error('Authentication required. Please log in again.');
-    }
-
-    console.log('Updating load status:', {
-      loadId: statusUpdateData.loadId,
-      currentStatus: currentLoad.status,
-      newStatus: statusUpdateData.newStatus,
-      reason: statusUpdateData.reason
-    });
-
-    // FIXED: Ensure proper request body structure
-    const requestBody = {
-      status: statusUpdateData.newStatus,
-      reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
-    };
-
-    console.log('Status update request body:', requestBody);
-
-    const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
-      method: 'PATCH',
-      headers: {
-        ...authHeaders,
-        'Content-Type': 'application/json', // FIXED: Ensure content type is set
-      },
-      credentials: 'include',
-      body: JSON.stringify(requestBody)
-    });
-
-    console.log('Status update response:', response.status, response.statusText);
-
-    // FIXED: Better error handling with detailed messages
-    if (!response.ok) {
-      let errorMessage = 'Failed to update load status';
-      
-      try {
-        const errorData = await response.json();
-        console.log('Error response data:', errorData);
-        
-        if (response.status === 401) {
-          errorMessage = 'Session expired. Please refresh the page and log in again.';
-          setError(errorMessage);
-          // Consider calling logout here if needed
-          return;
-        }
-        
-        if (response.status === 403) {
-          errorMessage = 'You don\'t have permission to update this load status.';
-        } else if (response.status === 400) {
-          // Validation or business logic error
-          errorMessage = errorData.message || 'Invalid status update request';
-        } else if (response.status === 404) {
-          errorMessage = 'Load not found';
-        } else if (response.status >= 500) {
-          errorMessage = 'Server error. Please try again later.';
-        } else {
-          errorMessage = errorData.message || errorMessage;
-        }
-        
-      } catch (parseError) {
-        console.error('Error parsing error response:', parseError);
-        errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
+      if (!statusUpdateData.loadId || !statusUpdateData.newStatus) {
+        throw new Error('Load ID and new status are required');
       }
-      
-      throw new Error(errorMessage);
-    }
 
-    const data = await response.json();
-    console.log('Status update successful:', data);
+      const currentLoad = loads.find(load => load._id === statusUpdateData.loadId);
+      if (!currentLoad) {
+        throw new Error('Load not found');
+      }
 
-    if (data.status === 'success') {
-      // FIXED: Update the load in local state with all relevant data
-      setLoads(prevLoads => 
-        prevLoads.map(load => {
-          if (load._id === statusUpdateData.loadId) {
-            return { 
-              ...load, 
-              status: statusUpdateData.newStatus,
-              updatedAt: new Date().toISOString(),
-              // Update any other fields that might have changed
-              ...(data.data?.load && {
-                statusHistory: data.data.load.statusHistory,
-                isActive: data.data.load.isActive
-              })
-            };
-          }
-          return load;
-        })
-      );
-      
-      // Close modal and reset
-      setShowStatusUpdateModal(false);
-      setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
-      
-      // FIXED: Show success feedback to user
-      const successMessage = `Load status successfully updated to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`;
-      console.log(successMessage);
-      
-      // If you have a success message state, set it here
-      // setSuccessMessage(successMessage);
-      
-      // Optionally refresh the loads list to ensure consistency
-      // await fetchLoads(pagination.page);
-      
-    } else {
-      throw new Error(data.message || 'Failed to update load status');
-    }
+      if (currentLoad.status === statusUpdateData.newStatus) {
+        throw new Error('Load is already in this status');
+      }
 
-  } catch (err) {
-    console.error('Error updating load status:', err);
-    const errorMessage = err.message || 'Failed to update load status';
-    setError(errorMessage);
-    
-    // Keep the modal open so user can try again or see the error
-  } finally {
-    setLoading(false);
-  }
-};
+      const authHeaders = getAuthHeaders();
+      if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+        throw new Error('Authentication required. Please log in again.');
+      }
 
+      const requestBody = {
+        status: statusUpdateData.newStatus,
+        reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
+      };
 
-  // Delete load
-  const deleteLoad = async (loadId) => {
-  if (!loadId) {
-    setError('Load ID is required');
-    return;
-  }
+      const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        credentials: 'include',
+        body: JSON.stringify(requestBody)
+      });
 
-  try {
-    setLoading(true);
-    setError('');
-    
-    const authHeaders = getAuthHeaders();
-    
-    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
-      throw new Error('Authentication required. Please log in again.');
-    }
-
-    console.log('Deleting load:', loadId);
-    
-    const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-      credentials: 'include'
-    });
-
-    console.log('Delete response:', response.status, response.statusText);
-
-    if (!response.ok) {
-      let errorMessage = 'Failed to delete load';
-      
-      try {
-        const errorData = await response.json();
-        console.log('Delete error response:', errorData);
+      if (!response.ok) {
+        let errorMessage = 'Failed to update load status';
         
-        if (response.status === 401) {
-          errorMessage = 'Session expired. Please log in again.';
-          logout();
-          return;
-        } else if (response.status === 403) {
-          errorMessage = 'You don\'t have permission to delete this load.';
-        } else if (response.status === 404) {
-          errorMessage = 'Load not found or already deleted.';
-        } else if (response.status === 400) {
-          errorMessage = errorData.message || 'Cannot delete load in current status.';
-        } else {
-          errorMessage = errorData.message || errorMessage;
-        }
-        
-      } catch (parseError) {
-        console.error('Error parsing delete error response:', parseError);
         try {
-          const errorText = await response.text();
-          errorMessage = errorText || errorMessage;
-        } catch (textError) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
+          const errorData = await response.json();
+          if (response.status === 401) {
+            errorMessage = 'Session expired. Please refresh the page and log in again.';
+            logout();
+            return;
+          } else if (response.status === 403) {
+            errorMessage = 'You don\'t have permission to update this load status.';
+          } else if (response.status === 400) {
+            errorMessage = errorData.message || 'Invalid status update request';
+          } else if (response.status === 404) {
+            errorMessage = 'Load not found';
+          } else {
+            errorMessage = errorData.message || errorMessage;
+          }
+        } catch (parseError) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
         }
+        
+        throw new Error(errorMessage);
       }
-      
-      throw new Error(errorMessage);
+
+      const data = await response.json();
+
+      if (data.status === 'success') {
+        // Update the load in local state
+        setLoads(prevLoads => 
+          prevLoads.map(load => {
+            if (load._id === statusUpdateData.loadId) {
+              return { 
+                ...load, 
+                status: statusUpdateData.newStatus,
+                updatedAt: new Date().toISOString(),
+                isActive: ['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit'].includes(statusUpdateData.newStatus),
+                ...(data.data?.load && {
+                  statusHistory: data.data.load.statusHistory
+                })
+              };
+            }
+            return load;
+          })
+        );
+        
+        // Close modal and reset
+        setShowStatusUpdateModal(false);
+        setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
+        
+      } else {
+        throw new Error(data.message || 'Failed to update load status');
+      }
+
+    } catch (err) {
+      console.error('Error updating load status:', err);
+      setError(err.message || 'Failed to update load status');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete load function
+  const deleteLoad = async (loadId) => {
+    if (!loadId) {
+      setError('Load ID is required');
+      return;
     }
 
-    const data = await response.json();
-    console.log('Delete successful:', data);
-    
-    if (data.status === 'success') {
-      // FIXED: Update local state properly
-      setLoads(prevLoads => prevLoads.filter(load => load._id !== loadId));
+    try {
+      setLoading(true);
+      setError('');
       
-      // FIXED: Update selected loads if using selection
-      if (setSelectedLoads) {
+      const authHeaders = getAuthHeaders();
+      if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+        throw new Error('Authentication required. Please log in again.');
+      }
+
+      const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete load';
+        
+        try {
+          const errorData = await response.json();
+          if (response.status === 401) {
+            errorMessage = 'Session expired. Please log in again.';
+            logout();
+            return;
+          } else if (response.status === 403) {
+            errorMessage = 'You don\'t have permission to delete this load.';
+          } else if (response.status === 404) {
+            errorMessage = 'Load not found or already deleted.';
+          } else if (response.status === 400) {
+            errorMessage = errorData.message || 'Cannot delete load in current status.';
+          } else {
+            errorMessage = errorData.message || errorMessage;
+          }
+        } catch (parseError) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      if (data.status === 'success') {
+        // Update local state
+        setLoads(prevLoads => prevLoads.filter(load => load._id !== loadId));
         setSelectedLoads(prev => {
           const newSet = new Set(prev);
           newSet.delete(loadId);
           return newSet;
         });
-      }
-      
-      // FIXED: Update pagination if needed
-      const newTotal = Math.max(0, pagination.total - 1);
-      const newTotalPages = Math.ceil(newTotal / pagination.limit);
-      
-      // If we're on the last page and it becomes empty, go to previous page
-      if (pagination.page > 1 && pagination.page > newTotalPages) {
-        const newPage = Math.max(1, newTotalPages);
-        await fetchLoads(newPage);
-      } else {
-        // Update pagination count
-        setPagination(prev => ({
-          ...prev,
-          total: newTotal,
-          totalPages: newTotalPages
-        }));
-      }
-      
-      console.log('Load deleted successfully');
-      
-    } else {
-      throw new Error(data.message || 'Failed to delete load');
-    }
-    
-  } catch (err) {
-    console.error('Error deleting load:', err);
-    const errorMessage = err.message || 'Failed to delete load';
-    setError(errorMessage);
-  } finally {
-    setLoading(false);
-  }
-};
-
-//Edit Load Details
-const updateLoad = async (loadId, updateData) => {
-  if (!loadId) {
-    setError('Load ID is required');
-    return false;
-  }
-
-  try {
-    setLoading(true);
-    setError('');
-    
-    const authHeaders = getAuthHeaders();
-    
-    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
-      throw new Error('Authentication required. Please log in again.');
-    }
-
-    console.log('Updating load:', loadId, updateData);
-    
-    const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
-      method: 'PUT',
-      headers: {
-        ...authHeaders,
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(updateData)
-    });
-
-    console.log('Update response:', response.status, response.statusText);
-
-    if (!response.ok) {
-      let errorMessage = 'Failed to update load';
-      
-      try {
-        const errorData = await response.json();
-        console.log('Update error response:', errorData);
         
-        if (response.status === 401) {
-          errorMessage = 'Session expired. Please log in again.';
-          logout();
-          return false;
-        } else if (response.status === 403) {
-          errorMessage = 'You don\'t have permission to update this load.';
-        } else if (response.status === 400) {
-          // Validation errors
-          if (errorData.errors && Array.isArray(errorData.errors)) {
-            errorMessage = errorData.errors.map(err => err.message || err.msg).join(', ');
-          } else {
-            errorMessage = errorData.message || 'Invalid update data.';
-          }
-        } else if (response.status === 404) {
-          errorMessage = 'Load not found.';
+        // Update pagination
+        const newTotal = Math.max(0, pagination.total - 1);
+        const newTotalPages = Math.ceil(newTotal / pagination.limit);
+        
+        if (pagination.page > 1 && pagination.page > newTotalPages) {
+          fetchLoads(Math.max(1, newTotalPages), null, true);
         } else {
-          errorMessage = errorData.message || errorMessage;
+          setPagination(prev => ({
+            ...prev,
+            total: newTotal,
+            totalPages: newTotalPages
+          }));
         }
         
-      } catch (parseError) {
-        console.error('Error parsing update error response:', parseError);
-        errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
+      } else {
+        throw new Error(data.message || 'Failed to delete load');
       }
       
-      throw new Error(errorMessage);
+    } catch (err) {
+      console.error('Error deleting load:', err);
+      setError(err.message || 'Failed to delete load');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Update load function
+  const updateLoad = async (loadId, updateData) => {
+    if (!loadId) {
+      setError('Load ID is required');
+      return false;
     }
 
-    const data = await response.json();
-    console.log('Update successful:', data);
-    
-    if (data.status === 'success' && data.data?.load) {
-      // Update the load in local state
-      setLoads(prevLoads => 
-        prevLoads.map(load => 
-          load._id === loadId ? { ...load, ...data.data.load } : load
-        )
-      );
+    try {
+      setIsEditSubmitting(true);
+      setError('');
       
-      console.log('Load updated successfully');
-      return true;
+      const authHeaders = getAuthHeaders();
+      if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+        throw new Error('Authentication required. Please log in again.');
+      }
+
+      const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
+        method: 'PUT',
+        headers: authHeaders,
+        credentials: 'include',
+        body: JSON.stringify(updateData)
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to update load';
+        
+        try {
+          const errorData = await response.json();
+          if (response.status === 401) {
+            errorMessage = 'Session expired. Please log in again.';
+            logout();
+            return false;
+          } else if (response.status === 403) {
+            errorMessage = 'You don\'t have permission to update this load.';
+          } else if (response.status === 400) {
+            if (errorData.errors && Array.isArray(errorData.errors)) {
+              errorMessage = errorData.errors.map(err => err.message || err.msg).join(', ');
+            } else {
+              errorMessage = errorData.message || 'Invalid update data.';
+            }
+          } else if (response.status === 404) {
+            errorMessage = 'Load not found.';
+          } else {
+            errorMessage = errorData.message || errorMessage;
+          }
+        } catch (parseError) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      if (data.status === 'success' && data.data?.load) {
+        // Update the load in local state
+        setLoads(prevLoads => 
+          prevLoads.map(load => 
+            load._id === loadId ? { ...load, ...data.data.load } : load
+          )
+        );
+        
+        return true;
+      } else {
+        throw new Error(data.message || 'Failed to update load');
+      }
       
-    } else {
-      throw new Error(data.message || 'Failed to update load');
+    } catch (err) {
+      console.error('Error updating load:', err);
+      setError(err.message || 'Failed to update load');
+      return false;
+    } finally {
+      setIsEditSubmitting(false);
     }
+  };
+
+  // Edit Load Modal Functions
+  const openEditModal = (load) => {
+    setEditingLoad(load);
+    setEditFormData({
+      title: load.title || '',
+      description: load.description || '',
+      cargoType: load.cargoType || '',
+      weight: load.weight ? String(load.weight) : '',
+      pickupLocation: load.pickupLocation?.address || load.pickupLocation || '',
+      deliveryLocation: load.deliveryLocation?.address || load.deliveryLocation || '',
+      pickupDate: load.pickupDate ? new Date(load.pickupDate).toISOString().slice(0, 16) : '',
+      deliveryDate: load.deliveryDate ? new Date(load.deliveryDate).toISOString().slice(0, 16) : '',
+      budget: load.budget ? String(load.budget) : '',
+      vehicleType: load.vehicleType || '',
+      specialRequirements: load.specialRequirements || '',
+      isUrgent: load.isUrgent || load.urgent || false,
+      contactPhone: load.contactPhone || '',
+      contactEmail: load.contactEmail || ''
+    });
+    setEditFormErrors({});
+    setShowEditModal(true);
+  };
+
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setEditingLoad(null);
+    setEditFormData({
+      title: '',
+      description: '',
+      cargoType: '',
+      weight: '',
+      pickupLocation: '',
+      deliveryLocation: '',
+      pickupDate: '',
+      deliveryDate: '',
+      budget: '',
+      vehicleType: '',
+      specialRequirements: '',
+      isUrgent: false,
+      contactPhone: '',
+      contactEmail: ''
+    });
+    setEditFormErrors({});
+  };
+
+  const validateEditForm = () => {
+    const errors = {};
+
+    if (!editFormData.title?.trim()) {
+      errors.title = 'Load title is required';
+    }
+
+    if (!editFormData.cargoType) {
+      errors.cargoType = 'Cargo type is required';
+    }
+
+    if (!editFormData.weight || isNaN(parseFloat(editFormData.weight)) || parseFloat(editFormData.weight) <= 0) {
+      errors.weight = 'Weight must be a positive number';
+    }
+
+    if (!editFormData.pickupLocation?.trim()) {
+      errors.pickupLocation = 'Pickup location is required';
+    }
+
+    if (!editFormData.deliveryLocation?.trim()) {
+      errors.deliveryLocation = 'Delivery location is required';
+    }
+
+    if (!editFormData.pickupDate) {
+      errors.pickupDate = 'Pickup date is required';
+    }
+
+    if (!editFormData.deliveryDate) {
+      errors.deliveryDate = 'Delivery date is required';
+    } else if (editFormData.pickupDate && new Date(editFormData.deliveryDate) <= new Date(editFormData.pickupDate)) {
+      errors.deliveryDate = 'Delivery date must be after pickup date';
+    }
+
+    if (!editFormData.budget || isNaN(parseFloat(editFormData.budget)) || parseFloat(editFormData.budget) <= 0) {
+      errors.budget = 'Budget must be a positive number';
+    }
+
+    if (!editFormData.vehicleType) {
+      errors.vehicleType = 'Vehicle type is required';
+    }
+
+    return errors;
+  };
+
+  const handleEditFormChange = (field, value) => {
+    setEditFormData(prev => ({ ...prev, [field]: value }));
     
-  } catch (err) {
-    console.error('Error updating load:', err);
-    const errorMessage = err.message || 'Failed to update load';
-    setError(errorMessage);
-    return false;
-  } finally {
-    setLoading(false);
-  }
-};
+    if (editFormErrors[field]) {
+      setEditFormErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[field];
+        return newErrors;
+      });
+    }
+  };
+
+  const handleEditFormSubmit = async (e) => {
+    e.preventDefault();
+    
+    const errors = validateEditForm();
+    if (Object.keys(errors).length > 0) {
+      setEditFormErrors(errors);
+      return;
+    }
+
+    if (!editingLoad) {
+      setError('No load selected for editing');
+      return;
+    }
+
+    const updateData = {
+      title: editFormData.title.trim(),
+      description: editFormData.description.trim(),
+      cargoType: editFormData.cargoType,
+      weight: parseFloat(editFormData.weight),
+      pickupLocation: editFormData.pickupLocation.trim(),
+      deliveryLocation: editFormData.deliveryLocation.trim(),
+      pickupDate: new Date(editFormData.pickupDate).toISOString(),
+      deliveryDate: new Date(editFormData.deliveryDate).toISOString(),
+      budget: parseFloat(editFormData.budget),
+      vehicleType: editFormData.vehicleType,
+      specialRequirements: editFormData.specialRequirements.trim(),
+      isUrgent: editFormData.isUrgent,
+      contactPhone: editFormData.contactPhone.trim(),
+      contactEmail: editFormData.contactEmail.trim()
+    };
+
+    const success = await updateLoad(editingLoad._id, updateData);
+    
+    if (success) {
+      closeEditModal();
+    }
+  };
 
   // Initial data loading
   useEffect(() => {
-    const initializeData = async () => {
-      await Promise.all([
-        fetchUserProfile(),
-        fetchLoads(1)
-      ]);
-    };
-
-    initializeData();
+    fetchUserProfile();
+    fetchLoads(1, null, true);
   }, []);
 
-  // Refetch when filters or sort changes with debounce
+  //  Better debounced filter/sort effect
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (!initialLoading) { 
-        fetchLoads(1);
-      }
+    if (initialLoading) return;
+
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
+    }
+
+    fetchTimeoutRef.current = setTimeout(() => {
+      fetchLoads(1, null, true);
     }, 500);
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+    };
   }, [filters, sortConfig]);
 
   // Close dropdown when clicking outside
@@ -674,9 +791,18 @@ const updateLoad = async (loadId, updateData) => {
     return () => document.removeEventListener('click', handleClickOutside);
   }, []);
 
+  // Cleanup effect
+  useEffect(() => {
+    return () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Utility functions
   const getStatusColor = (status) => {
-    return statusConfig[status]?.color || 'bg-gray-100 text-gray-800';
+    return statusConfig[status]?.color || 'bg-gray-100 text-gray-800 border-gray-200';
   };
 
   const getStatusIcon = (status) => {
@@ -684,7 +810,7 @@ const updateLoad = async (loadId, updateData) => {
   };
 
   const getStatusLabel = (status) => {
-    return statusConfig[status]?.label || status?.replace('_', ' ').toUpperCase();
+    return statusConfig[status]?.label || status?.replace(/_/g, ' ').toUpperCase();
   };
 
   const getAvailableStatusTransitions = (currentStatus) => {
@@ -715,12 +841,15 @@ const updateLoad = async (loadId, updateData) => {
     }
   };
 
+  // Permission functions
   const canEditLoad = (load) => {
-    return ['posted','available', 'receiving_bids', 'not_available'].includes(load.status);
+    const editableStatuses = ['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned'];
+    return editableStatuses.includes(load.status);
   };
 
   const canDeleteLoad = (load) => {
-    return ['posted','available', 'receiving_bids', 'not_available'].includes(load.status);
+    const deletableStatuses = ['posted', 'available', 'receiving_bids', 'not_available', 'cancelled', 'expired'];
+    return deletableStatuses.includes(load.status);
   };
 
   const canChangeStatus = (load) => {
@@ -737,23 +866,14 @@ const updateLoad = async (loadId, updateData) => {
   };
 
   const handleEditLoad = (load) => {
-  if (!canEditLoad(load)) {
-    setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
-    return;
-  }
-
-  // Call the parent's onEditLoad function if provided
-  if (onEditLoad) {
-    onEditLoad(load._id); // Pass the load ID to the parent
-  } else {
-    // Fallback behavior if no parent handler
-    console.warn('No onEditLoad handler provided');
-  }
-};
-  const onRefresh = () => {
-    fetchLoads(pagination.page);
+    if (!canEditLoad(load)) {
+      setError(`Cannot edit load with status: ${getStatusLabel(load.status)}`);
+      return;
+    }
+    openEditModal(load);
   };
 
+  
   const handleBulkAction = async (action) => {
     if (selectedLoads.size === 0) {
       setError('Please select at least one load.');
@@ -847,7 +967,7 @@ const updateLoad = async (loadId, updateData) => {
 
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= pagination.totalPages && !loading) {
-      fetchLoads(newPage);
+      fetchLoads(newPage, null, true);
     }
   };
 
@@ -878,7 +998,7 @@ const updateLoad = async (loadId, updateData) => {
   const clearFilters = () => {
     setFilters({
       search: '',
-      status: '',
+      status: 'all',
       minBudget: '',
       maxBudget: '',
       pickupDate: '',
@@ -887,343 +1007,61 @@ const updateLoad = async (loadId, updateData) => {
     });
   };
 
-  // Improved Status dropdown component with better mobile responsiveness
-  const StatusDropdown = ({ load }) => {
-    const availableTransitions = getAvailableStatusTransitions(load.status);
-    const isOpen = dropdownOpenId === load._id;
-
-    if (availableTransitions.length === 0) {
-      return null;
-    }
-
+  // Main component render
+  if (initialLoading) {
     return (
-      <div className="relative dropdown-container">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setDropdownOpenId(isOpen ? null : load._id);
-          }}
-          className="inline-flex items-center justify-center w-8 h-8 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={loading}
-          title="Update Status"
-        >
-          <MoreVertical className="h-4 w-4" />
-        </button>
-        
-        {isOpen && (
-          <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-64 overflow-y-auto">
-            <div className="py-1">
-              <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                Change Status
-              </div>
-              <div className="p-1 space-y-1">
-                {availableTransitions.map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => handleUpdateLoadStatus(load._id, status)}
-                    className="w-full flex items-center px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-50 rounded-md transition-colors focus:outline-none focus:bg-gray-50"
-                    disabled={loading}
-                  >
-                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)} flex-shrink-0`}>
-                      {getStatusIcon(status)}
-                      {getStatusLabel(status)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  
-
-  // Separate Status Change Dropdown for loads that only have status changes available
-  const StatusChangeDropdown = ({ load }) => {
-    const availableTransitions = getAvailableStatusTransitions(load.status);
-    const isOpen = dropdownOpenId === `status-${load._id}`;
-
-    if (availableTransitions.length === 0) {
-      return null;
-    }
-
-    // Show remaining options (after first 3)
-    const remainingTransitions = availableTransitions.slice(3);
-
-    return (
-      <div className="relative dropdown-container">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setDropdownOpenId(isOpen ? null : `status-${load._id}`);
-          }}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-gray-600 border border-gray-300 hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={loading}
-          title="More status options"
-        >
-          <Settings className="h-3 w-3" />
-          More...
-        </button>
-        
-        {isOpen && (
-          <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-            <div className="py-1">
-              <div className="px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-100">
-                More Options
-              </div>
-              <div className="p-1 space-y-1">
-                {remainingTransitions.map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => {
-                      handleUpdateLoadStatus(load._id, status);
-                      setDropdownOpenId(null);
-                    }}
-                    className="w-full flex items-center px-3 py-2 text-sm text-left text-gray-700 hover:bg-gray-50 rounded-md transition-colors focus:outline-none focus:bg-gray-50"
-                    disabled={loading}
-                  >
-                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(status)} flex-shrink-0`}>
-                      {getStatusIcon(status)}
-                      {getStatusLabel(status)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Status Update Modal
-  const StatusUpdateModal = () => {
-    if (!showStatusUpdateModal) return null;
-
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-lg max-w-md w-full p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Update Load Status</h3>
-            <button
-              onClick={() => setShowStatusUpdateModal(false)}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <X className="h-6 w-6" />
-            </button>
-          </div>
-
-          <div className="mb-4">
-            <p className="text-sm text-gray-600 mb-2">
-              Change status to:
-            </p>
-            <span className={`inline-flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium ${getStatusColor(statusUpdateData.newStatus)}`}>
-              {getStatusIcon(statusUpdateData.newStatus)}
-              {getStatusLabel(statusUpdateData.newStatus)}
-            </span>
-          </div>
-
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Reason (optional)
-            </label>
-            <textarea
-              value={statusUpdateData.reason}
-              onChange={(e) => setStatusUpdateData(prev => ({ ...prev, reason: e.target.value }))}
-              rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-              placeholder="Enter reason for status change..."
-            />
-          </div>
-
-          <div className="flex items-center justify-end space-x-4">
-            <button
-              onClick={() => setShowStatusUpdateModal(false)}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
-              disabled={loading}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={updateLoadStatus}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Updating...
-                </>
-              ) : (
-                <>
-                  <Save className="h-4 w-4" />
-                  Update Status
-                </>
-              )}
-            </button>
-          </div>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
+          <p className="text-gray-600">Loading your loads...</p>
         </div>
       </div>
     );
-  };
+  }
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* Error Display */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex items-start">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-2 mt-0.5 flex-shrink-0" />
-            <span className="text-red-800 flex-1">{error}</span>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">My Loads</h1>
+            <p className="text-gray-600 mt-1">
+              Manage your cargo shipments and track their status
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
             <button
               onClick={() => setError('')}
-              className="ml-2 text-red-600 hover:text-red-800 flex-shrink-0"
+              className="ml-auto text-red-600 hover:text-red-800"
             >
-              <XCircle className="h-4 w-4" />
+              <X className="h-4 w-4" />
             </button>
           </div>
         </div>
-      )}
-
-      {/* Header */}
-      <div className="space-y-2 sm:space-y-4">
-        <div>
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900">My Loads</h2>
-          <p className="text-gray-600 text-sm sm:text-base">Manage and track your freight loads</p>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-          <div className="flex-1">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4 sm:h-5 sm:w-5" />
-              <input
-                type="text"
-                placeholder="Search loads by title, pickup, or delivery location..."
-                value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                className="pl-9 sm:pl-10 pr-4 py-2 sm:py-2.5 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
-              />
-            </div>
-          </div>
-          
-          <div className="flex gap-2 sm:gap-3">
-            <select
-              value={filters.status}
-              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-              className="px-3 sm:px-4 py-2 sm:py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base min-w-0 flex-1 sm:flex-initial"
-            >
-              <option value="">All Status</option>
-              <option value="posted">Posted</option>
-              <option value="receiving_bids">Receiving Bids</option>
-              <option value="driver_assigned">Driver Assigned</option>
-              <option value="assigned">Assigned</option>
-              <option value="in_transit">In Transit</option>
-              <option value="on_hold">On Hold</option>
-              <option value="delivered">Delivered</option>
-              <option value="completed">Completed</option>
-              <option value="not_available">Not Available</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-
-            <button
-              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-              className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition-colors text-sm sm:text-base whitespace-nowrap ${
-                showAdvancedFilters 
-                  ? 'bg-blue-100 text-blue-700 border border-blue-200' 
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-              }`}
-            >
-              <Filter className="h-4 w-4" />
-              <span className="hidden sm:inline">Filters</span>
-            </button>
-
-            <button
-              onClick={onRefresh}
-              className="px-3 sm:px-4 py-2 sm:py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-2 transition-colors text-sm sm:text-base"
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Advanced Filters */}
-        {showAdvancedFilters && (
-          <div className="bg-gray-50 rounded-lg p-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Min Budget (KES)</label>
-                <input
-                  type="number"
-                  value={filters.minBudget}
-                  onChange={(e) => setFilters({ ...filters, minBudget: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
-                  placeholder="999999"
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget (KES)</label>
-                <input
-                  type="number"
-                  value={filters.maxBudget}
-                  onChange={(e) => setFilters({ ...filters, maxBudget: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base"
-                  placeholder="999999"
-                  min="0"
-                />
-              </div>
-              <div className="flex items-center pt-6">
-                <input
-                  type="checkbox"
-                  id="urgent"
-                  checked={filters.urgent}
-                  onChange={(e) => setFilters({ ...filters, urgent: e.target.checked })}
-                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                />
-                <label htmlFor="urgent" className="ml-2 text-sm font-medium text-gray-700">
-                  Urgent loads only
-                </label>
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <button
-                onClick={clearFilters}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                Clear All Filters
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
+      
       {/* Bulk Actions */}
       {selectedLoads.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 sm:p-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <span className="text-blue-700 font-medium text-sm sm:text-base">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-blue-800">
               {selectedLoads.size} load{selectedLoads.size !== 1 ? 's' : ''} selected
-            </span>
-            <div className="flex gap-2">
+            </p>
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => handleBulkAction('export')}
-                className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
+                disabled={loading}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
               >
-                <Download className="h-3 w-3" />
-                Export CSV
+                <Download className="h-4 w-4" />
+                Export
               </button>
               <button
                 onClick={() => handleBulkAction('cancel')}
-                className="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
+                disabled={loading}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
               >
-                <Ban className="h-3 w-3" />
+                <Ban className="h-4 w-4" />
                 Cancel Selected
               </button>
             </div>
@@ -1231,437 +1069,368 @@ const updateLoad = async (loadId, updateData) => {
         </div>
       )}
 
-      {/* Sort Controls */}
-      <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-sm">
-        <span className="text-gray-700 font-medium">Sort by:</span>
-        {[
-          { key: 'createdAt', label: 'Date Created' },
-          { key: 'budget', label: 'Budget' },
-          { key: 'pickupDate', label: 'Pickup Date' },
-          { key: 'status', label: 'Status' }
-        ].map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => handleSort(key)}
-            className="flex items-center gap-1 text-blue-600 hover:text-blue-700 transition-colors whitespace-nowrap"
-          >
-            {label}
-            {sortConfig.key === key && (
-              sortConfig.direction === 'asc' ? <SortAsc className="h-3 w-3" /> : <SortDesc className="h-3 w-3" />
-            )}
-          </button>
-        ))}
-      </div>
+      {/* Loads List */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        {/* Table Header */}
+        <div className="px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={loads.length > 0 && selectedLoads.size === loads.length}
+                  onChange={selectAllLoads}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="ml-2 text-sm text-gray-700">
+                  Select all ({loads.length})
+                </span>
+              </label>
+            </div>
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <span>Sort by:</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => handleSort('createdAt')}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    sortConfig.key === 'createdAt' 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  Date
+                  {sortConfig.key === 'createdAt' && (
+                    sortConfig.direction === 'asc' ? 
+                      <SortAsc className="h-3 w-3" /> : 
+                      <SortDesc className="h-3 w-3" />
+                  )}
+                </button>
+                <button
+                  onClick={() => handleSort('budget')}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    sortConfig.key === 'budget' 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  Budget
+                  {sortConfig.key === 'budget' && (
+                    sortConfig.direction === 'asc' ? 
+                      <SortAsc className="h-3 w-3" /> : 
+                      <SortDesc className="h-3 w-3" />
+                  )}
+                </button>
+                <button
+                  onClick={() => handleSort('status')}
+                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                    sortConfig.key === 'status' 
+                      ? 'bg-blue-100 text-blue-700' 
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  Status
+                  {sortConfig.key === 'status' && (
+                    sortConfig.direction === 'asc' ? 
+                      <SortAsc className="h-3 w-3" /> : 
+                      <SortDesc className="h-3 w-3" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      {/* Loads Display */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        {initialLoading ? (
+        {/* Loads List Content */}
+        {loading && loads.length === 0 ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-            <span className="ml-2 text-gray-600">Loading your loads...</span>
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
+              <p className="text-gray-600">Loading loads...</p>
+            </div>
           </div>
         ) : loads.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 px-4">
-            <Package className="h-16 w-16 text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2 text-center">No loads found</h3>
-            <p className="text-gray-500 mb-6 text-center max-w-md text-sm sm:text-base">
-              {Object.values(filters).some(filter => filter && filter !== false)
-                ? 'No loads match your current filters. Try adjusting your search criteria.'
-                : 'You haven\'t posted any loads yet.'
-              }
+          <div className="text-center py-12">
+            <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
+            <p className="text-gray-600 mb-4">
+              You haven't posted any loads yet or no loads match your current filters.
             </p>
-            {Object.values(filters).some(filter => filter && filter !== false) && (
+            {onPostLoad && (
               <button
-                onClick={clearFilters}
-                className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+                onClick={onPostLoad}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
               >
-                Clear Filters
+                <Package className="h-4 w-4" />
+                Post Your First Load
               </button>
             )}
           </div>
         ) : (
-          <>
-            {/* Desktop Table View */}
-            <div className="hidden lg:block overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left">
+          <div className="divide-y divide-gray-200">
+            {loads.map((load) => (
+              <div key={load._id} className="p-6 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-4">
+                    {/* Checkbox */}
+                    <label className="flex items-center mt-1">
                       <input
                         type="checkbox"
-                        checked={selectedLoads.size === loads.length && loads.length > 0}
-                        onChange={selectAllLoads}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        checked={selectedLoads.has(load._id)}
+                        onChange={() => toggleLoadSelection(load._id)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Load Details
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Route
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Budget & Bids
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Dates
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {loads.map((load) => (
-                    <tr key={load._id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedLoads.has(load._id)}
-                          onChange={() => toggleLoadSelection(load._id)}
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                        />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-start space-x-3">
-                          <div className="flex-shrink-0">
-                            {load.isUrgent || load.urgent ? (
-                              <div className="relative">
-                                <Package className="h-6 w-6 text-gray-400" />
-                                <Zap className="h-3 w-3 text-red-500 absolute -top-1 -right-1" />
-                              </div>
-                            ) : (
-                              <Package className="h-6 w-6 text-gray-400" />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-900 truncate">
-                              {load.title}
-                            </p>
-                            {load.description && (
-                              <p className="text-sm text-gray-500 truncate max-w-xs">
-                                {load.description}
-                              </p>
-                            )}
-                            <div className="flex items-center mt-1 text-xs text-gray-500">
-                              <span>{load?.weight} kg</span>
-                              <span className="mx-1">•</span>
-                              <span className="capitalize">{load?.cargoType?.replace('_', ' ')}</span>
-                              <span className="mx-1">•</span>
-                              <span className="capitalize">{load?.vehicleType?.replace('_', ' ')}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm space-y-1">
-                          <div className="flex items-center text-gray-900">
-                            <MapPin className="h-3 w-3 text-green-500 mr-1 flex-shrink-0" />
-                            <span className="truncate max-w-32" title={load.pickupLocation?.address || load.pickupAddress || load.pickupLocation}>
-                              {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation}
-                            </span>
-                          </div>
-                          <div className="flex items-center text-gray-500">
-                            <ArrowRight className="h-3 w-3 mr-1 flex-shrink-0" />
-                            <span className="truncate max-w-32" title={load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation}>
-                              {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation}
-                            </span>
-                          </div>
-                          {load.distance && (
-                            <div className="text-xs text-gray-400">
-                              ~{load.distance} km
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm">
-                          <div className="font-medium text-gray-900 mb-1">
-                            {formatCurrency(load.budget)}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {load.bidCount || 0} bid{(load.bidCount || 0) !== 1 ? 's' : ''}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="space-y-1">
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
-                            {getStatusIcon(load.status)}
-                            {getStatusLabel(load.status)}
-                          </span>
-                          {load.assignedDriver && (
-                            <div className="text-xs text-gray-500">
-                              Driver: {load.assignedDriver.name}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        <div className="space-y-1">
-                          <div className="flex items-center">
-                            <Calendar className="h-3 w-3 mr-1 flex-shrink-0" />
-                            <span className="text-xs">Pickup: {formatDate(load.pickupDate)}</span>
-                          </div>
-                          <div className="flex items-center">
-                            <Clock className="h-3 w-3 mr-1 flex-shrink-0" />
-                            <span className="text-xs">Delivery: {formatDate(load.deliveryDate)}</span>
-                          </div>
-                          {load.daysActive !== undefined && (
-                            <div className="text-xs text-gray-400">
-                              Posted {load.daysActive} day{load.daysActive !== 1 ? 's' : ''} ago
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => handleViewDetails(load._id)}
-                            className="text-blue-600 hover:text-blue-700 p-1 hover:bg-blue-50 rounded"
-                            title="View Details"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                          {canEditLoad(load) && (
-                            <button
-                              onClick={() => handleEditLoad(load)}
-                              className="text-yellow-600 hover:text-yellow-700 p-1 hover:bg-yellow-50 rounded"
-                              title="Edit Load"
-                            >
-                              <Edit2 className="h-4 w-4" />
-                            </button>
-                          )}
-                          {canDeleteLoad(load) && (
-                            <button
-                              onClick={() => handleDeleteLoad(load._id)}
-                              className="text-red-600 hover:text-red-700 p-1 hover:bg-red-50 rounded"
-                              title="Delete Load"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                          {canChangeStatus(load) && <StatusDropdown load={load} />}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    </label>
 
-            {/* Mobile Card View */}
-            <div className="lg:hidden">
-              <div className="space-y-3 p-3 sm:p-4">
-                {loads.map((load) => (
-                  <div key={load._id} className="border border-gray-200 rounded-lg p-4 space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start space-x-3 flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={selectedLoads.has(load._id)}
-                          onChange={() => toggleLoadSelection(load._id)}
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-1 flex-shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
+                    {/* Load Info */}
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <h3 className="text-lg font-semibold text-gray-900 mb-1">
+                            {load.title}
+                            {load.isUrgent && (
+                              <span className="ml-2 inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                                <Zap className="h-3 w-3" />
+                                Urgent
+                              </span>
+                            )}
+                          </h3>
                           <div className="flex items-center gap-2 mb-2">
-                            {load.isUrgent || load.urgent ? (
-                              <div className="relative flex-shrink-0">
-                                <Package className="h-5 w-5 text-gray-400" />
-                                <Zap className="h-3 w-3 text-red-500 absolute -top-1 -right-1" />
-                              </div>
-                            ) : (
-                              <Package className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(load.status)}`}>
+                              {getStatusIcon(load.status)}
+                              {getStatusLabel(load.status)}
+                            </span>
+                            {load.bidCount > 0 && (
+                              <span className="text-sm text-gray-600">
+                                {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
+                              </span>
                             )}
-                            <h3 className="font-medium text-gray-900 truncate">{load.title}</h3>
                           </div>
-                          
-                          {load.description && (
-                            <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-                              {load.description}
-                            </p>
-                          )}
-
-                          <div className="space-y-2 mb-3">
-                            <div className="flex items-center text-sm">
-                              <MapPin className="h-4 w-4 text-green-500 mr-2 flex-shrink-0" />
-                              <span className="text-gray-900 truncate">
-                                {load.pickupLocation?.address || load.pickupAddress || load.pickupLocation}
-                              </span>
-                            </div>
-                            <div className="flex items-center text-sm">
-                              <ArrowRight className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                              <span className="text-gray-600 truncate">
-                                {load.deliveryLocation?.address || load.deliveryAddress || load.deliveryLocation}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap gap-1 text-xs text-gray-500 mb-3">
-                            <span className="bg-gray-100 px-2 py-1 rounded">{load.weight} kg</span>
-                            <span className="bg-gray-100 px-2 py-1 rounded capitalize">{load.cargoType?.replace('_', ' ')}</span>
-                            <span className="bg-gray-100 px-2 py-1 rounded capitalize">{load.vehicleType?.replace('_', ' ')}</span>
-                          </div>
-
-                          {/* Status Change Buttons - Prominently displayed */}
-                          {canChangeStatus(load) && (
-                            <div className="mb-3">
-                              <div className="text-xs font-medium text-gray-500 mb-2">Quick Status Change:</div>
-                              <div className="flex flex-wrap gap-1">
-                                {getAvailableStatusTransitions(load.status).slice(0, 3).map((status) => (
-                                  <button
-                                    key={status}
-                                    onClick={() => handleUpdateLoadStatus(load._id, status)}
-                                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${getStatusColor(status)} hover:opacity-80`}
-                                    disabled={loading}
-                                  >
-                                    {getStatusIcon(status)}
-                                    {getStatusLabel(status)}
-                                  </button>
-                                ))}
-                                {getAvailableStatusTransitions(load.status).length > 3 && (
-                                  <StatusChangeDropdown load={load} />
-                                )}
-                              </div>
-                            </div>
-                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xl font-bold text-gray-900">{formatCurrency(load.budget)}</p>
+                          <p className="text-sm text-gray-600">{load.weight} kg</p>
                         </div>
                       </div>
 
-                      <div className="flex flex-col items-end space-y-2 flex-shrink-0 ml-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(load.status)}`}>
-                          {getStatusIcon(load.status)}
-                          <span className="hidden sm:inline">{getStatusLabel(load.status)}</span>
-                        </span>
-                        <div className="text-sm font-medium text-gray-900">
-                          {formatCurrency(load.budget)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {load.bidCount || 0} bid{(load.bidCount || 0) !== 1 ? 's' : ''}
-                        </div>
-                      </div>
-                    </div>
+                      {/* Description */}
+                      {load.description && (
+                        <p className="text-gray-700 mb-3 line-clamp-2">{load.description}</p>
+                      )}
 
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <div className="text-xs text-gray-500 space-y-1">
-                        <div className="flex items-center">
-                          <Calendar className="h-3 w-3 mr-1" />
-                          Pickup: {formatDate(load.pickupDate)}
+                      {/* Route and Details */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <MapPin className="h-4 w-4 flex-shrink-0" />
+                          <span className="truncate">
+                            {typeof load.pickupLocation === 'string' ? load.pickupLocation : load.pickupLocation?.address || 'N/A'}
+                          </span>
+                          <ArrowRight className="h-4 w-4 flex-shrink-0" />
+                          <span className="truncate">
+                            {typeof load.deliveryLocation === 'string' ? load.deliveryLocation : load.deliveryLocation?.address || 'N/A'}
+                          </span>
                         </div>
-                        <div className="flex items-center">
-                          <Clock className="h-3 w-3 mr-1" />
-                          Delivery: {formatDate(load.deliveryDate)}
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <Calendar className="h-4 w-4 flex-shrink-0" />
+                          <span>Pickup: {formatDate(load.pickupDate)}</span>
                         </div>
                       </div>
-                      
-                      <div className="flex items-center space-x-1">
-                        <button
-                          onClick={() => handleViewDetails(load._id)}
-                          className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="View Details"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        
-                        {/* Show ActionsDropdown if there are edit/delete actions, otherwise show StatusChangeDropdown */}
-                        {(canEditLoad(load) || canDeleteLoad(load)) ? canChangeStatus(load) : (
-                          <StatusChangeDropdown load={load} />
+
+                      {/* Meta Info */}
+                      <div className="flex items-center gap-4 text-sm text-gray-500">
+                        <span>Posted {formatDate(load.createdAt)}</span>
+                        {load.cargoType && (
+                          <span className="capitalize">{load.cargoType.replace(/_/g, ' ')}</span>
+                        )}
+                        {load.vehicleType && (
+                          <span className="capitalize">{load.vehicleType.replace(/_/g, ' ')}</span>
                         )}
                       </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
 
-      {/* Pagination */}
-      {pagination.totalPages > 1 && (
-        <div className="bg-white border-t border-gray-200 px-4 py-3 flex items-center justify-between sm:px-6">
-          <div className="flex-1 flex justify-between sm:hidden">
-            <button
-              onClick={() => handlePageChange(pagination.page - 1)}
-              disabled={pagination.page <= 1 || loading}
-              className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => handlePageChange(pagination.page + 1)}
-              disabled={pagination.page >= pagination.totalPages || loading}
-              className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
+                  {/* Actions */}
+                  <div className="relative dropdown-container">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDropdownOpenId(dropdownOpenId === load._id ? null : load._id);
+                      }}
+                      className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      <MoreVertical className="h-5 w-5" />
+                    </button>
+
+                    {dropdownOpenId === load._id && (
+                      <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                        <div className="py-1">
+                          <button
+                            onClick={() => {
+                              handleViewDetails(load._id);
+                              setDropdownOpenId(null);
+                            }}
+                            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                          >
+                            <Eye className="h-4 w-4" />
+                            View Details
+                          </button>
+
+                          {canEditLoad(load) && (
+                            <button
+                              onClick={() => {
+                                handleEditLoad(load);
+                                setDropdownOpenId(null);
+                              }}
+                              className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                              Edit Load
+                            </button>
+                          )}
+
+                          {canChangeStatus(load) && (
+                            <div className="border-t border-gray-200 my-1">
+                              <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                                Change Status
+                              </div>
+                              {getAvailableStatusTransitions(load.status).map((status) => (
+                                <button
+                                  key={status}
+                                  onClick={() => handleUpdateLoadStatus(load._id, status)}
+                                  className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                                >
+                                  {getStatusIcon(status)}
+                                  {getStatusLabel(status)}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {canDeleteLoad(load) && (
+                            <div className="border-t border-gray-200 mt-1">
+                              <button
+                                onClick={() => {
+                                  handleDeleteLoad(load._id);
+                                  setDropdownOpenId(null);
+                                }}
+                                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete Load
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm text-gray-700">
-                Showing <span className="font-medium">{((pagination.page - 1) * pagination.limit) + 1}</span> to{' '}
-                <span className="font-medium">{Math.min(pagination.page * pagination.limit, pagination.total)}</span> of{' '}
-                <span className="font-medium">{pagination.total}</span> results
-              </p>
-            </div>
-            <div>
-              <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+        )}
+
+        {/* Pagination */}
+        {pagination.totalPages > 1 && (
+          <div className="px-6 py-4 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
+                {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
+                {pagination.total} loads
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page <= 1 || loading}
-                  className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
                 >
-                  <ChevronLeft className="h-5 w-5" />
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
                 </button>
                 
-                {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
-                  let pageNum;
-                  if (pagination.totalPages <= 5) {
-                    pageNum = i + 1;
-                  } else if (pagination.page <= 3) {
-                    pageNum = i + 1;
-                  } else if (pagination.page >= pagination.totalPages - 2) {
-                    pageNum = pagination.totalPages - 4 + i;
-                  } else {
-                    pageNum = pagination.page - 2 + i;
-                  }
-                  
-                  return (
-                    <button
-                      key={pageNum}
-                      onClick={() => handlePageChange(pageNum)}
-                      disabled={loading}
-                      className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
-                        pageNum === pagination.page
-                          ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
-                          : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                      } disabled:opacity-50 disabled:cursor-not-allowed`}
-                    >
-                      {pageNum}
-                    </button>
-                  );
-                })}
-                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (pagination.totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (pagination.page <= 3) {
+                      pageNum = i + 1;
+                    } else if (pagination.page >= pagination.totalPages - 2) {
+                      pageNum = pagination.totalPages - 4 + i;
+                    } else {
+                      pageNum = pagination.page - 2 + i;
+                    }
+
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        disabled={loading}
+                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                          pageNum === pagination.page
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <button
                   onClick={() => handlePageChange(pagination.page + 1)}
                   disabled={pagination.page >= pagination.totalPages || loading}
-                  className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
                 >
-                  <ChevronRight className="h-5 w-5" />
+                  Next
+                  <ChevronRight className="h-4 w-4" />
                 </button>
-              </nav>
+              </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Loading Overlay */}
+      {loading && loads.length > 0 && (
+        <div className="fixed inset-0 bg-black bg-opacity-25 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg p-6 flex items-center gap-3 shadow-lg">
+            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+            <span className="text-gray-700">Updating...</span>
           </div>
         </div>
       )}
 
-      {/* Status Update Modal */}
-      <StatusUpdateModal />
+      {/* Modals */}
+      <StatusUpdateModal
+        show={showStatusUpdateModal}
+        onClose={() => setShowStatusUpdateModal(false)}
+        onUpdate={updateLoadStatus}
+        statusUpdateData={statusUpdateData}
+        setStatusUpdateData={setStatusUpdateData}
+        getStatusColor={getStatusColor}
+        getStatusIcon={getStatusIcon}
+        getStatusLabel={getStatusLabel}
+        loading={loading}
+      />
+
+      <EditLoadModal
+        show={showEditModal}
+        onClose={closeEditModal}
+        onSubmit={handleEditFormSubmit}
+        editFormData={editFormData}
+        onFormChange={handleEditFormChange}
+        editFormErrors={editFormErrors}
+        isSubmitting={isEditSubmitting}
+        cargoTypeOptions={cargoTypeOptions}
+        vehicleTypeOptions={vehicleTypeOptions}
+      />
     </div>
-  );
-};
+    </div>
+  )
+}
+  
+
 
 export default LoadsTab;

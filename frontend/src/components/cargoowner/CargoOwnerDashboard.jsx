@@ -9,14 +9,14 @@ import { useNotifications, ToastContainer } from './NotificationUtils';
 import DashboardHeader from './DashboardHeader';
 import StatsCards from './StatsCards';
 import SubscriptionStatusCard from './SubscriptionStatusCard';
-import LoadFormModal from './LoadFormModal';
+import LoadFormModal from './modals/LoadFormModal';
 import OverviewTab from './OverviewTab';
 import LoadsTab from './LoadsTab';
 import BidsTab from './BidsTab';
 import SubscriptionTab from './SubscriptionTab';
 import AnalyticsTab from './AnalyticsTab';
-import ProfileModal from './ProfileModal';
-import SubscriptionModal from './SubscriptionModal';
+import ProfileModal from './modals/ProfileModal';
+import SubscriptionModal from './modals/SubscriptionModal';
 import NotificationAlerts from './NotificationAlerts';
 import ConfirmationDialog from './ConfirmationDialog';
 
@@ -377,16 +377,9 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   const currentLoadForm = formDataWithOwner || loadForm;
 
   try {
-    // Debug: Log current auth state
-    console.log('=== AUTH DEBUG INFO ===');
-    const authHeaders = getAuthHeaders();
-    console.log('Auth headers:', authHeaders);
     
-    // Check if we have a valid token
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
-    console.log('Token exists:', !!token);
-    console.log('Token preview:', token ? `${token.substring(0, 20)}...` : 'No token');
-
+    const authHeaders = getAuthHeaders();
+  
     // Basic validation
     if (!currentLoadForm.title || currentLoadForm.title.trim().length < 5) {
       setError('Title must be at least 5 characters long');
@@ -524,8 +517,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       updatedAt: new Date().toISOString()
     };
 
-    console.log('=== PAYLOAD READY ===');
-    console.log('Final payload:', payload);
 
     setLoading(true);
     setError('');
@@ -536,21 +527,12 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       ? `${API_BASE_URL}/loads/${editingLoad}`
       : `${API_BASE_URL}/loads`;
 
-    console.log('=== MAKING REQUEST ===');
-    console.log('Method:', method);
-    console.log('URL:', url);
-    console.log('Headers:', authHeaders);
-
     const response = await fetch(url, {
       method,
       headers: authHeaders,
       body: JSON.stringify(payload),
     });
 
-    console.log('=== RESPONSE RECEIVED ===');
-    console.log('Response status:', response.status);
-    console.log('Response statusText:', response.statusText);
-    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
     // Handle authentication errors
     if (response.status === 401) {
@@ -564,7 +546,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     let data;
     try {
       const responseText = await response.text();
-      console.log('Raw response text:', responseText);
       
       if (responseText) {
         data = JSON.parse(responseText);
@@ -577,7 +558,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    console.log('Parsed response data:', data);
 
     if (response.ok) {
       const actionText = editingLoad ? 'updated' : 'created';
@@ -603,9 +583,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       // Handle specific error cases with enhanced debugging
       let errorMessage = 'An unexpected error occurred';
       
-      console.log('=== ERROR RESPONSE ANALYSIS ===');
-      console.log('Status:', response.status);
-      console.log('Data:', data);
       
       if (response.status === 400) {
         if (data.errors && Array.isArray(data.errors)) {
@@ -724,8 +701,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           return;
         }
 
-        console.log('Updating load status via dashboard:', { loadId, newStatus });
-
         const response = await fetch(`${API_BASE_URL}/loads/${loadId}/status`, {
           method: 'PATCH',
           headers: authHeaders,
@@ -734,8 +709,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
             reason: `Status changed to ${newStatus} via dashboard`
           })
         });
-
-        console.log('Dashboard status update response:', response.status);
 
         if (!response.ok) {
           let errorMessage = 'Failed to update load status';
@@ -821,12 +794,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     setLoading(true);
     setError('');
 
-    console.log('=== DASHBOARD BID ACCEPTANCE DEBUG ===');
-    console.log('Bid ID:', bidId);
-    console.log('User:', user);
-
     const authHeaders = getAuthHeaders();
-    console.log('Auth headers:', authHeaders);
     
     if (!authHeaders.Authorization) {
       setError('Authentication required. Please refresh the page and log in again.');
@@ -853,8 +821,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    console.log('Making bid acceptance request...');
-
     const response = await fetch(`${API_BASE_URL}/bids/${bidId}/accept`, {
       method: 'POST',
       headers: {
@@ -866,11 +832,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       signal: AbortSignal.timeout(30000) // 30 second timeout
     });
 
-    console.log('Bid acceptance response:', {
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries())
-    });
 
     // Handle different HTTP status codes
     if (response.status === 401) {
@@ -909,7 +870,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     let data;
     try {
       const responseText = await response.text();
-      console.log('Raw response text:', responseText);
       
       if (responseText.trim()) {
         data = JSON.parse(responseText);
@@ -927,8 +887,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         return;
       }
     }
-
-    console.log('Parsed response data:', data);
 
     if (!response.ok) {
       // Use server error message if available
@@ -952,7 +910,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     }
     
     // Refresh all dashboard data to show updated states
-    console.log('Refreshing dashboard data after successful bid acceptance...');
     await fetchDashboardData();
     
     // Also refresh bids specifically to ensure UI is updated
@@ -1020,8 +977,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       }
     }
 
-    console.log('Rejecting bid:', bidId, 'with reason:', reason);
-
     const response = await fetch(`${API_BASE_URL}/bids/${bidId}/reject`, {
       method: 'POST',
       headers: {
@@ -1034,8 +989,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       }),
       signal: AbortSignal.timeout(15000) // 15 second timeout
     });
-
-    console.log('Reject bid response status:', response.status);
 
     if (response.status === 401) {
       setError('Session expired. Please refresh the page and log in again.');
