@@ -106,7 +106,7 @@ function deg2rad(deg) {
 router.get('/user/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('status').optional().isIn(['posted','available','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled']),
+  query('status').optional().isIn(['posted','available','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled','expired']),
   query('sortBy').optional().isIn(['createdAt','budget','title','status']),
   query('sortOrder').optional().isIn(['asc','desc'])
 ], async (req, res) => {
@@ -146,6 +146,46 @@ router.get('/user/my-loads', auth, [
       status: 'error',
       message: 'Database connection unavailable. Please try again later.'
     });
+  }
+
+  // ✅ STEP 1: EXPIRE LOADS WITH PAST PICKUP DATES (Same as public route)
+  const now = new Date();
+  
+  try {
+    console.log('Checking for loads with past pickup dates...');
+    
+    const expireResult = await Load.updateMany(
+      {
+        postedBy: new mongoose.Types.ObjectId(req.user.id),
+        isActive: true,
+        status: { $in: ['posted', 'available', 'receiving_bids'] },
+        pickupDate: { $lt: now }
+      },
+      {
+        $set: {
+          status: 'expired',
+          isActive: false,
+          expiredAt: now,
+          updatedAt: now
+        },
+        $push: {
+          statusHistory: {
+            status: 'expired',
+            changedAt: now,
+            changedBy: new mongoose.Types.ObjectId(req.user.id), // Owner can see it was system-expired
+            reason: 'Pickup date has passed',
+            userRole: 'system'
+          }
+        }
+      }
+    );
+
+    if (expireResult.modifiedCount > 0) {
+      console.log(`Expired ${expireResult.modifiedCount} loads with past pickup dates for user ${req.user.id}`);
+    }
+  } catch (expireError) {
+    console.warn('Error expiring past due loads:', expireError);
+    // Continue with the request even if expiration fails
   }
 
   // Build query
@@ -207,20 +247,30 @@ router.get('/user/my-loads', auth, [
         description: l.description || '',
         pickupLocation: l.pickupLocation || '',
         deliveryLocation: l.deliveryLocation || '',
-        // ... other fields ...
         budget: l.budget || 0,
-        status: l.status || 'posted'||'available',
+        status: l.status || 'posted',
         createdAt: l.createdAt,
+        pickupDate: l.pickupDate,
+        deliveryDate: l.deliveryDate,
         isUrgent: l.isUrgent || false,
+        isActive: l.isActive,
+        expiredAt: l.expiredAt, // Include expiration timestamp
         bidCount: bidMap[l._id.toString()] || 0,
         cargoOwnerName,
-        postedByName: cargoOwnerName
+        postedByName: cargoOwnerName,
+        // Add helper field to show if load was expired due to past pickup date
+        isExpiredDueToPastPickup: l.status === 'expired' && l.expiredAt && l.pickupDate && l.pickupDate < now
       };
     });
 
-    // SUMMARY STATS
+    // SUMMARY STATS (Include expired loads in totals)
     let summary = {
-      totalLoads: 0, activeLoads: 0, completedLoads: 0, totalBudget: 0, avgBudget: 0
+      totalLoads: 0, 
+      activeLoads: 0, 
+      expiredLoads: 0,
+      completedLoads: 0, 
+      totalBudget: 0, 
+      avgBudget: 0
     };
 
     try {
@@ -231,6 +281,7 @@ router.get('/user/my-loads', auth, [
             _id: null,
             totalLoads: { $sum: 1 },
             activeLoads: { $sum: { $cond: [{ $in: ['$status',['posted','available','receiving_bids', 'assigned','in_transit']]}, 1, 0] } },
+            expiredLoads: { $sum: { $cond: [{ $eq: ['$status','expired']}, 1, 0] } },
             completedLoads: { $sum: { $cond: [{ $eq: ['$status','delivered']}, 1, 0] } },
             totalBudget: { $sum: '$budget' },
             avgBudget: { $avg: '$budget' }
