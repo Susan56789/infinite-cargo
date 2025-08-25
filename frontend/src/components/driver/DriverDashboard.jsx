@@ -17,6 +17,7 @@ const DriverDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   
   // Separate loading states for different sections
   const [loadingStates, setLoadingStates] = useState({
@@ -673,85 +674,110 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
   
 
   // Toggle driver availability
-  const toggleAvailability = async () => {
-    if (!user) return;
+const toggleAvailability = async () => {
+  if (!user) return;
 
-    const currentAvailability = user.driverProfile?.isAvailable ?? false;
-    const newAvailability = !currentAvailability;
+  const currentAvailability = user.driverProfile?.isAvailable ?? false;
+  const newAvailability = !currentAvailability;
 
-    setAvailabilityUpdating(true);
-    setError(null); // Clear previous errors
+  setAvailabilityUpdating(true);
+  setError(''); // Clear previous errors
 
-    // Optimistically update the UI
-    const previousUser = user;
-    setUser({
-      ...user,
-      driverProfile: {
-        ...user.driverProfile,
-        isAvailable: newAvailability
-      }
+
+  try {
+    const requestBody = { isAvailable: newAvailability };
+
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/availability', {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
     });
 
-    try {
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/availability', {
-        method: 'POST',
-        headers: {
-          ...getAuthHeaders(),
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ isAvailable: newAvailability })
-      });
-
-      // Check for server errors
-      if (!response.ok) {
-        const text = await response.text();
-        console.error('Backend response:', text);
-
-        let errorMessage = `Failed to update availability (status ${response.status})`;
-        try {
-          const data = JSON.parse(text);
-          errorMessage = data?.message || errorMessage;
-        } catch (err) {
-          // Ignore JSON parse error
-        }
-
-        // Rollback optimistic update
-        setUser(previousUser);
-        setError(errorMessage);
-        return;
-      }
-
-      const data = await response.json();
-
-      // Ensure response structure is correct
-      if (!data?.data?.isAvailable && data?.data?.isAvailable !== false) {
-        console.warn('Unexpected backend response:', data);
-      }
-
-      // Update authManager storage
-      const updatedUser = {
-        ...user,
-        driverProfile: {
-          ...user.driverProfile,
-          isAvailable: data.data.isAvailable
-        }
-      };
-      setUser(updatedUser);
-      authManager.setAuth(
-        authManager.getToken(),
-        updatedUser,
-        localStorage.getItem('infiniteCargoRememberMe') === 'true'
-      );
-
-    } catch (error) {
-      console.error('Error updating availability:', error);
-      // Rollback optimistic update
-      setUser(previousUser);
-      setError('Failed to update availability. Please try again.');
-    } finally {
-      setAvailabilityUpdating(false);
+    // Handle authentication errors first
+    if (response.status === 401 || response.status === 403) {
+      setError('Authentication failed. Please login again.');
+      handleLogout();
+      return;
     }
-  };
+
+    // Get response text first for better debugging
+    const responseText = await response.text();
+    
+    // Parse response
+    let responseData;
+    try {
+      responseData = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse response:', parseError);
+      setError('Invalid server response');
+      return;
+    }
+
+    if (!response.ok) {
+      // Handle server errors
+      const errorMessage = responseData?.message || `Failed to update availability (${response.status})`;
+      console.error('Server error:', errorMessage);
+      setError(errorMessage);
+      return;
+    }
+
+    // FIXED: Get the actual updated value from the server response
+    const serverUpdatedValue = responseData.data?.isAvailable;
+    
+    if (serverUpdatedValue === undefined || serverUpdatedValue === null) {
+      console.error('Server did not return updated availability value');
+      setError('Server response missing availability status');
+      return;
+    }
+
+  
+
+    const updatedUser = {
+  ...user,
+  driverProfile: {
+    ...user.driverProfile,
+    isAvailable: serverUpdatedValue,
+    lastAvailabilityUpdate: new Date().toISOString()
+  }
+};
+
+setUser(updatedUser);
+    
+    // Update authManager storage
+    setUser(updatedUser);
+
+// Update authManager storage
+authManager.setAuth(
+  authManager.getToken(),
+  updatedUser,
+  localStorage.getItem('infiniteCargoRememberMe') === 'true'
+);
+
+// Clear any existing errors on success
+setError('');
+
+// Show success message
+setSuccessMessage(`You are now ${serverUpdatedValue ? 'available' : 'offline'} for new jobs`);
+
+// Auto-clear success message after 3 seconds
+setTimeout(() => {
+  setSuccessMessage('');
+}, 3000);
+   
+
+    // Optional: Refresh dashboard data to ensure consistency
+    // fetchDashboardData(false);
+
+  } catch (error) {
+    console.error('Network error updating availability:', error);
+    setError('Network error. Please check your connection and try again.');
+  } finally {
+    setAvailabilityUpdating(false);
+  }
+};
 
   // Place a bid on a load
   const placeBid = async (bidData) => {
@@ -784,9 +810,14 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
         return false;
       }
 
-      // Bid success - refresh data
+      // Bid success - refresh data and show success message
       await fetchDriverBids();
       await fetchAvailableLoads();
+      
+      setSuccessMessage('Bid placed successfully!');
+      setTimeout(() => {
+        setSuccessMessage('');
+      }, 3000);
 
       return true;
     } catch (error) {
@@ -956,6 +987,8 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
         onRefresh={handleRefresh}
         refreshing={refreshing}
         getAuthHeaders={getAuthHeaders}
+        error={error}
+       
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -978,6 +1011,25 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
           </div>
         )}
 
+        {/* Success banner */}
+        {successMessage && (
+          <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
+            <div className="flex">
+              <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <div className="ml-3">
+                <p className="text-sm font-medium text-green-800">{successMessage}</p>
+              </div>
+              <button
+                onClick={() => setSuccessMessage('')}
+                className="ml-auto text-green-400 hover:text-green-600"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* Stats Grid */}
         <StatsGrid 

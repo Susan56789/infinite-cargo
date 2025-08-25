@@ -2410,7 +2410,7 @@ router.get('/quick-stats', auth, async (req, res) => {
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
 // @access  Private (Driver only)
-router.post('/availability',  auth, [
+router.post('/availability', auth, [
   body('isAvailable').isBoolean().withMessage('isAvailable must be a boolean')
 ], async (req, res) => {
   try {
@@ -2432,10 +2432,11 @@ router.post('/availability',  auth, [
 
     const { isAvailable } = req.body;
 
+    // FIXED: Use the correct collection and handle the result properly
     const db = mongoose.connection.db;
-    const collection = db.collection('drivers');
-
-    const result = await collection.findOneAndUpdate(
+    
+    // Try updating in the drivers collection first
+    let result = await db.collection('drivers').findOneAndUpdate(
       { _id: new mongoose.Types.ObjectId(req.user.id) },
       { 
         $set: { 
@@ -2450,18 +2451,43 @@ router.post('/availability',  auth, [
       }
     );
 
+    // If not found in drivers collection, try users collection
+    if (!result) {
+      result = await db.collection('users').findOneAndUpdate(
+        { _id: new mongoose.Types.ObjectId(req.user.id), userType: 'driver' },
+        { 
+          $set: { 
+            'driverProfile.isAvailable': isAvailable,
+            'driverProfile.lastAvailabilityUpdate': new Date(),
+            updatedAt: new Date()
+          }
+        },
+        { 
+          returnDocument: 'after',
+          projection: { 'driverProfile.isAvailable': 1, name: 1, userType: 1 }
+        }
+      );
+    }
+
     if (!result) {
       return res.status(404).json({
         status: 'error',
-        message: 'Driver not found'
+        message: 'Driver profile not found'
       });
     }
 
+    // FIXED: Ensure we have the correct data structure
+    const updatedAvailability = result.driverProfile?.isAvailable ?? isAvailable;
+
+    console.log(`Driver ${req.user.id} availability updated to: ${updatedAvailability}`);
+
     res.json({
       status: 'success',
-      message: `Availability ${isAvailable ? 'enabled' : 'disabled'} successfully`,
+      message: `Availability ${updatedAvailability ? 'enabled' : 'disabled'} successfully`,
       data: {
-        isAvailable: result.driverProfile.isAvailable
+        isAvailable: updatedAvailability,
+        lastUpdate: new Date().toISOString(),
+        driverName: result.name
       }
     });
 
@@ -2474,7 +2500,6 @@ router.post('/availability',  auth, [
     });
   }
 });
-
 
 // @route   POST /api/drivers/location
 // @desc    Update driver location
