@@ -1725,12 +1725,11 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     // Check ownership
-    if (load.postedBy.toString() !== req.user.id) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'You can only delete your own loads'
-      });
-    }
+    if (load.postedBy.toString() !== req.user.id.toString()) {
+  return res.status(403).json({ 
+    message: 'You can only delete your loads.' 
+  });
+}
 
     // Check if load can be deleted (only certain statuses)
     const deletableStatuses = ['posted','available', 'receiving_bids', 'not_available', 'cancelled'];

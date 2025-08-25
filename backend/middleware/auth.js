@@ -79,13 +79,15 @@ module.exports = async (req, res, next) => {
       email: decoded.user?.email || decoded.email 
     });
 
-    // Handle different token structures
+    // Handle different token structures and get user ID
     let userEmail;
     let userId = decoded._id || decoded.id;
     
     if (decoded.user && decoded.user.email) {
       // Token structure: { user: { email: "..." }, ... }
       userEmail = decoded.user.email;
+      // Also check for user ID in nested structure
+      userId = userId || decoded.user.id || decoded.user._id;
     } else if (decoded.email) {
       // Token structure: { email: "...", ... }
       userEmail = decoded.email;
@@ -106,17 +108,45 @@ module.exports = async (req, res, next) => {
       });
     }
 
-    // Lookup user in both collections
-    const [driverUser, cargoOwnerUser] = await Promise.all([
-      db.collection('drivers').findOne({ email: userEmail }),
-      db.collection('cargo-owners').findOne({ email: userEmail })
-    ]);
+    let user = null;
+    let userType = null;
 
-    const user = driverUser || cargoOwnerUser;
-    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+    // First try to find user by ID if we have it
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      console.log('Auth middleware - Looking up user by ID:', userId);
+      
+      const [driverUser, cargoOwnerUser] = await Promise.all([
+        db.collection('drivers').findOne({ _id: new mongoose.Types.ObjectId(userId) }),
+        db.collection('cargo-owners').findOne({ _id: new mongoose.Types.ObjectId(userId) })
+      ]);
+
+      user = driverUser || cargoOwnerUser;
+      userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+      
+      console.log('Auth middleware - User found by ID:', !!user, 'Type:', userType);
+    }
+
+    // Fallback to email lookup if user not found by ID
+    if (!user && userEmail) {
+      console.log('Auth middleware - Falling back to email lookup for:', userEmail);
+      
+      const [driverUser, cargoOwnerUser] = await Promise.all([
+        db.collection('drivers').findOne({ email: userEmail }),
+        db.collection('cargo-owners').findOne({ email: userEmail })
+      ]);
+
+      user = driverUser || cargoOwnerUser;
+      userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
+      
+      // Update userId with the actual database ID if found by email
+      if (user) {
+        userId = user._id;
+        console.log('Auth middleware - User found by email, updating userId to:', userId);
+      }
+    }
 
     if (!user) {
-      console.log('Auth middleware - User not found for email:', userEmail);
+      console.log('Auth middleware - User not found for email:', userEmail, 'or ID:', userId);
       return res.status(401).json({
         status: 'error',
         message: 'Token is not valid - user not found'
@@ -140,21 +170,22 @@ module.exports = async (req, res, next) => {
 
     // Set user information in request object
     req.user = {
-      id: user._id,
-      email: user.email,
-      name: user.name || '',
-      phone: user.phone || '',
-      userType: userType,
-      isVerified: user.isVerified || false,
-      location: user.location || null,
-      role: user.role || 'user',
-      profileCompleted: user.profileCompleted || false,
-      driverProfile: user.driverProfile || null,
-      cargoOwnerProfile: user.cargoOwnerProfile || null,
-      accountStatus: user.accountStatus || 'active'
-    };
+  id: user._id.toString(),     
+  _id: user._id.toString(),    
+  email: user.email,
+  name: user.name || '',
+  phone: user.phone || '',
+  userType: userType,
+  isVerified: user.isVerified || false,
+  location: user.location || null,
+  role: user.role || 'user',
+  profileCompleted: user.profileCompleted || false,
+  driverProfile: user.driverProfile || null,
+  cargoOwnerProfile: user.cargoOwnerProfile || null,
+  accountStatus: user.accountStatus || 'active'
+};
 
-    console.log('Auth middleware - Authentication successful for:', user.email, 'Type:', userType);
+    console.log('Auth middleware - Authentication successful for:', user.email, 'Type:', userType, 'ID:', user._id);
     next();
 
   } catch (error) {
