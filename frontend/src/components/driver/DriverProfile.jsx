@@ -10,7 +10,6 @@ import {
   Loader,
   ArrowLeft,
   Shield,
-  Star,
   Trash2
 } from 'lucide-react';
 import { getAuthHeader, authManager, getUser } from '../../utils/auth';
@@ -59,12 +58,29 @@ const DriverProfile = () => {
     { value: 'container_truck', label: 'Container Truck' }
   ];
 
+  // Load saved form data from sessionStorage on component mount
   useEffect(() => {
+    const savedFormData = sessionStorage.getItem('driverProfileFormData');
+    if (savedFormData) {
+      try {
+        const parsed = JSON.parse(savedFormData);
+        setFormData(parsed);
+      } catch (e) {
+        console.error('Error parsing saved form data:', e);
+      }
+    }
     fetchProfile();
   }, []);
 
+  // Save form data to sessionStorage whenever formData changes
+  useEffect(() => {
+    if (formData.firstName || formData.lastName || formData.vehicleType) {
+      sessionStorage.setItem('driverProfileFormData', JSON.stringify(formData));
+    }
+  }, [formData]);
+
   const populateFormData = (profile) => {
-    setFormData({
+    const newFormData = {
       firstName: profile.firstName || '',
       lastName: profile.lastName || '',
       email: profile.email || '',
@@ -85,7 +101,31 @@ const DriverProfile = () => {
       emergencyContact: profile.emergencyContact || '',
       emergencyPhone: profile.emergencyPhone || '',
       bio: profile.driverProfile?.bio || profile.bio || ''
-    });
+    };
+
+    // Merge with any existing form data from sessionStorage, but prioritize server data
+    const savedFormData = sessionStorage.getItem('driverProfileFormData');
+    if (savedFormData) {
+      try {
+        const parsed = JSON.parse(savedFormData);
+        // Keep saved form data for editable fields, but use server data for email/phone
+        setFormData({
+          ...parsed,
+          email: newFormData.email, // Always use server email
+          phone: newFormData.phone, // Always use server phone
+          // If server has newer data for required fields, use it
+          firstName: newFormData.firstName || parsed.firstName,
+          lastName: newFormData.lastName || parsed.lastName,
+          vehicleType: newFormData.vehicleType || parsed.vehicleType,
+          vehicleCapacity: newFormData.vehicleCapacity || parsed.vehicleCapacity,
+          licenseNumber: newFormData.licenseNumber || parsed.licenseNumber
+        });
+      } catch (e) {
+        setFormData(newFormData);
+      }
+    } else {
+      setFormData(newFormData);
+    }
   };
 
   const fetchProfile = async () => {
@@ -152,7 +192,7 @@ const DriverProfile = () => {
 
     try {
       // Validate required fields
-      const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
+      const requiredFields = ['firstName', 'lastName', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
       const missingFields = requiredFields.filter(field => !formData[field] || formData[field].toString().trim() === '');
       
       if (missingFields.length > 0) {
@@ -169,14 +209,17 @@ const DriverProfile = () => {
         return;
       }
 
-      const updateData = {
-        ...formData,
-        vehicleCapacity: formData.vehicleCapacity ? parseFloat(formData.vehicleCapacity) : null,
-        experienceYears: formData.experienceYears ? parseInt(formData.experienceYears) : null,
-        vehicleYear: formData.vehicleYear ? parseInt(formData.vehicleYear) : null
+      // Exclude email and phone from update data
+      const { email, phone, ...updateData } = formData;
+      
+      const finalUpdateData = {
+        ...updateData,
+        vehicleCapacity: updateData.vehicleCapacity ? parseFloat(updateData.vehicleCapacity) : null,
+        experienceYears: updateData.experienceYears ? parseInt(updateData.experienceYears) : null,
+        vehicleYear: updateData.vehicleYear ? parseInt(updateData.vehicleYear) : null
       };
 
-      console.log('Updating profile with data:', updateData);
+      console.log('Updating profile with data:', finalUpdateData);
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'PUT',
@@ -184,7 +227,7 @@ const DriverProfile = () => {
           'Authorization': authToken,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(updateData)
+        body: JSON.stringify(finalUpdateData)
       });
 
       if (response.ok) {
@@ -201,6 +244,10 @@ const DriverProfile = () => {
           localStorage.getItem('infiniteCargoRememberMe') === 'true'
         );
         
+        // Clear saved form data since update was successful
+        sessionStorage.removeItem('driverProfileFormData');
+        
+        // Repopulate with updated data
         populateFormData(updatedProfile);
         setSuccess('Profile updated successfully!');
         setTimeout(() => setSuccess(''), 5000);
@@ -252,6 +299,8 @@ const DriverProfile = () => {
       });
 
       if (response.ok) {
+        // Clear saved form data
+        sessionStorage.removeItem('driverProfileFormData');
         alert('Profile deleted successfully. You will be logged out.');
         authManager.clearAuth();
         window.location.href = '/';
@@ -278,8 +327,10 @@ const DriverProfile = () => {
   };
 
   const calculateProfileCompletion = () => {
-    const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
-    const optionalFields = ['location', 'address', 'city', 'vehiclePlate', 'vehicleModel', 'experienceYears', 'bio'];
+    // Required fields (70% weight)
+    const requiredFields = ['firstName', 'lastName', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
+    // Optional fields (30% weight)
+    const optionalFields = ['location', 'address', 'city', 'state', 'zipCode', 'vehiclePlate', 'vehicleModel', 'vehicleYear', 'experienceYears', 'emergencyContact', 'emergencyPhone', 'bio'];
     
     const completedRequired = requiredFields.filter(field => formData[field] && formData[field].toString().trim() !== '').length;
     const completedOptional = optionalFields.filter(field => formData[field] && formData[field].toString().trim() !== '').length;
@@ -410,37 +461,7 @@ const DriverProfile = () => {
           </div>
         )}
 
-        {/* Profile Stats */}
-        {user?.statistics && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-              <Star size={18} className="mr-2 text-yellow-500" />
-              Driver Statistics
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">{user.statistics.totalJobs}</div>
-                <div className="text-sm text-gray-600">Total Jobs</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">{user.statistics.completedJobs}</div>
-                <div className="text-sm text-gray-600">Completed</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-yellow-600 flex items-center justify-center">
-                  <Star className="h-5 w-5 mr-1 fill-current" />
-                  {user.statistics.averageRating.toFixed(1)}
-                </div>
-                <div className="text-sm text-gray-600">Rating</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-purple-600">{user.statistics.successRate}%</div>
-                <div className="text-sm text-gray-600">Success Rate</div>
-              </div>
-            </div>
-          </div>
-        )}
-
+      
         <div className="space-y-6">
           {/* Personal Information */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -477,27 +498,29 @@ const DriverProfile = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address *
+                  Email Address
+                  <span className="text-xs text-gray-500 ml-1">(Read-only)</span>
                 </label>
                 <input
                   type="email"
                   name="email"
                   value={formData.email}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone Number *
+                  Phone Number
+                  <span className="text-xs text-gray-500 ml-1">(Read-only)</span>
                 </label>
                 <input
                   type="tel"
                   name="phone"
                   value={formData.phone}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
                 />
               </div>
 
