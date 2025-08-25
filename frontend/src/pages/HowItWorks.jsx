@@ -177,8 +177,9 @@ const HowItWorks = () => {
 
   return (
     <section className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-blue-50">
-      <Breadcrumb items={[{text: 'How It Works'}]} />
+      
       <div className="container mx-auto px-4 py-16">
+        <Breadcrumb items={[{text: 'How It Works'}]} />
         {/* Header Section */}
         <div className="text-center mb-20">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-blue-600 rounded-2xl mb-6 shadow-lg">
