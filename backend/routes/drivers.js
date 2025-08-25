@@ -1598,583 +1598,6 @@ router.get('/earnings', auth, [
   }
 });
 
-// @route   PUT /api/drivers/bid/:id
-// @desc    Update/withdraw a bid
-// @access  Private (Driver only)
-router.put('/bid/:id', auth, [
-  body('action').isIn(['update', 'withdraw']).withMessage('Action must be update or withdraw'),
-  body('bidAmount').optional().isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
-  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
-], async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only drivers can update bids'
-      });
-    }
-
-    const { id: bidId } = req.params;
-    const { action, bidAmount, message } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(bidId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid bid ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const bidsCollection = db.collection('bids');
-    const driverId = new mongoose.Types.ObjectId(req.user.id);
-
-    // Find the bid
-    const bid = await bidsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(bidId),
-      driverId
-    });
-
-    if (!bid) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Bid not found or not authorized'
-      });
-    }
-
-    // Check if bid can be modified
-    if (bid.status !== 'submitted') {
-      return res.status(400).json({
-        status: 'error',
-        message: `Cannot ${action} bid with status: ${bid.status}`
-      });
-    }
-
-    let updateData = { updatedAt: new Date() };
-
-    if (action === 'withdraw') {
-      updateData.status = 'withdrawn';
-      updateData.withdrawnAt = new Date();
-    } else if (action === 'update') {
-      if (bidAmount) updateData.bidAmount = parseFloat(bidAmount);
-      if (message !== undefined) updateData.message = message;
-    }
-
-    const result = await bidsCollection.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId(bidId) },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
-
-    res.json({
-      status: 'success',
-      message: `Bid ${action}d successfully`,
-      data: {
-        bid: result
-      }
-    });
-
-  } catch (error) {
-    console.error('Update bid error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error updating bid',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
-
-// @route   GET /api/drivers/:id
-// @desc    Get single driver by ID
-// @access  Public
-router.get('/:id',  async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid driver ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const collection = db.collection('drivers');
-
-    const driver = await collection.findOne(
-      { _id: new mongoose.Types.ObjectId(id) },
-      {
-        projection: {
-          password: 0,
-          loginHistory: 0,
-          registrationIp: 0,
-          failedLoginAttempts: 0
-        }
-      }
-    );
-
-    if (!driver) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Driver not found'
-      });
-    }
-
-    // Get driver's completed bookings count and recent reviews
-    const bookingsCollection = db.collection('bookings');
-    const completedBookings = await bookingsCollection.countDocuments({
-      driverId: new mongoose.Types.ObjectId(id),
-      status: 'completed'
-    });
-
-    // Get recent reviews
-    const recentBookings = await bookingsCollection.find({
-      driverId: new mongoose.Types.ObjectId(id),
-      status: 'completed',
-      rating: { $exists: true }
-    })
-    .sort({ updatedAt: -1 })
-    .limit(5)
-    .toArray();
-
-    const driverData = {
-      ...driver,
-      stats: {
-        completedTrips: completedBookings,
-        recentReviews: recentBookings.map(booking => ({
-          rating: booking.rating,
-          review: booking.review,
-          date: booking.updatedAt,
-          loadTitle: booking.loadTitle
-        }))
-      }
-    };
-
-    res.json({
-      status: 'success',
-      data: {
-        driver: driverData
-      }
-    });
-
-  } catch (error) {
-    console.error('Get driver error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching driver',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   POST /api/drivers/jobs/:jobId/update-status
-// @desc    Update job status (driver can update their active job status)
-// @access  Private (Driver only)
-router.post('/jobs/:jobId/update-status', auth, [
-  body('status').isIn([
-    'confirmed', 'en_route_pickup', 'arrived_pickup', 'picked_up', 
-    'in_transit', 'arrived_delivery', 'delivered', 'completed'
-  ]).withMessage('Invalid status'),
-  body('location').optional().isObject(),
-  body('notes').optional().isLength({ max: 500 })
-], async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. Driver account required.'
-      });
-    }
-
-    const { jobId } = req.params;
-    const { status, location, notes } = req.body;
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-
-    // Find the job
-    const job = await bookingsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(jobId),
-      driverId: new mongoose.Types.ObjectId(req.user.id)
-    });
-
-    if (!job) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Job not found or not assigned to you'
-      });
-    }
-
-    // Validate status transition
-    const validTransitions = {
-      'assigned': ['confirmed', 'en_route_pickup'],
-      'confirmed': ['en_route_pickup', 'arrived_pickup'],
-      'en_route_pickup': ['arrived_pickup'],
-      'arrived_pickup': ['picked_up'],
-      'picked_up': ['in_transit'],
-      'in_transit': ['arrived_delivery'],
-      'arrived_delivery': ['delivered'],
-      'delivered': ['completed']
-    };
-
-    const currentStatus = job.status;
-    if (!validTransitions[currentStatus]?.includes(status)) {
-      return res.status(400).json({
-        status: 'error',
-        message: `Cannot transition from ${currentStatus} to ${status}`
-      });
-    }
-
-    // Update job status
-    const updateData = {
-      status,
-      updatedAt: new Date(),
-      [`${status}At`]: new Date() // e.g., confirmedAt, pickedUpAt, etc.
-    };
-
-    // Add location if provided
-    if (location) {
-      updateData.currentLocation = location;
-      updateData.locationHistory = job.locationHistory || [];
-      updateData.locationHistory.push({
-        ...location,
-        timestamp: new Date(),
-        status
-      });
-    }
-
-    // Add timeline entry
-    const timelineEntry = {
-      event: status,
-      timestamp: new Date(),
-      description: notes || `Status updated to ${status.replace(/_/g, ' ')}`,
-      location: location || undefined
-    };
-
-    updateData.timeline = job.timeline || [];
-    updateData.timeline.push(timelineEntry);
-
-    // Update the job
-    await bookingsCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(jobId) },
-      { $set: updateData }
-    );
-
-    // If job is completed, also update the load status
-    if (status === 'completed') {
-      const Load = require('../models/load');
-      await Load.findByIdAndUpdate(job.loadId, {
-        status: 'delivered',
-        deliveredAt: new Date(),
-        completedAt: new Date()
-      });
-
-      // Update bid status as well
-      const Bid = require('../models/bid');
-      if (job.bidId) {
-        await Bid.findByIdAndUpdate(job.bidId, {
-          status: 'completed',
-          completedAt: new Date()
-        });
-      }
-    }
-
-    // Send notifications to cargo owner about status updates
-    try {
-      const {notificationUtils} = require('./notifications');
-      const statusMessages = {
-        'confirmed': 'Driver has confirmed the job',
-        'en_route_pickup': 'Driver is en route to pickup location',
-        'arrived_pickup': 'Driver has arrived at pickup location',
-        'picked_up': 'Cargo has been picked up',
-        'in_transit': 'Cargo is in transit',
-        'arrived_delivery': 'Driver has arrived at delivery location',
-        'delivered': 'Cargo has been delivered',
-        'completed': 'Job completed successfully'
-      };
-
-      await notificationUtils.createNotification({
-        userId: job.cargoOwnerId,
-        userType: 'cargo_owner',
-        type: 'job_status_update',
-        title: 'Job Status Update',
-        message: statusMessages[status] || `Job status updated to ${status}`,
-        priority: ['delivered', 'completed'].includes(status) ? 'high' : 'normal',
-        icon: 'truck',
-        data: {
-          jobId: job._id,
-          loadId: job.loadId,
-          status,
-          driverId: req.user.id
-        },
-        actionUrl: `/loads/${job.loadId}/tracking`
-      });
-    } catch (notificationError) {
-      console.error('Failed to send status update notification:', notificationError);
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Job status updated successfully',
-      data: {
-        jobId,
-        newStatus: status,
-        timestamp: new Date()
-      }
-    });
-
-  } catch (error) {
-    console.error('Update job status error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error updating job status',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   GET /api/drivers/jobs/:jobId/details
-// @desc    Get detailed information for a specific job
-// @access  Private (Driver only)
-router.get('/jobs/:jobId/details', auth, async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. Driver account required.'
-      });
-    }
-
-    const { jobId } = req.params;
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-
-    const job = await bookingsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(jobId),
-      driverId: new mongoose.Types.ObjectId(req.user.id)
-    });
-
-    if (!job) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Job not found or not assigned to you'
-      });
-    }
-
-    // Get additional details from load
-    const Load = require('../models/load');
-    const load = await Load.findById(job.loadId)
-      .populate('postedBy', 'name phone email location companyName');
-
-    // Get cargo owner details if not populated
-    let cargoOwner = load?.postedBy;
-    if (!cargoOwner && job.cargoOwnerId) {
-      const User = require('../models/user');
-      cargoOwner = await User.findById(job.cargoOwnerId)
-        .select('name phone email location companyName');
-    }
-
-    const detailedJob = {
-      ...job,
-      loadDetails: load ? {
-        title: load.title,
-        description: load.description,
-        pickupAddress: load.pickupAddress,
-        deliveryAddress: load.deliveryAddress,
-        specialInstructions: load.specialInstructions,
-        insuranceRequired: load.insuranceRequired,
-        cargoValue: load.cargoValue,
-        dimensions: load.dimensions
-      } : null,
-      cargoOwnerDetails: cargoOwner ? {
-        name: cargoOwner.name,
-        phone: cargoOwner.phone,
-        email: cargoOwner.email,
-        location: cargoOwner.location,
-        companyName: cargoOwner.companyName
-      } : job.cargoOwnerInfo || null
-    };
-
-    res.json({
-      status: 'success',
-      data: {
-        job: detailedJob
-      }
-    });
-
-  } catch (error) {
-    console.error('Get job details error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching job details',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   POST /api/drivers/contact/:id
-// @desc    Send contact request to driver
-// @access  Private (Cargo owners only)
-router.post('/contact/:id',  auth, contactLimiter, [
-  body('message')
-    .optional()
-    .isLength({ max: 500 })
-    .withMessage('Message cannot exceed 500 characters'),
-  body('loadId')
-    .optional()
-    .isMongoId()
-    .withMessage('Invalid load ID'),
-  body('contactType')
-    .optional()
-    .isIn(['inquiry', 'booking_request', 'quote_request'])
-    .withMessage('Invalid contact type')
-], async (req, res) => {
-  try {
-    const { id: driverId } = req.params;
-    const { message = '', loadId, contactType = 'inquiry' } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(driverId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid driver ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    // Only cargo owners and admins can contact drivers
-    if (req.user.userType !== 'cargo_owner' && req.user.userType !== 'admin') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only cargo owners can contact drivers'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const driversCollection = db.collection('drivers');
-    const usersCollection = db.collection('users');
-    const contactRequestsCollection = db.collection('contact_requests');
-
-    // Check if driver exists and is active
-    const driver = await driversCollection.findOne(
-      { _id: new mongoose.Types.ObjectId(driverId), isActive: { $ne: false } },
-      { projection: { name: 1, email: 1, phone: 1, 'driverProfile.isAvailable': 1 } }
-    );
-
-    if (!driver) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Driver not found or inactive'
-      });
-    }
-
-    // Get requester information
-    const requester = await usersCollection.findOne(
-      { _id: new mongoose.Types.ObjectId(req.user.id) },
-      { projection: { name: 1, email: 1, phone: 1, company: 1 } }
-    );
-
-    if (!requester) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Requester not found'
-      });
-    }
-
-    // Check for recent contact requests to prevent spam
-    const recentContact = await contactRequestsCollection.findOne({
-      requesterId: new mongoose.Types.ObjectId(req.user.id),
-      driverId: new mongoose.Types.ObjectId(driverId),
-      createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) } // 1 hour ago
-    });
-
-    if (recentContact) {
-      return res.status(429).json({
-        status: 'error',
-        message: 'You can only contact this driver once per hour'
-      });
-    }
-
-    // Create contact request record
-    const contactRequest = {
-      requesterId: new mongoose.Types.ObjectId(req.user.id),
-      driverId: new mongoose.Types.ObjectId(driverId),
-      requesterInfo: {
-        name: requester.name,
-        email: requester.email,
-        phone: requester.phone,
-        company: requester.company
-      },
-      driverInfo: {
-        name: driver.name,
-        email: driver.email
-      },
-      message,
-      contactType,
-      loadId: loadId ? new mongoose.Types.ObjectId(loadId) : null,
-      status: 'sent',
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    await contactRequestsCollection.insertOne(contactRequest);
-
-    // TODO: Send email/SMS notification to driver
-    // You can integrate with your notification service here
-
-    // Log the contact attempt
-    console.log(`Contact request sent from ${requester.name} (${requester.email}) to driver ${driver.name} (${driver.email})`);
-
-    res.json({
-      status: 'success',
-      message: 'Contact request sent successfully',
-      data: {
-        contactRequestId: contactRequest._id,
-        driverInfo: {
-          name: driver.name,
-          isAvailable: driver.driverProfile?.isAvailable
-        },
-        message: 'The driver will be notified about your contact request'
-      }
-    });
-
-  } catch (error) {
-    console.error('Contact driver error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error sending contact request',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 // @route   GET /api/drivers/contact-requests/received
 // @desc    Get contact requests received by driver
@@ -2327,6 +1750,8 @@ router.put('/profile',  auth, driverLimiter, profileValidation, async (req, res)
 // @access  Private (Driver only)
 router.get('/profile', auth, driverLimiter, async (req, res) => {
   try {
+    console.log('Driver profile GET request - User:', req.user);
+
     if (req.user.userType !== 'driver') {
       return res.status(403).json({
         status: 'error',
@@ -2337,7 +1762,19 @@ router.get('/profile', auth, driverLimiter, async (req, res) => {
     const db = mongoose.connection.db;
     const driversCollection = db.collection('drivers');
     const bookingsCollection = db.collection('bookings');
-    const driverId = new mongoose.Types.ObjectId(req.user.id);
+    
+    // Convert user ID to ObjectId properly
+    let driverId;
+    try {
+      driverId = new mongoose.Types.ObjectId(req.user.id);
+      console.log('Driver ID converted:', driverId);
+    } catch (error) {
+      console.error('Invalid driver ID format:', req.user.id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID format'
+      });
+    }
 
     // Get driver profile
     const driver = await driversCollection.findOne(
@@ -2354,11 +1791,14 @@ router.get('/profile', auth, driverLimiter, async (req, res) => {
     );
 
     if (!driver) {
+      console.log('Driver not found for ID:', driverId);
       return res.status(404).json({
         status: 'error',
         message: 'Driver profile not found'
       });
     }
+
+    console.log('Driver found:', driver.email);
 
     // Get additional profile statistics in parallel
     const [
@@ -2372,7 +1812,6 @@ router.get('/profile', auth, driverLimiter, async (req, res) => {
       // Total bookings count
       bookingsCollection.countDocuments({ driverId }),
       
-      // Completed bookings count
       bookingsCollection.countDocuments({ driverId, status: 'completed' }),
       
       // Active bookings count
@@ -2483,6 +1922,117 @@ router.get('/profile', auth, driverLimiter, async (req, res) => {
     });
   }
 });
+
+// @route   PUT /api/drivers/profile
+// @desc    Update driver profile
+// @access  Private (Driver only)
+router.put('/profile', auth, driverLimiter, profileValidation, async (req, res) => {
+  try {
+    console.log('Driver profile PUT request - User:', req.user);
+    console.log('Update data:', req.body);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can update driver profiles'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const collection = db.collection('drivers');
+
+    // Convert user ID to ObjectId properly
+    let driverId;
+    try {
+      driverId = new mongoose.Types.ObjectId(req.user.id);
+      console.log('Driver ID for update:', driverId);
+    } catch (error) {
+      console.error('Invalid driver ID format:', req.user.id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID format'
+      });
+    }
+
+    const updateData = {
+      ...req.body,
+      updatedAt: new Date()
+    };
+
+    // If updating vehicle info, update the main fields too
+    if (updateData.vehicleType) {
+      updateData['driverProfile.vehicleType'] = updateData.vehicleType;
+    }
+    if (updateData.vehicleCapacity) {
+      updateData['driverProfile.vehicleCapacity'] = updateData.vehicleCapacity;
+    }
+
+    console.log('Final update data:', updateData);
+
+    const result = await collection.findOneAndUpdate(
+      { _id: driverId },
+      { $set: updateData },
+      { 
+        returnDocument: 'after',
+        projection: {
+          password: 0,
+          loginHistory: 0,
+          registrationIp: 0,
+          failedLoginAttempts: 0
+        }
+      }
+    );
+
+    if (!result) {
+      console.log('Driver not found for update, ID:', driverId);
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver not found'
+      });
+    }
+
+    console.log('Driver profile updated successfully');
+
+    res.json({
+      status: 'success',
+      message: 'Profile updated successfully',
+      data: {
+        driver: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Update driver profile error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Helper function for profile completion calculation
+function calculateProfileCompletion(driver) {
+  const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'vehicleType', 'vehicleCapacity', 'licenseNumber'];
+  const optionalFields = ['location', 'address', 'city', 'vehiclePlate', 'vehicleModel', 'experienceYears', 'bio'];
+  
+  const completedRequired = requiredFields.filter(field => driver[field] && driver[field].toString().trim() !== '').length;
+  const completedOptional = optionalFields.filter(field => driver[field] && driver[field].toString().trim() !== '').length;
+  
+  const requiredPercentage = (completedRequired / requiredFields.length) * 70;
+  const optionalPercentage = (completedOptional / optionalFields.length) * 30;
+  
+  return Math.round(requiredPercentage + optionalPercentage);
+}
 
 // Helper function to calculate profile completion percentage
 function calculateProfileCompletion(driver) {
@@ -2932,135 +2482,6 @@ router.get('/quick-stats', auth, async (req, res) => {
 });
 
 
-// @route   POST /api/drivers/rate
-// @desc    Rate a driver (Cargo Owner only) 
-// @access  Private (Cargo Owner only)
-router.post('/rate/:driverId', auth, [
-  body('rating').isFloat({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
-  body('review').optional().isLength({ max: 500 }).withMessage('Review cannot exceed 500 characters'),
-  body('bookingId').isMongoId().withMessage('Valid booking ID required')
-], async (req, res) => {
-  try {
-    if (req.user.userType !== 'cargo_owner') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only cargo owners can rate drivers'
-      });
-    }
-
-    const { driverId } = req.params;
-    const { rating, review, bookingId } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(driverId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid driver ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-    const driversCollection = db.collection('drivers');
-
-    // Verify the booking exists and belongs to this cargo owner and driver
-    const booking = await bookingsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(bookingId),
-      driverId: new mongoose.Types.ObjectId(driverId),
-      cargoOwnerId: new mongoose.Types.ObjectId(req.user.id),
-      status: 'completed'
-    });
-
-    if (!booking) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Booking not found or not eligible for rating'
-      });
-    }
-
-    // Check if already rated
-    if (booking.rating) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'This booking has already been rated'
-      });
-    }
-
-    // Update the booking with rating
-    await bookingsCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(bookingId) },
-      {
-        $set: {
-          rating: parseFloat(rating),
-          review: review || '',
-          ratedAt: new Date(),
-          ratedBy: new mongoose.Types.ObjectId(req.user.id)
-        }
-      }
-    );
-
-    // Calculate new average rating for driver
-    const ratingStats = await bookingsCollection.aggregate([
-      {
-        $match: {
-          driverId: new mongoose.Types.ObjectId(driverId),
-          rating: { $exists: true, $ne: null }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          averageRating: { $avg: '$rating' },
-          totalRatings: { $sum: 1 }
-        }
-      }
-    ]).toArray();
-
-    const newAverageRating = ratingStats.length > 0 ? ratingStats[0].averageRating : rating;
-    const totalRatings = ratingStats.length > 0 ? ratingStats[0].totalRatings : 1;
-
-    // Update driver's profile with new rating
-    await driversCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(driverId) },
-      {
-        $set: {
-          'driverProfile.rating': Math.round(newAverageRating * 10) / 10,
-          'driverProfile.totalRatings': totalRatings,
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    res.json({
-      status: 'success',
-      message: 'Driver rated successfully',
-      data: {
-        rating: parseFloat(rating),
-        review: review || '',
-        bookingId,
-        driverId,
-        newAverageRating: Math.round(newAverageRating * 10) / 10,
-        totalRatings
-      }
-    });
-
-  } catch (error) {
-    console.error('Rate driver error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error rating driver',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 // @route   POST /api/drivers/availability
 // @desc    Toggle driver availability
@@ -3200,170 +2621,98 @@ router.post('/location',  auth, [
   }
 });
 
-// @route   GET /api/drivers/:id/bookings
-// @desc    Get driver's bookings
-// @access  Private (Driver only for own bookings, or cargo owner)
-router.get('/:id/bookings',  auth, [
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('status').optional().isIn(['pending', 'accepted', 'in_progress', 'completed', 'cancelled'])
-], async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { page = 1, limit = 20, status } = req.query;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid driver ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    // Check if user can view these bookings
-    if (req.user.id !== id && req.user.userType !== 'cargo_owner') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Not authorized to view these bookings'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-
-    let query = { driverId: new mongoose.Types.ObjectId(id) };
-    if (status) {
-      query.status = status;
-    }
-
-    // If cargo owner is requesting, only show bookings for their loads
-    if (req.user.userType === 'cargo_owner' && req.user.id !== id) {
-      query.cargoOwnerId = new mongoose.Types.ObjectId(req.user.id);
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const bookings = await bookingsCollection.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .toArray();
-
-    const totalBookings = await bookingsCollection.countDocuments(query);
-    const totalPages = Math.ceil(totalBookings / parseInt(limit));
-
-    res.json({
-      status: 'success',
-      data: {
-        bookings,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages,
-          totalBookings,
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Get driver bookings error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching bookings',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
-
-// @route   PUT /api/drivers/contact-requests/:id/status
-// @desc    Update contact request status (mark as read/responded)
+// @route   DELETE /api/drivers/profile
+// @desc    Delete driver profile and account
 // @access  Private (Driver only)
-router.put('/contact-requests/:id/status',  auth, [
-  body('status').isIn(['read', 'responded']).withMessage('Status must be read or responded'),
-  body('response').optional().isLength({ max: 1000 }).withMessage('Response cannot exceed 1000 characters')
-], async (req, res) => {
+router.delete('/profile', auth, driverLimiter, async (req, res) => {
   try {
-    const { id: requestId } = req.params;
-    const { status, response } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(requestId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid request ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
     if (req.user.userType !== 'driver') {
       return res.status(403).json({
         status: 'error',
-        message: 'Only drivers can update contact request status'
+        message: 'Only drivers can delete driver profiles'
       });
     }
 
     const db = mongoose.connection.db;
-    const contactRequestsCollection = db.collection('contact_requests');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+    
+    // Check for active bookings before deletion
+    const activeBookings = await db.collection('bookings').countDocuments({
+      driverId,
+      status: { $in: ['accepted', 'in_progress', 'driver_assigned'] }
+    });
 
-    const updateData = {
-      status,
-      updatedAt: new Date()
-    };
-
-    if (status === 'responded' && response) {
-      updateData.response = response;
-      updateData.respondedAt = new Date();
-    } else if (status === 'read') {
-      updateData.readAt = new Date();
-    }
-
-    const result = await contactRequestsCollection.findOneAndUpdate(
-      { 
-        _id: new mongoose.Types.ObjectId(requestId),
-        driverId: new mongoose.Types.ObjectId(req.user.id)
-      },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
-
-    if (!result) {
-      return res.status(404).json({
+    if (activeBookings > 0) {
+      return res.status(400).json({
         status: 'error',
-        message: 'Contact request not found or not authorized'
+        message: 'Cannot delete profile while you have active bookings. Please complete or cancel all active jobs first.'
       });
     }
 
-    res.json({
-      status: 'success',
-      message: `Contact request marked as ${status}`,
-      data: {
-        contactRequest: result
-      }
-    });
+    // Start transaction to ensure data consistency
+    const session = await mongoose.startSession();
+    
+    try {
+      await session.withTransaction(async () => {
+        // Delete driver profile
+        const deleteResult = await db.collection('drivers').deleteOne(
+          { _id: driverId },
+          { session }
+        );
+
+        if (deleteResult.deletedCount === 0) {
+          throw new Error('Driver profile not found');
+        }
+
+        // Update related bookings to mark driver as deleted (for historical records)
+        await db.collection('bookings').updateMany(
+          { driverId },
+          { 
+            $set: { 
+              driverDeleted: true,
+              driverDeletedAt: new Date()
+            }
+          },
+          { session }
+        );
+
+        // Log the deletion for audit purposes
+        await db.collection('audit-logs').insertOne({
+          action: 'driver_profile_deleted',
+          driverId,
+          driverEmail: req.user.email,
+          timestamp: new Date(),
+          ip: req.ip,
+          userAgent: req.get('User-Agent')
+        }, { session });
+
+      });
+
+      await session.endSession();
+
+      res.json({
+        status: 'success',
+        message: 'Driver profile deleted successfully'
+      });
+
+    } catch (transactionError) {
+      await session.endSession();
+      throw transactionError;
+    }
 
   } catch (error) {
-    console.error('Update contact request status error:', error);
+    console.error('Delete driver profile error:', error);
+    
+    if (error.message === 'Driver profile not found') {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver profile not found'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
-      message: 'Server error updating contact request status',
+      message: 'Server error deleting profile',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -3572,6 +2921,880 @@ router.get('/search',  [
     res.status(500).json({
       status: 'error',
       message: 'Server error searching drivers',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/:id
+// @desc    Get single driver by ID
+// @access  Public
+router.get('/:id',  async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid driver ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const collection = db.collection('drivers');
+
+    const driver = await collection.findOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        projection: {
+          password: 0,
+          loginHistory: 0,
+          registrationIp: 0,
+          failedLoginAttempts: 0
+        }
+      }
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver not found'
+      });
+    }
+
+    // Get driver's completed bookings count and recent reviews
+    const bookingsCollection = db.collection('bookings');
+    const completedBookings = await bookingsCollection.countDocuments({
+      driverId: new mongoose.Types.ObjectId(id),
+      status: 'completed'
+    });
+
+    // Get recent reviews
+    const recentBookings = await bookingsCollection.find({
+      driverId: new mongoose.Types.ObjectId(id),
+      status: 'completed',
+      rating: { $exists: true }
+    })
+    .sort({ updatedAt: -1 })
+    .limit(5)
+    .toArray();
+
+    const driverData = {
+      ...driver,
+      stats: {
+        completedTrips: completedBookings,
+        recentReviews: recentBookings.map(booking => ({
+          rating: booking.rating,
+          review: booking.review,
+          date: booking.updatedAt,
+          loadTitle: booking.loadTitle
+        }))
+      }
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        driver: driverData
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/drivers/bid/:id
+// @desc    Update/withdraw a bid
+// @access  Private (Driver only)
+router.put('/bid/:id', auth, [
+  body('action').isIn(['update', 'withdraw']).withMessage('Action must be update or withdraw'),
+  body('bidAmount').optional().isFloat({ min: 1 }).withMessage('Bid amount must be at least 1'),
+  body('message').optional().isLength({ max: 500 }).withMessage('Message cannot exceed 500 characters')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can update bids'
+      });
+    }
+
+    const { id: bidId } = req.params;
+    const { action, bidAmount, message } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(bidId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid bid ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bidsCollection = db.collection('bids');
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Find the bid
+    const bid = await bidsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(bidId),
+      driverId
+    });
+
+    if (!bid) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bid not found or not authorized'
+      });
+    }
+
+    // Check if bid can be modified
+    if (bid.status !== 'submitted') {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot ${action} bid with status: ${bid.status}`
+      });
+    }
+
+    let updateData = { updatedAt: new Date() };
+
+    if (action === 'withdraw') {
+      updateData.status = 'withdrawn';
+      updateData.withdrawnAt = new Date();
+    } else if (action === 'update') {
+      if (bidAmount) updateData.bidAmount = parseFloat(bidAmount);
+      if (message !== undefined) updateData.message = message;
+    }
+
+    const result = await bidsCollection.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(bidId) },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    res.json({
+      status: 'success',
+      message: `Bid ${action}d successfully`,
+      data: {
+        bid: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Update bid error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating bid',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/drivers/jobs/:jobId/update-status
+// @desc    Update job status (driver can update their active job status)
+// @access  Private (Driver only)
+router.post('/jobs/:jobId/update-status', auth, [
+  body('status').isIn([
+    'confirmed', 'en_route_pickup', 'arrived_pickup', 'picked_up', 
+    'in_transit', 'arrived_delivery', 'delivered', 'completed'
+  ]).withMessage('Invalid status'),
+  body('location').optional().isObject(),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const { jobId } = req.params;
+    const { status, location, notes } = req.body;
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    // Find the job
+    const job = await bookingsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(jobId),
+      driverId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found or not assigned to you'
+      });
+    }
+
+    // Validate status transition
+    const validTransitions = {
+      'assigned': ['confirmed', 'en_route_pickup'],
+      'confirmed': ['en_route_pickup', 'arrived_pickup'],
+      'en_route_pickup': ['arrived_pickup'],
+      'arrived_pickup': ['picked_up'],
+      'picked_up': ['in_transit'],
+      'in_transit': ['arrived_delivery'],
+      'arrived_delivery': ['delivered'],
+      'delivered': ['completed']
+    };
+
+    const currentStatus = job.status;
+    if (!validTransitions[currentStatus]?.includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot transition from ${currentStatus} to ${status}`
+      });
+    }
+
+    // Update job status
+    const updateData = {
+      status,
+      updatedAt: new Date(),
+      [`${status}At`]: new Date() // e.g., confirmedAt, pickedUpAt, etc.
+    };
+
+    // Add location if provided
+    if (location) {
+      updateData.currentLocation = location;
+      updateData.locationHistory = job.locationHistory || [];
+      updateData.locationHistory.push({
+        ...location,
+        timestamp: new Date(),
+        status
+      });
+    }
+
+    // Add timeline entry
+    const timelineEntry = {
+      event: status,
+      timestamp: new Date(),
+      description: notes || `Status updated to ${status.replace(/_/g, ' ')}`,
+      location: location || undefined
+    };
+
+    updateData.timeline = job.timeline || [];
+    updateData.timeline.push(timelineEntry);
+
+    // Update the job
+    await bookingsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(jobId) },
+      { $set: updateData }
+    );
+
+    // If job is completed, also update the load status
+    if (status === 'completed') {
+      const Load = require('../models/load');
+      await Load.findByIdAndUpdate(job.loadId, {
+        status: 'delivered',
+        deliveredAt: new Date(),
+        completedAt: new Date()
+      });
+
+      // Update bid status as well
+      const Bid = require('../models/bid');
+      if (job.bidId) {
+        await Bid.findByIdAndUpdate(job.bidId, {
+          status: 'completed',
+          completedAt: new Date()
+        });
+      }
+    }
+
+    // Send notifications to cargo owner about status updates
+    try {
+      const {notificationUtils} = require('./notifications');
+      const statusMessages = {
+        'confirmed': 'Driver has confirmed the job',
+        'en_route_pickup': 'Driver is en route to pickup location',
+        'arrived_pickup': 'Driver has arrived at pickup location',
+        'picked_up': 'Cargo has been picked up',
+        'in_transit': 'Cargo is in transit',
+        'arrived_delivery': 'Driver has arrived at delivery location',
+        'delivered': 'Cargo has been delivered',
+        'completed': 'Job completed successfully'
+      };
+
+      await notificationUtils.createNotification({
+        userId: job.cargoOwnerId,
+        userType: 'cargo_owner',
+        type: 'job_status_update',
+        title: 'Job Status Update',
+        message: statusMessages[status] || `Job status updated to ${status}`,
+        priority: ['delivered', 'completed'].includes(status) ? 'high' : 'normal',
+        icon: 'truck',
+        data: {
+          jobId: job._id,
+          loadId: job.loadId,
+          status,
+          driverId: req.user.id
+        },
+        actionUrl: `/loads/${job.loadId}/tracking`
+      });
+    } catch (notificationError) {
+      console.error('Failed to send status update notification:', notificationError);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Job status updated successfully',
+      data: {
+        jobId,
+        newStatus: status,
+        timestamp: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Update job status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating job status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+// @route   PUT /api/drivers/contact-requests/:id/status
+// @desc    Update contact request status (mark as read/responded)
+// @access  Private (Driver only)
+router.put('/contact-requests/:id/status',  auth, [
+  body('status').isIn(['read', 'responded']).withMessage('Status must be read or responded'),
+  body('response').optional().isLength({ max: 1000 }).withMessage('Response cannot exceed 1000 characters')
+], async (req, res) => {
+  try {
+    const { id: requestId } = req.params;
+    const { status, response } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(requestId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid request ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can update contact request status'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const contactRequestsCollection = db.collection('contact_requests');
+
+    const updateData = {
+      status,
+      updatedAt: new Date()
+    };
+
+    if (status === 'responded' && response) {
+      updateData.response = response;
+      updateData.respondedAt = new Date();
+    } else if (status === 'read') {
+      updateData.readAt = new Date();
+    }
+
+    const result = await contactRequestsCollection.findOneAndUpdate(
+      { 
+        _id: new mongoose.Types.ObjectId(requestId),
+        driverId: new mongoose.Types.ObjectId(req.user.id)
+      },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    if (!result) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Contact request not found or not authorized'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: `Contact request marked as ${status}`,
+      data: {
+        contactRequest: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Update contact request status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating contact request status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/jobs/:jobId/details
+// @desc    Get detailed information for a specific job
+// @access  Private (Driver only)
+router.get('/jobs/:jobId/details', auth, async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Driver account required.'
+      });
+    }
+
+    const { jobId } = req.params;
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    const job = await bookingsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(jobId),
+      driverId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Job not found or not assigned to you'
+      });
+    }
+
+    // Get additional details from load
+    const Load = require('../models/load');
+    const load = await Load.findById(job.loadId)
+      .populate('postedBy', 'name phone email location companyName');
+
+    // Get cargo owner details if not populated
+    let cargoOwner = load?.postedBy;
+    if (!cargoOwner && job.cargoOwnerId) {
+      const User = require('../models/user');
+      cargoOwner = await User.findById(job.cargoOwnerId)
+        .select('name phone email location companyName');
+    }
+
+    const detailedJob = {
+      ...job,
+      loadDetails: load ? {
+        title: load.title,
+        description: load.description,
+        pickupAddress: load.pickupAddress,
+        deliveryAddress: load.deliveryAddress,
+        specialInstructions: load.specialInstructions,
+        insuranceRequired: load.insuranceRequired,
+        cargoValue: load.cargoValue,
+        dimensions: load.dimensions
+      } : null,
+      cargoOwnerDetails: cargoOwner ? {
+        name: cargoOwner.name,
+        phone: cargoOwner.phone,
+        email: cargoOwner.email,
+        location: cargoOwner.location,
+        companyName: cargoOwner.companyName
+      } : job.cargoOwnerInfo || null
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        job: detailedJob
+      }
+    });
+
+  } catch (error) {
+    console.error('Get job details error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching job details',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/drivers/contact/:id
+// @desc    Send contact request to driver
+// @access  Private (Cargo owners only)
+router.post('/contact/:id',  auth, contactLimiter, [
+  body('message')
+    .optional()
+    .isLength({ max: 500 })
+    .withMessage('Message cannot exceed 500 characters'),
+  body('loadId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid load ID'),
+  body('contactType')
+    .optional()
+    .isIn(['inquiry', 'booking_request', 'quote_request'])
+    .withMessage('Invalid contact type')
+], async (req, res) => {
+  try {
+    const { id: driverId } = req.params;
+    const { message = '', loadId, contactType = 'inquiry' } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(driverId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid driver ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    // Only cargo owners and admins can contact drivers
+    if (req.user.userType !== 'cargo_owner' && req.user.userType !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only cargo owners can contact drivers'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const driversCollection = db.collection('drivers');
+    const usersCollection = db.collection('users');
+    const contactRequestsCollection = db.collection('contact_requests');
+
+    // Check if driver exists and is active
+    const driver = await driversCollection.findOne(
+      { _id: new mongoose.Types.ObjectId(driverId), isActive: { $ne: false } },
+      { projection: { name: 1, email: 1, phone: 1, 'driverProfile.isAvailable': 1 } }
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Driver not found or inactive'
+      });
+    }
+
+    // Get requester information
+    const requester = await usersCollection.findOne(
+      { _id: new mongoose.Types.ObjectId(req.user.id) },
+      { projection: { name: 1, email: 1, phone: 1, company: 1 } }
+    );
+
+    if (!requester) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Requester not found'
+      });
+    }
+
+    // Check for recent contact requests to prevent spam
+    const recentContact = await contactRequestsCollection.findOne({
+      requesterId: new mongoose.Types.ObjectId(req.user.id),
+      driverId: new mongoose.Types.ObjectId(driverId),
+      createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) } // 1 hour ago
+    });
+
+    if (recentContact) {
+      return res.status(429).json({
+        status: 'error',
+        message: 'You can only contact this driver once per hour'
+      });
+    }
+
+    // Create contact request record
+    const contactRequest = {
+      requesterId: new mongoose.Types.ObjectId(req.user.id),
+      driverId: new mongoose.Types.ObjectId(driverId),
+      requesterInfo: {
+        name: requester.name,
+        email: requester.email,
+        phone: requester.phone,
+        company: requester.company
+      },
+      driverInfo: {
+        name: driver.name,
+        email: driver.email
+      },
+      message,
+      contactType,
+      loadId: loadId ? new mongoose.Types.ObjectId(loadId) : null,
+      status: 'sent',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await contactRequestsCollection.insertOne(contactRequest);
+
+    // TODO: Send email/SMS notification to driver
+    // You can integrate with your notification service here
+
+    // Log the contact attempt
+    console.log(`Contact request sent from ${requester.name} (${requester.email}) to driver ${driver.name} (${driver.email})`);
+
+    res.json({
+      status: 'success',
+      message: 'Contact request sent successfully',
+      data: {
+        contactRequestId: contactRequest._id,
+        driverInfo: {
+          name: driver.name,
+          isAvailable: driver.driverProfile?.isAvailable
+        },
+        message: 'The driver will be notified about your contact request'
+      }
+    });
+
+  } catch (error) {
+    console.error('Contact driver error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error sending contact request',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/drivers/rate
+// @desc    Rate a driver (Cargo Owner only) 
+// @access  Private (Cargo Owner only)
+router.post('/rate/:driverId', auth, [
+  body('rating').isFloat({ min: 1, max: 5 }).withMessage('Rating must be between 1 and 5'),
+  body('review').optional().isLength({ max: 500 }).withMessage('Review cannot exceed 500 characters'),
+  body('bookingId').isMongoId().withMessage('Valid booking ID required')
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only cargo owners can rate drivers'
+      });
+    }
+
+    const { driverId } = req.params;
+    const { rating, review, bookingId } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(driverId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid driver ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+    const driversCollection = db.collection('drivers');
+
+    // Verify the booking exists and belongs to this cargo owner and driver
+    const booking = await bookingsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(bookingId),
+      driverId: new mongoose.Types.ObjectId(driverId),
+      cargoOwnerId: new mongoose.Types.ObjectId(req.user.id),
+      status: 'completed'
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Booking not found or not eligible for rating'
+      });
+    }
+
+    // Check if already rated
+    if (booking.rating) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This booking has already been rated'
+      });
+    }
+
+    // Update the booking with rating
+    await bookingsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(bookingId) },
+      {
+        $set: {
+          rating: parseFloat(rating),
+          review: review || '',
+          ratedAt: new Date(),
+          ratedBy: new mongoose.Types.ObjectId(req.user.id)
+        }
+      }
+    );
+
+    // Calculate new average rating for driver
+    const ratingStats = await bookingsCollection.aggregate([
+      {
+        $match: {
+          driverId: new mongoose.Types.ObjectId(driverId),
+          rating: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: '$rating' },
+          totalRatings: { $sum: 1 }
+        }
+      }
+    ]).toArray();
+
+    const newAverageRating = ratingStats.length > 0 ? ratingStats[0].averageRating : rating;
+    const totalRatings = ratingStats.length > 0 ? ratingStats[0].totalRatings : 1;
+
+    // Update driver's profile with new rating
+    await driversCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(driverId) },
+      {
+        $set: {
+          'driverProfile.rating': Math.round(newAverageRating * 10) / 10,
+          'driverProfile.totalRatings': totalRatings,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: 'Driver rated successfully',
+      data: {
+        rating: parseFloat(rating),
+        review: review || '',
+        bookingId,
+        driverId,
+        newAverageRating: Math.round(newAverageRating * 10) / 10,
+        totalRatings
+      }
+    });
+
+  } catch (error) {
+    console.error('Rate driver error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error rating driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/drivers/:id/bookings
+// @desc    Get driver's bookings
+// @access  Private (Driver only for own bookings, or cargo owner)
+router.get('/:id/bookings',  auth, [
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 100 }),
+  query('status').optional().isIn(['pending', 'accepted', 'in_progress', 'completed', 'cancelled'])
+], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20, status } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid driver ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    // Check if user can view these bookings
+    if (req.user.id !== id && req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Not authorized to view these bookings'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    let query = { driverId: new mongoose.Types.ObjectId(id) };
+    if (status) {
+      query.status = status;
+    }
+
+    // If cargo owner is requesting, only show bookings for their loads
+    if (req.user.userType === 'cargo_owner' && req.user.id !== id) {
+      query.cargoOwnerId = new mongoose.Types.ObjectId(req.user.id);
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const bookings = await bookingsCollection.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .toArray();
+
+    const totalBookings = await bookingsCollection.countDocuments(query);
+    const totalPages = Math.ceil(totalBookings / parseInt(limit));
+
+    res.json({
+      status: 'success',
+      data: {
+        bookings,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalBookings,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver bookings error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching bookings',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

@@ -10,7 +10,8 @@ import {
   Loader,
   ArrowLeft,
   Shield,
-  Star
+  Star,
+  Trash2
 } from 'lucide-react';
 import { getAuthHeader, authManager, getUser } from '../../utils/auth';
 
@@ -18,8 +19,10 @@ const DriverProfile = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -57,14 +60,6 @@ const DriverProfile = () => {
   ];
 
   useEffect(() => {
-    // Try to get user from local storage first
-    const currentUser = getUser();
-    if (currentUser) {
-      setUser(currentUser);
-      populateFormData(currentUser);
-    }
-    
-    // Then fetch fresh data from API
     fetchProfile();
   }, []);
 
@@ -96,55 +91,47 @@ const DriverProfile = () => {
   const fetchProfile = async () => {
     try {
       setError('');
-      const authHeaders = getAuthHeader();
-      const currentUser = getUser();
+      const token = getAuthHeader().Authorization;
       
-      
-      if (!authHeaders.Authorization) {
-        setError('No authentication token found. Please login again.');
+      if (!token) {
+        setError('Please login to access your profile.');
         setLoading(false);
         return;
       }
 
-      // Check if we have a valid user with driver userType
-      if (!currentUser || currentUser.userType !== 'driver') {
-        setError('Invalid user type. This page is only for drivers.');
-        setLoading(false);
-        return;
-      }
+      console.log('Fetching profile with token:', token.substring(0, 20) + '...');
 
-     
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'GET',
         headers: {
-          ...authHeaders,
+          'Authorization': token,
           'Content-Type': 'application/json'
         }
       });
 
-      
       if (response.ok) {
         const data = await response.json();
-        
         const profile = data.data.driver;
         setUser(profile);
         populateFormData(profile);
       } else {
         const errorData = await response.json();
-        console.error('Error response:', errorData);
         
-        // Handle specific error cases
-        if (response.status === 400 && errorData.message === 'Invalid driver ID') {
-          setError('Authentication issue detected. Please logout and login again to refresh your session.');
+        if (response.status === 401) {
+          setError('Your session has expired. Please login again.');
+          setTimeout(() => {
+            authManager.clearAuth();
+            window.location.href = '/login';
+          }, 2000);
         } else if (response.status === 403) {
-          setError('Access denied. Make sure you are logged in as a driver.');
+          setError('Access denied. This page is only for drivers.');
         } else {
-          setError(errorData.message || `Failed to load profile (${response.status})`);
+          setError(errorData.message || 'Failed to load profile');
         }
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
-      setError('Network error loading profile. Please check your connection.');
+      setError('Network error. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -174,19 +161,10 @@ const DriverProfile = () => {
         return;
       }
 
-      const authHeaders = getAuthHeader();
-      const currentUser = getUser();
+      const authToken = getAuthHeader().Authorization;
       
-      
-      if (!authHeaders.Authorization) {
-        setError('No authentication token found. Please login again.');
-        setSaving(false);
-        return;
-      }
-
-      // Check if we have a valid user with driver userType
-      if (!currentUser || currentUser.userType !== 'driver') {
-        setError('Invalid user type. This page is only for drivers.');
+      if (!authToken) {
+        setError('Please login to update your profile.');
         setSaving(false);
         return;
       }
@@ -198,55 +176,104 @@ const DriverProfile = () => {
         vehicleYear: formData.vehicleYear ? parseInt(formData.vehicleYear) : null
       };
 
+      console.log('Updating profile with data:', updateData);
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'PUT',
         headers: {
-          ...authHeaders,
+          'Authorization': authToken,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(updateData)
       });
 
-      
       if (response.ok) {
         const data = await response.json();
         const updatedProfile = data.data.driver;
         setUser(updatedProfile);
         
         // Update auth storage
+        const currentUser = getUser();
+        const updatedUser = { ...currentUser, ...updatedProfile };
         authManager.setAuth(
           authManager.getToken(),
-          updatedProfile,
+          updatedUser,
           localStorage.getItem('infiniteCargoRememberMe') === 'true'
         );
         
-        // Update form data with the latest profile data
         populateFormData(updatedProfile);
-        
         setSuccess('Profile updated successfully!');
         setTimeout(() => setSuccess(''), 5000);
       } else {
         const errorData = await response.json();
-        console.error('Update error response:', errorData);
         
-        // Handle specific error cases
-        if (response.status === 400 && errorData.message === 'Invalid driver ID') {
-          setError('Authentication issue detected. Please logout and login again to refresh your session.');
+        if (response.status === 401) {
+          setError('Your session has expired. Please login again.');
+          setTimeout(() => {
+            authManager.clearAuth();
+            window.location.href = '/login';
+          }, 2000);
         } else if (response.status === 403) {
-          setError('Access denied. Make sure you are logged in as a driver.');
+          setError('Access denied. This page is only for drivers.');
         } else if (errorData.errors && Array.isArray(errorData.errors)) {
           const errorMessages = errorData.errors.map(err => err.msg || err.message).join(', ');
           setError(`Validation errors: ${errorMessages}`);
         } else {
-          setError(errorData.message || `Failed to update profile (${response.status})`);
+          setError(errorData.message || 'Failed to update profile');
         }
       }
     } catch (error) {
       console.error('Error updating profile:', error);
-      setError('Network error updating profile. Please check your connection.');
+      setError('Network error. Please check your connection and try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteProfile = async () => {
+    setDeleting(true);
+    setError('');
+
+    try {
+      const authToken = getAuthHeader().Authorization;
+      
+      if (!authToken) {
+        setError('Please login to delete your profile.');
+        setDeleting(false);
+        return;
+      }
+
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
+        method: 'DELETE',
+        headers: {
+          'Authorization': authToken,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        alert('Profile deleted successfully. You will be logged out.');
+        authManager.clearAuth();
+        window.location.href = '/';
+      } else {
+        const errorData = await response.json();
+        
+        if (response.status === 401) {
+          setError('Your session has expired. Please login again.');
+          setTimeout(() => {
+            authManager.clearAuth();
+            window.location.href = '/login';
+          }, 2000);
+        } else {
+          setError(errorData.message || 'Failed to delete profile');
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting profile:', error);
+      setError('Network error. Please check your connection and try again.');
+    } finally {
+      setDeleting(false);
+      setShowDeleteModal(false);
     }
   };
 
@@ -279,6 +306,41 @@ const DriverProfile = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Delete Profile</h3>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete your profile? This action cannot be undone and you will lose all your data including job history and ratings.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteProfile}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center"
+              >
+                {deleting ? (
+                  <>
+                    <Loader className="animate-spin h-4 w-4 mr-2" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Profile'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white shadow-sm border-b">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -297,17 +359,26 @@ const DriverProfile = () => {
                 </p>
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-sm text-gray-600">Profile Completion</div>
-              <div className="flex items-center mt-1">
-                <div className="w-24 bg-gray-200 rounded-full h-2 mr-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${profileCompletion}%` }}
-                  />
+            <div className="flex items-center space-x-4">
+              <div className="text-right">
+                <div className="text-sm text-gray-600">Profile Completion</div>
+                <div className="flex items-center mt-1">
+                  <div className="w-24 bg-gray-200 rounded-full h-2 mr-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${profileCompletion}%` }}
+                    />
+                  </div>
+                  <span className="text-sm font-medium text-gray-900">{profileCompletion}%</span>
                 </div>
-                <span className="text-sm font-medium text-gray-900">{profileCompletion}%</span>
               </div>
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete Profile"
+              >
+                <Trash2 size={20} />
+              </button>
             </div>
           </div>
         </div>
