@@ -16,7 +16,6 @@ const optionalAuth = (req, res, next) => {
     const authHeader = req.header('Authorization');
     let token = req.header('x-auth-token');
 
-    // Check for Bearer token format first
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
     }
@@ -26,24 +25,21 @@ const optionalAuth = (req, res, next) => {
       return next();
     }
 
-    // Verify token
     const jwt = require('jsonwebtoken');
     
     if (!process.env.JWT_SECRET) {
-      console.warn('JWT_SECRET not configured - skipping token verification');
+      console.warn('JWT_SECRET not configured');
       req.user = null;
       return next();
     }
 
     let decoded;
     try {
-      // First try with issuer/audience if they're expected
       decoded = jwt.verify(token, process.env.JWT_SECRET, {
         issuer: 'infinite-cargo',
         audience: 'infinite-cargo-users'
       });
     } catch (jwtError) {
-      // If that fails, try without issuer/audience (fallback for older tokens)
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET);
       } catch (fallbackError) {
@@ -53,13 +49,11 @@ const optionalAuth = (req, res, next) => {
       }
     }
 
-    // Check token structure
     if (!decoded.user || !decoded.user.email) {
       req.user = null;
       return next();
     }
 
-    // Set user info (limited for optional auth)
     req.user = {
       id: decoded.user.id,
       email: decoded.user.email,
@@ -83,8 +77,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; 
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
@@ -106,13 +99,13 @@ function deg2rad(deg) {
 router.get('/user/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('status').optional().isIn(['posted','available','receiving_bids','driver_assigned','assigned','in_transit','delivered','cancelled','expired']),
-  query('sortBy').optional().isIn(['createdAt','budget','title','status']),
-  query('sortOrder').optional().isIn(['asc','desc'])
+  query('status').optional().isIn(['posted', 'available', 'receiving_bids', 'driver_assigned', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired']),
+  query('sortBy').optional().isIn(['createdAt', 'budget', 'title', 'status']),
+  query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   console.log('=== MY LOADS REQUEST START ===');
 
-  // ✅ AUTHENTICATION FIRST - avoid undefined req.user errors
+  // Authentication check
   if (!req.user || !req.user.id) {
     return res.status(401).json({
       status: 'error',
@@ -120,7 +113,7 @@ router.get('/user/my-loads', auth, [
     });
   }
 
-  // ✅ ROLE CHECK EARLY
+  // Role check
   if (req.user.userType !== 'cargo_owner') {
     return res.status(403).json({
       status: 'error',
@@ -128,7 +121,6 @@ router.get('/user/my-loads', auth, [
     });
   }
 
-  // ✅ Validate query parameters
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
@@ -140,7 +132,6 @@ router.get('/user/my-loads', auth, [
 
   const { page = 1, limit = 50, status, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
 
-  // ✅ DB connection check
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({
       status: 'error',
@@ -148,11 +139,9 @@ router.get('/user/my-loads', auth, [
     });
   }
 
-  // ✅ STEP 1: EXPIRE LOADS WITH PAST PICKUP DATES (Same as public route)
-  const now = new Date();
-  
   try {
-    console.log('Checking for loads with past pickup dates...');
+    // STEP 1: Expire loads with past pickup dates
+    const now = new Date();
     
     const expireResult = await Load.updateMany(
       {
@@ -172,7 +161,7 @@ router.get('/user/my-loads', auth, [
           statusHistory: {
             status: 'expired',
             changedAt: now,
-            changedBy: new mongoose.Types.ObjectId(req.user.id), // Owner can see it was system-expired
+            changedBy: new mongoose.Types.ObjectId(req.user.id),
             reason: 'Pickup date has passed',
             userRole: 'system'
           }
@@ -181,22 +170,19 @@ router.get('/user/my-loads', auth, [
     );
 
     if (expireResult.modifiedCount > 0) {
-      console.log(`Expired ${expireResult.modifiedCount} loads with past pickup dates for user ${req.user.id}`);
+      console.log(`Expired ${expireResult.modifiedCount} loads with past pickup dates`);
     }
-  } catch (expireError) {
-    console.warn('Error expiring past due loads:', expireError);
-    // Continue with the request even if expiration fails
-  }
 
-  // Build query
-  let queryObj = { postedBy: new mongoose.Types.ObjectId(req.user.id) };
-  if (status) queryObj.status = status;
+    // STEP 2: Build query
+    let queryObj = { postedBy: new mongoose.Types.ObjectId(req.user.id) };
+    if (status && status.trim()) {
+      queryObj.status = status.trim();
+    }
 
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-  const sortDirection = sortOrder === 'desc' ? -1 : 1;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
 
-  try {
-    // MAIN LOAD FETCH
+    // STEP 3: Fetch loads with proper population
     const loads = await Load.find(queryObj)
       .populate({
         path: 'postedBy',
@@ -217,13 +203,13 @@ router.get('/user/my-loads', auth, [
     const totalLoads = await Load.countDocuments(queryObj);
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // BID COUNTS
+    // STEP 4: Get bid counts
     let bidMap = {};
     if (loads.length > 0) {
       try {
         const ids = loads.map(l => l._id);
         const bidCounts = await Bid.aggregate([
-          { $match: { load: { $in: ids }, status: { $nin: ['withdrawn','expired'] } } },
+          { $match: { load: { $in: ids }, status: { $nin: ['withdrawn', 'expired'] } } },
           { $group: { _id: '$load', count: { $sum: 1 } } }
         ]);
         bidCounts.forEach(item => {
@@ -234,9 +220,9 @@ router.get('/user/my-loads', auth, [
       }
     }
 
+    // STEP 5: Transform data with consistent status values
     const transformed = loads.map(l => {
-      const cargoOwnerName =
-        l?.postedBy?.cargoOwnerProfile?.companyName ||
+      const cargoOwnerName = l?.postedBy?.cargoOwnerProfile?.companyName ||
         l?.postedBy?.companyName ||
         l?.postedBy?.name ||
         'Anonymous Cargo Owner';
@@ -248,28 +234,32 @@ router.get('/user/my-loads', auth, [
         pickupLocation: l.pickupLocation || '',
         deliveryLocation: l.deliveryLocation || '',
         budget: l.budget || 0,
-        status: l.status || 'posted',
+        status: l.status || 'posted', // Ensure status is always present
         createdAt: l.createdAt,
         pickupDate: l.pickupDate,
         deliveryDate: l.deliveryDate,
         isUrgent: l.isUrgent || false,
         isActive: l.isActive,
-        expiredAt: l.expiredAt, // Include expiration timestamp
+        expiredAt: l.expiredAt,
         bidCount: bidMap[l._id.toString()] || 0,
         cargoOwnerName,
         postedByName: cargoOwnerName,
-        // Add helper field to show if load was expired due to past pickup date
-        isExpiredDueToPastPickup: l.status === 'expired' && l.expiredAt && l.pickupDate && l.pickupDate < now
+        weight: l.weight,
+        cargoType: l.cargoType,
+        vehicleType: l.vehicleType,
+        // Add helper fields
+        isExpiredDueToPastPickup: l.status === 'expired' && l.expiredAt && l.pickupDate && l.pickupDate < now,
+        daysUntilPickup: l.pickupDate ? Math.ceil((new Date(l.pickupDate) - new Date()) / (1000 * 60 * 60 * 24)) : null
       };
     });
 
-    // SUMMARY STATS (Include expired loads in totals)
+    // STEP 6: Summary stats
     let summary = {
-      totalLoads: 0, 
-      activeLoads: 0, 
+      totalLoads: 0,
+      activeLoads: 0,
       expiredLoads: 0,
-      completedLoads: 0, 
-      totalBudget: 0, 
+      completedLoads: 0,
+      totalBudget: 0,
       avgBudget: 0
     };
 
@@ -280,9 +270,9 @@ router.get('/user/my-loads', auth, [
           $group: {
             _id: null,
             totalLoads: { $sum: 1 },
-            activeLoads: { $sum: { $cond: [{ $in: ['$status',['posted','available','receiving_bids', 'assigned','in_transit']]}, 1, 0] } },
-            expiredLoads: { $sum: { $cond: [{ $eq: ['$status','expired']}, 1, 0] } },
-            completedLoads: { $sum: { $cond: [{ $eq: ['$status','delivered']}, 1, 0] } },
+            activeLoads: { $sum: { $cond: [{ $in: ['$status', ['posted', 'available', 'receiving_bids', 'assigned', 'in_transit']] }, 1, 0] } },
+            expiredLoads: { $sum: { $cond: [{ $eq: ['$status', 'expired'] }, 1, 0] } },
+            completedLoads: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } },
             totalBudget: { $sum: '$budget' },
             avgBudget: { $avg: '$budget' }
           }
@@ -293,7 +283,6 @@ router.get('/user/my-loads', auth, [
       console.warn('Summary stats error:', statsErr.message);
     }
 
-    // ✅ SUCCESS RESPONSE
     return res.json({
       status: 'success',
       data: {
@@ -310,11 +299,11 @@ router.get('/user/my-loads', auth, [
         filters: { status: status || 'all', sortBy, sortOrder }
       }
     });
+
   } catch (err) {
-    console.error('=== MY LOADS **SERVER ERROR** ===');
+    console.error('=== MY LOADS SERVER ERROR ===');
     console.error(err);
 
-    // Generic server error
     return res.status(500).json({
       status: 'error',
       message: 'Server error fetching loads',
@@ -322,6 +311,7 @@ router.get('/user/my-loads', auth, [
     });
   }
 });
+
 
 
 // @route   GET /api/loads/subscription-status
@@ -1505,24 +1495,23 @@ router.get('/', optionalAuth, [
 // @desc    Update a load (cargo owners only)
 // @access  Private
 router.put('/:id', auth, [
-  body('title').optional().trim().isLength({ min: 1, max: 200 }),
-  body('description').optional().trim().isLength({ max: 1000 }),
-  body('pickupLocation').optional().trim().isLength({ min: 1 }),
-  body('deliveryLocation').optional().trim().isLength({ min: 1 }),
-  body('weight').optional().isFloat({ min: 0.1 }),
-  body('budget').optional().isFloat({ min: 100 }),
-  body('pickupDate').optional().isISO8601(),
-  body('deliveryDate').optional().isISO8601(),
-  body('cargoType').optional().isIn(['electronics', 'furniture', 'clothing', 'food', 'industrial', 'automotive', 'construction', 'other']),
-  body('vehicleType').optional().isIn(['small_truck', 'medium_truck', 'large_truck', 'van', 'pickup', 'trailer']),
-  body('vehicleCapacityRequired').optional().isFloat({ min: 0.1 }),
-  body('specialInstructions').optional().trim().isLength({ max: 500 }),
-  body('isUrgent').optional().isBoolean()
+  body('title').optional().trim().isLength({ min: 5, max: 200 }).withMessage('Title must be 5-200 characters'),
+  body('description').optional().trim().isLength({ min: 10, max: 1000 }).withMessage('Description must be 10-1000 characters'),
+  body('pickupLocation').optional().trim().notEmpty().withMessage('Pickup location cannot be empty'),
+  body('deliveryLocation').optional().trim().notEmpty().withMessage('Delivery location cannot be empty'),
+  body('weight').optional().isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1 kg'),
+  body('budget').optional().isFloat({ min: 100 }).withMessage('Budget must be at least KES 100'),
+  body('pickupDate').optional().isISO8601().withMessage('Invalid pickup date format'),
+  body('deliveryDate').optional().isISO8601().withMessage('Invalid delivery date format'),
+  body('cargoType').optional().isIn(['electronics', 'furniture', 'construction_materials', 'food_beverages', 'automotive_parts', 'textiles', 'chemicals', 'machinery', 'medical_supplies', 'agricultural_products', 'fragile_items', 'hazardous_materials', 'livestock', 'containers', 'other']).withMessage('Invalid cargo type'),
+  body('vehicleType').optional().isIn(['pickup', 'van', 'small_truck', 'medium_truck', 'large_truck', 'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck']).withMessage('Invalid vehicle type'),
+  body('vehicleCapacityRequired').optional().isFloat({ min: 0.1 }).withMessage('Vehicle capacity must be at least 0.1 tons'),
+  body('specialInstructions').optional().trim().isLength({ max: 500 }).withMessage('Special instructions must not exceed 500 characters'),
+  body('isUrgent').optional().isBoolean().withMessage('isUrgent must be a boolean')
 ], async (req, res) => {
   try {
     console.log('Update load request for ID:', req.params.id);
     
-    // Validation
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -1532,8 +1521,16 @@ router.put('/:id', auth, [
       });
     }
 
-    // Check if user is cargo owner
-    if (!req.user || req.user.userType !== 'cargo_owner') {
+    // Authentication check
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Authentication required'
+      });
+    }
+
+    // Role check
+    if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. Only cargo owners can update loads.'
@@ -1565,12 +1562,29 @@ router.put('/:id', auth, [
       });
     }
 
-    // Check if load can be edited 
-    if (!['posted','available', 'receiving_bids'].includes(load.status)) {
+    // FIXED: Allow editing of more statuses, but with restrictions
+    const editableStatuses = ['posted', 'available', 'receiving_bids'];
+    const restrictedEditStatuses = ['assigned', 'driver_assigned', 'in_transit'];
+    
+    if (!editableStatuses.includes(load.status) && !restrictedEditStatuses.includes(load.status)) {
       return res.status(400).json({
         status: 'error',
-        message: `Cannot edit load with status: ${load.status}. Only loads with 'posted' or 'receiving_bids' status can be edited.`
+        message: `Cannot edit load with status: ${load.status}. Only loads with status: ${editableStatuses.concat(restrictedEditStatuses).join(', ')} can be edited.`
       });
+    }
+
+    // If load is in restricted status, only allow certain fields to be updated
+    let allowedFields = Object.keys(req.body);
+    if (restrictedEditStatuses.includes(load.status)) {
+      const restrictedAllowedFields = ['pickupDate', 'deliveryDate', 'specialInstructions', 'contactPerson'];
+      allowedFields = allowedFields.filter(field => restrictedAllowedFields.includes(field));
+      
+      if (allowedFields.length === 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Load with status '${load.status}' can only have these fields updated: ${restrictedAllowedFields.join(', ')}`
+        });
+      }
     }
 
     // Date validation if provided
@@ -1594,24 +1608,30 @@ router.put('/:id', auth, [
       }
     }
 
-    // Update load
-    const updateData = {
-      ...req.body,
-      updatedAt: new Date()
-    };
-
-    // Remove undefined fields
-    Object.keys(updateData).forEach(key => {
-      if (updateData[key] === undefined) {
-        delete updateData[key];
+    // Build update data with only allowed fields
+    const updateData = {};
+    allowedFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
       }
     });
+    
+    updateData.updatedAt = new Date();
+
+    console.log('Updating load with data:', updateData);
 
     const updatedLoad = await Load.findByIdAndUpdate(
       req.params.id,
       updateData,
       { new: true, runValidators: true }
     ).populate('postedBy', 'name email companyName cargoOwnerProfile');
+
+    if (!updatedLoad) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found after update'
+      });
+    }
 
     console.log('Load updated successfully:', updatedLoad._id);
 
@@ -1638,7 +1658,10 @@ router.put('/:id', auth, [
     res.status(500).json({
       status: 'error',
       message: 'Server error updating load',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 });
@@ -1991,13 +2014,12 @@ router.get('/:id',  optionalAuth, async (req, res) => {
 // @desc    Update load status (cargo owners only)
 // @access  Private
 router.patch('/:id/status', auth, [
-  body('status').isIn(['posted','available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled']),
-  body('reason').optional().trim().isLength({ min: 1, max: 500 })
+  body('status').isIn(['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled']).withMessage('Invalid status'),
+  body('reason').optional().trim().isLength({ min: 1, max: 500 }).withMessage('Reason must be between 1-500 characters')
 ], async (req, res) => {
   try {
-    console.log('Update load status request:', { id: req.params.id, status: req.body.status });
+    console.log('Update load status request:', { id: req.params.id, status: req.body.status, user: req.user?.id });
 
-    // Validation
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -2007,8 +2029,16 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // Check if user is cargo owner
-    if (!req.user || req.user.userType !== 'cargo_owner') {
+    // Authentication check
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Authentication required'
+      });
+    }
+
+    // Role check
+    if (req.user.userType !== 'cargo_owner') {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. Only cargo owners can update load status.'
@@ -2042,55 +2072,62 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // Define valid status transitions
+    // FIXED: More flexible status transitions
     const statusTransitions = {
-      posted: ['receiving_bids', 'not_available', 'cancelled','available'],
+      posted: ['available', 'receiving_bids', 'not_available', 'cancelled'],
+      available: ['receiving_bids', 'assigned', 'driver_assigned', 'not_available', 'cancelled'],
       receiving_bids: ['assigned', 'driver_assigned', 'not_available', 'cancelled'],
-      assigned: ['in_transit', 'on_hold', 'cancelled'],
-      driver_assigned: ['in_transit', 'on_hold', 'cancelled'],
+      assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'], // Allow back to receiving bids
+      driver_assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'],
       in_transit: ['delivered', 'on_hold'],
-      on_hold: ['in_transit', 'cancelled'],
+      on_hold: ['in_transit', 'cancelled', 'receiving_bids'],
       delivered: ['completed'],
       completed: [], // Final state
-      not_available: ['posted','available'],
-      cancelled: [] // Final state
+      not_available: ['posted', 'available', 'receiving_bids'],
+      cancelled: ['posted', 'available'], // Allow reposting cancelled loads
+      expired: ['available', 'posted'] // Allow reactivating expired loads
     };
 
-    // Check if status transition is valid
-    const allowedTransitions = statusTransitions[load.status] || [];
+    const currentStatus = load.status || 'posted';
+    const allowedTransitions = statusTransitions[currentStatus] || [];
+    
     if (!allowedTransitions.includes(status)) {
       return res.status(400).json({
         status: 'error',
-        message: `Invalid status transition from '${load.status}' to '${status}'. Allowed transitions: ${allowedTransitions.join(', ')}`
+        message: `Invalid status transition from '${currentStatus}' to '${status}'. Allowed transitions: ${allowedTransitions.join(', ')}`
       });
     }
 
-    // Update load status
-    const updateData = {
-      status,
-      updatedAt: new Date()
-    };
-
-    // Add status history entry
-    if (!load.statusHistory) {
-      load.statusHistory = [];
-    }
-    
-    load.statusHistory.push({
-      status: load.status,
-      changedAt: load.updatedAt || load.createdAt,
-      changedBy: req.user.id,
-      reason: `Previous status: ${load.status}`
-    });
-
-    load.statusHistory.push({
+    // FIXED: Proper status history handling
+    const statusHistoryEntry = {
       status,
       changedAt: new Date(),
-      changedBy: req.user.id,
-      reason: reason || `Status changed to ${status}`
-    });
+      changedBy: new mongoose.Types.ObjectId(req.user.id),
+      reason: reason || `Status changed to ${status}`,
+      userRole: req.user.userType || 'cargo_owner'
+    };
 
-    updateData.statusHistory = load.statusHistory;
+    // Update data
+    const updateData = {
+      status,
+      updatedAt: new Date(),
+      $push: {
+        statusHistory: statusHistoryEntry
+      }
+    };
+
+    // Special handling for certain statuses
+    if (status === 'not_available' || status === 'cancelled') {
+      updateData.isActive = false;
+    } else if (['posted', 'available', 'receiving_bids'].includes(status)) {
+      updateData.isActive = true;
+    }
+
+    if (status === 'delivered') {
+      updateData.deliveredAt = new Date();
+    }
+
+    console.log('Updating load with data:', updateData);
 
     const updatedLoad = await Load.findByIdAndUpdate(
       req.params.id,
@@ -2099,7 +2136,14 @@ router.patch('/:id/status', auth, [
     ).populate('postedBy', 'name email companyName cargoOwnerProfile')
      .populate('assignedDriver', 'name phone email');
 
-    console.log('Load status updated:', { id: updatedLoad._id, newStatus: status });
+    if (!updatedLoad) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found after update'
+      });
+    }
+
+    console.log('Load status updated successfully:', { id: updatedLoad._id, newStatus: status });
 
     res.json({
       status: 'success',
@@ -2115,7 +2159,10 @@ router.patch('/:id/status', auth, [
     res.status(500).json({
       status: 'error',
       message: 'Server error updating load status',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : undefined
     });
   }
 });

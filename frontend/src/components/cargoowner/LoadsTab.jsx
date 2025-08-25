@@ -33,7 +33,8 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [error, setError] = useState('');
   const [selectedLoads, setSelectedLoads] = useState(new Set());
-  const [loads, setLoads] = useState([]);
+  const [loads, setLoads] = useState([]); 
+  const [Summary, setSummary] = useState('');
   const [user, setUser] = useState(null);
   const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
@@ -158,92 +159,136 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   // Fixed API endpoint to use the correct route
   const fetchLoads = useCallback(
-    async (page = 1, customFilters = null) => {
-      try {
-        if (page === 1) {
-          setInitialLoading(true);
-        } else {
-          setLoading(true);
-        }
-        setError('');
-
-        const currentFilters = customFilters || filters;
-        const queryParams = new URLSearchParams();
-
-        queryParams.append('page', page.toString());
-        queryParams.append('limit', pagination.limit.toString());
-        queryParams.append('sortBy', sortConfig.key);
-        queryParams.append('sortOrder', sortConfig.direction);
-
-        if (currentFilters.search?.trim()) {
-          queryParams.append('search', currentFilters.search.trim());
-        }
-
-        if (currentFilters.status) {
-          queryParams.append('status', currentFilters.status);
-        }
-
-        if (currentFilters.minBudget !== undefined && currentFilters.minBudget !== null && currentFilters.minBudget !== '') {
-          queryParams.append('minBudget', String(currentFilters.minBudget));
-        }
-
-        if (currentFilters.maxBudget !== undefined && currentFilters.maxBudget !== null && currentFilters.maxBudget !== '') {
-          queryParams.append('maxBudget', String(currentFilters.maxBudget));
-        }
-
-        if (currentFilters.urgent === true) {
-          queryParams.append('urgentOnly', 'true');
-        }
-
-        // Use the correct endpoint from the API - user/my-loads
-        const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
-        const headers = getAuthHeaders();
-
-        const response = await fetch(endpoint, { method: 'GET', headers });
-
-        if (!response.ok) {
-          if (response.status === 401) {
-            setError('Session expired. Please log in again.');
-            logout();
-            return;
-          }
-          if (response.status === 403) {
-            setError('Access denied. Only cargo owners can view loads.');
-            return;
-          }
-
-          const errorData = await response.json().catch(() => ({}));
-          const errMsg = errorData?.message || `HTTP ${response.status}`;
-          throw new Error(errMsg);
-        }
-
-        const data = await response.json();
-        if (data.status === 'success') {
-          const loadsData = data.data?.loads || [];
-          setLoads(loadsData);
-
-          if (data.data?.pagination) {
-            setPagination({
-              page: data.data.pagination.currentPage,
-              limit: data.data.pagination.limit || pagination.limit,
-              total: data.data.pagination.totalLoads,
-              totalPages: data.data.pagination.totalPages
-            });
-          }
-        } else {
-          throw new Error(data.message || 'Failed to fetch loads.');
-        }
-      } catch (err) {
-        console.error('Error fetching loads:', err);
-        setError(err.message || 'Failed to load data. Please try again.');
-        setLoads([]);
-      } finally {
-        setLoading(false);
-        setInitialLoading(false);
+  async (page = 1, customFilters = null) => {
+    try {
+      if (page === 1) {
+        setInitialLoading(true);
+      } else {
+        setLoading(true);
       }
-    },
-    [filters, sortConfig, pagination.limit]
-  );
+      setError('');
+
+      const currentFilters = customFilters || filters;
+      const queryParams = new URLSearchParams();
+
+      queryParams.append('page', page.toString());
+      queryParams.append('limit', pagination.limit.toString());
+      queryParams.append('sortBy', sortConfig.key);
+      queryParams.append('sortOrder', sortConfig.direction);
+
+      if (currentFilters.search?.trim()) {
+        queryParams.append('search', currentFilters.search.trim());
+      }
+
+      // FIXED: Only append status if it's not 'all' or empty
+      if (currentFilters.status && currentFilters.status !== 'all') {
+        queryParams.append('status', currentFilters.status);
+      }
+
+      if (currentFilters.minBudget !== undefined && currentFilters.minBudget !== null && currentFilters.minBudget !== '') {
+        queryParams.append('minBudget', String(currentFilters.minBudget));
+      }
+
+      if (currentFilters.maxBudget !== undefined && currentFilters.maxBudget !== null && currentFilters.maxBudget !== '') {
+        queryParams.append('maxBudget', String(currentFilters.maxBudget));
+      }
+
+      if (currentFilters.urgent === true) {
+        queryParams.append('urgentOnly', 'true');
+      }
+
+      const endpoint = `${API_BASE_URL}/loads/user/my-loads?${queryParams.toString()}`;
+      console.log('Fetching loads from:', endpoint);
+      
+      const headers = getAuthHeaders();
+      console.log('Request headers:', headers);
+
+      const response = await fetch(endpoint, { 
+        method: 'GET', 
+        headers,
+        credentials: 'include' // Add credentials for better auth handling
+      });
+
+      console.log('Fetch response:', response.status, response.statusText);
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setError('Session expired. Please log in again.');
+          logout();
+          return;
+        }
+        if (response.status === 403) {
+          setError('Access denied. Only cargo owners can view loads.');
+          return;
+        }
+
+        // Better error handling
+        let errorMessage = `Request failed with status ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData?.message || errorData?.error || errorMessage;
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      console.log('Fetch loads response data:', data);
+
+      if (data.status === 'success') {
+        const loadsData = data.data?.loads || [];
+        
+        // FIXED: Ensure each load has a valid status
+        const normalizedLoads = loadsData.map(load => ({
+          ...load,
+          status: load.status || 'posted', // Default status if missing
+          // Ensure other critical fields exist
+          title: load.title || 'Untitled Load',
+          budget: load.budget || 0,
+          createdAt: load.createdAt || new Date().toISOString(),
+          bidCount: load.bidCount || 0
+        }));
+
+        setLoads(normalizedLoads);
+
+        if (data.data?.pagination) {
+          setPagination({
+            page: data.data.pagination.currentPage,
+            limit: data.data.pagination.limit || pagination.limit,
+            total: data.data.pagination.totalLoads,
+            totalPages: data.data.pagination.totalPages
+          });
+        }
+
+        // FIXED: Set summary data if available
+        if (data.data?.summary) {
+          setSummary(data.data.summary);
+        }
+
+      } else {
+        throw new Error(data.message || 'Failed to fetch loads.');
+      }
+    } catch (err) {
+      console.error('Error fetching loads:', err);
+      const errorMessage = err.message || 'Failed to load data. Please try again.';
+      setError(errorMessage);
+      
+      // Don't clear loads on error unless it's a 401
+      if (!err.message?.includes('Session expired')) {
+        // Keep existing loads visible with error message
+      } else {
+        setLoads([]);
+      }
+    } finally {
+      setLoading(false);
+      setInitialLoading(false);
+    }
+  },
+  [filters, sortConfig, pagination.limit, getAuthHeaders, logout, setLoads, setPagination, setSummary, setError, setLoading, setInitialLoading]
+);
+
 
   // Update load status with modal confirmation
   const updateLoadStatus = async () => {
@@ -251,59 +296,89 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     setLoading(true);
     setError('');
 
-    // Validate inputs before making request
-    if (!statusUpdateData.loadId || !statusUpdateData.newStatus) {
-      throw new Error('Load ID and status are required');
+    // FIXED: Better validation
+    if (!statusUpdateData.loadId) {
+      throw new Error('Load ID is required');
     }
 
-    // Get fresh auth headers
+    if (!statusUpdateData.newStatus) {
+      throw new Error('New status is required');
+    }
+
+    // Validate that the new status is different from current
+    const currentLoad = loads.find(load => load._id === statusUpdateData.loadId);
+    if (!currentLoad) {
+      throw new Error('Load not found');
+    }
+
+    if (currentLoad.status === statusUpdateData.newStatus) {
+      throw new Error('Load is already in this status');
+    }
+
     const authHeaders = getAuthHeaders();
     
-    // Check if we have valid auth before making the request
-    if (!authHeaders.Authorization) {
+    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
       throw new Error('Authentication required. Please log in again.');
     }
 
     console.log('Updating load status:', {
       loadId: statusUpdateData.loadId,
+      currentStatus: currentLoad.status,
       newStatus: statusUpdateData.newStatus,
       reason: statusUpdateData.reason
     });
 
+    // FIXED: Ensure proper request body structure
+    const requestBody = {
+      status: statusUpdateData.newStatus,
+      reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
+    };
+
+    console.log('Status update request body:', requestBody);
+
     const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
       method: 'PATCH',
-      headers: authHeaders,
-      body: JSON.stringify({ 
-        status: statusUpdateData.newStatus,
-        reason: statusUpdateData.reason || `Status changed to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`
-      })
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json', // FIXED: Ensure content type is set
+      },
+      credentials: 'include',
+      body: JSON.stringify(requestBody)
     });
 
     console.log('Status update response:', response.status, response.statusText);
 
-    // Handle response without automatic logout
+    // FIXED: Better error handling with detailed messages
     if (!response.ok) {
       let errorMessage = 'Failed to update load status';
       
-      if (response.status === 401) {
-        errorMessage = 'Session expired. Please refresh the page and log in again.';
-        // Don't call logout here - just show the error
-        setError(errorMessage);
-        return;
-      }
-      
-      if (response.status === 403) {
-        errorMessage = 'You don\'t have permission to update this load status.';
-        setError(errorMessage);
-        return;
-      }
-
       try {
         const errorData = await response.json();
-        errorMessage = errorData.message || errorMessage;
+        console.log('Error response data:', errorData);
+        
+        if (response.status === 401) {
+          errorMessage = 'Session expired. Please refresh the page and log in again.';
+          setError(errorMessage);
+          // Consider calling logout here if needed
+          return;
+        }
+        
+        if (response.status === 403) {
+          errorMessage = 'You don\'t have permission to update this load status.';
+        } else if (response.status === 400) {
+          // Validation or business logic error
+          errorMessage = errorData.message || 'Invalid status update request';
+        } else if (response.status === 404) {
+          errorMessage = 'Load not found';
+        } else if (response.status >= 500) {
+          errorMessage = 'Server error. Please try again later.';
+        } else {
+          errorMessage = errorData.message || errorMessage;
+        }
+        
       } catch (parseError) {
         console.error('Error parsing error response:', parseError);
-        // Use the default error message
+        errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
       }
       
       throw new Error(errorMessage);
@@ -313,23 +388,38 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     console.log('Status update successful:', data);
 
     if (data.status === 'success') {
-      // Update the load in the local state
+      // FIXED: Update the load in local state with all relevant data
       setLoads(prevLoads => 
-        prevLoads.map(load =>
-          load._id === statusUpdateData.loadId ? { 
-            ...load, 
-            status: statusUpdateData.newStatus,
-            updatedAt: new Date().toISOString()
-          } : load
-        )
+        prevLoads.map(load => {
+          if (load._id === statusUpdateData.loadId) {
+            return { 
+              ...load, 
+              status: statusUpdateData.newStatus,
+              updatedAt: new Date().toISOString(),
+              // Update any other fields that might have changed
+              ...(data.data?.load && {
+                statusHistory: data.data.load.statusHistory,
+                isActive: data.data.load.isActive
+              })
+            };
+          }
+          return load;
+        })
       );
       
       // Close modal and reset
       setShowStatusUpdateModal(false);
       setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
       
-      // Optional: Show success message
-      console.log(`Load status updated to ${statusUpdateData.newStatus}`);
+      // FIXED: Show success feedback to user
+      const successMessage = `Load status successfully updated to ${statusConfig[statusUpdateData.newStatus]?.label || statusUpdateData.newStatus}`;
+      console.log(successMessage);
+      
+      // If you have a success message state, set it here
+      // setSuccessMessage(successMessage);
+      
+      // Optionally refresh the loads list to ensure consistency
+      // await fetchLoads(pagination.page);
       
     } else {
       throw new Error(data.message || 'Failed to update load status');
@@ -337,7 +427,10 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   } catch (err) {
     console.error('Error updating load status:', err);
-    setError(err.message || 'Failed to update load status');
+    const errorMessage = err.message || 'Failed to update load status';
+    setError(errorMessage);
+    
+    // Keep the modal open so user can try again or see the error
   } finally {
     setLoading(false);
   }
@@ -346,46 +439,205 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   // Delete load
   const deleteLoad = async (loadId) => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      });
+  if (!loadId) {
+    setError('Load ID is required');
+    return;
+  }
 
-      if (!response.ok) {
-        let errorMessage = 'Failed to delete load';
-        try {
-          const errorData = await response.json();
+  try {
+    setLoading(true);
+    setError('');
+    
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+
+    console.log('Deleting load:', loadId);
+    
+    const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+      credentials: 'include'
+    });
+
+    console.log('Delete response:', response.status, response.statusText);
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to delete load';
+      
+      try {
+        const errorData = await response.json();
+        console.log('Delete error response:', errorData);
+        
+        if (response.status === 401) {
+          errorMessage = 'Session expired. Please log in again.';
+          logout();
+          return;
+        } else if (response.status === 403) {
+          errorMessage = 'You don\'t have permission to delete this load.';
+        } else if (response.status === 404) {
+          errorMessage = 'Load not found or already deleted.';
+        } else if (response.status === 400) {
+          errorMessage = errorData.message || 'Cannot delete load in current status.';
+        } else {
           errorMessage = errorData.message || errorMessage;
-        } catch (parseError) {
+        }
+        
+      } catch (parseError) {
+        console.error('Error parsing delete error response:', parseError);
+        try {
           const errorText = await response.text();
           errorMessage = errorText || errorMessage;
+        } catch (textError) {
+          errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
         }
-        throw new Error(errorMessage);
       }
-
-      const data = await response.json();
       
-      if (data.status === 'success') {
-        setLoads(loads.filter(load => load._id !== loadId));
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log('Delete successful:', data);
+    
+    if (data.status === 'success') {
+      // FIXED: Update local state properly
+      setLoads(prevLoads => prevLoads.filter(load => load._id !== loadId));
+      
+      // FIXED: Update selected loads if using selection
+      if (setSelectedLoads) {
         setSelectedLoads(prev => {
           const newSet = new Set(prev);
           newSet.delete(loadId);
           return newSet;
         });
-      } else {
-        throw new Error(data.message || 'Failed to delete load');
       }
-    } catch (err) {
-      console.error('Error deleting load:', err);
-      setError(err.message || 'Failed to delete load');
-    } finally {
-      setLoading(false);
+      
+      // FIXED: Update pagination if needed
+      const newTotal = Math.max(0, pagination.total - 1);
+      const newTotalPages = Math.ceil(newTotal / pagination.limit);
+      
+      // If we're on the last page and it becomes empty, go to previous page
+      if (pagination.page > 1 && pagination.page > newTotalPages) {
+        const newPage = Math.max(1, newTotalPages);
+        await fetchLoads(newPage);
+      } else {
+        // Update pagination count
+        setPagination(prev => ({
+          ...prev,
+          total: newTotal,
+          totalPages: newTotalPages
+        }));
+      }
+      
+      console.log('Load deleted successfully');
+      
+    } else {
+      throw new Error(data.message || 'Failed to delete load');
     }
-  };
+    
+  } catch (err) {
+    console.error('Error deleting load:', err);
+    const errorMessage = err.message || 'Failed to delete load';
+    setError(errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
+
+//Edit Load Details
+const updateLoad = async (loadId, updateData) => {
+  if (!loadId) {
+    setError('Load ID is required');
+    return false;
+  }
+
+  try {
+    setLoading(true);
+    setError('');
+    
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+
+    console.log('Updating load:', loadId, updateData);
+    
+    const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
+      method: 'PUT',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify(updateData)
+    });
+
+    console.log('Update response:', response.status, response.statusText);
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to update load';
+      
+      try {
+        const errorData = await response.json();
+        console.log('Update error response:', errorData);
+        
+        if (response.status === 401) {
+          errorMessage = 'Session expired. Please log in again.';
+          logout();
+          return false;
+        } else if (response.status === 403) {
+          errorMessage = 'You don\'t have permission to update this load.';
+        } else if (response.status === 400) {
+          // Validation errors
+          if (errorData.errors && Array.isArray(errorData.errors)) {
+            errorMessage = errorData.errors.map(err => err.message || err.msg).join(', ');
+          } else {
+            errorMessage = errorData.message || 'Invalid update data.';
+          }
+        } else if (response.status === 404) {
+          errorMessage = 'Load not found.';
+        } else {
+          errorMessage = errorData.message || errorMessage;
+        }
+        
+      } catch (parseError) {
+        console.error('Error parsing update error response:', parseError);
+        errorMessage = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log('Update successful:', data);
+    
+    if (data.status === 'success' && data.data?.load) {
+      // Update the load in local state
+      setLoads(prevLoads => 
+        prevLoads.map(load => 
+          load._id === loadId ? { ...load, ...data.data.load } : load
+        )
+      );
+      
+      console.log('Load updated successfully');
+      return true;
+      
+    } else {
+      throw new Error(data.message || 'Failed to update load');
+    }
+    
+  } catch (err) {
+    console.error('Error updating load:', err);
+    const errorMessage = err.message || 'Failed to update load';
+    setError(errorMessage);
+    return false;
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Initial data loading
   useEffect(() => {
