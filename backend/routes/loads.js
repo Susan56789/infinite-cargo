@@ -1023,29 +1023,64 @@ router.get('/', optionalAuth, [
       minWeight, maxWeight, urgentOnly, sortBy, sortOrder
     });
 
-    // Build base query for active, available loads
+    // STEP 1: First expire any loads with past pickup dates
+    const now = new Date();
+    
+    try {
+      console.log('Checking for loads with past pickup dates...');
+      
+      const expireResult = await Load.updateMany(
+        {
+          isActive: true,
+          status: { $in: ['posted', 'available', 'receiving_bids'] },
+          pickupDate: { $lt: now }
+        },
+        {
+          $set: {
+            status: 'expired',
+            isActive: false,
+            expiredAt: now,
+            updatedAt: now
+          },
+          $push: {
+            statusHistory: {
+              status: 'expired',
+              changedAt: now,
+              changedBy: null, // System change
+              reason: 'Pickup date has passed',
+              userRole: 'system'
+            }
+          }
+        }
+      );
+
+      if (expireResult.modifiedCount > 0) {
+        console.log(`Expired ${expireResult.modifiedCount} loads with past pickup dates`);
+      }
+    } catch (expireError) {
+      console.warn('Error expiring past due loads:', expireError);
+      // Continue with the request even if expiration fails
+    }
+
+    // STEP 2: Build base query for active, non-expired loads
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
-      $and: [
-        { $or: [{ isActive: { $ne: false } }, { isActive: { $exists: false } }] }
-      ]
+      isActive: true,
+      $and: []
     };
 
-    // Add date filter - don't show very old loads (more than 30 days)
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    // Only show loads with future pickup dates OR no pickup date set
     baseQuery.$and.push({
       $or: [
-        { pickupDate: { $gte: thirtyDaysAgo } }, 
-        { pickupDate: { $exists: false } },   
-        { pickupDate: null },
-        { createdAt: { $gte: thirtyDaysAgo } } // Also check creation date
+        { pickupDate: { $gt: now } },
+        { pickupDate: { $exists: false } },
+        { pickupDate: null }
       ]
     });
 
     // Text search across multiple fields
     if (search && search.trim()) {
       const searchTerm = search.trim();
-      // Escape special regex characters
       const escapedSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escapedSearch, 'i');
       
@@ -1146,7 +1181,7 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // Build aggregation pipeline for better user data handling
+    // Build aggregation pipeline
     const pipeline = [
       { $match: baseQuery },
       
@@ -1300,6 +1335,22 @@ router.get('/', optionalAuth, [
                 email: { $ifNull: ['$userDetails.email', ''] }
               }
             }
+          },
+          
+          // Add expiration info for frontend
+          daysUntilPickup: {
+            $cond: {
+              if: '$pickupDate',
+              then: {
+                $ceil: {
+                  $divide: [
+                    { $subtract: ['$pickupDate', new Date()] },
+                    1000 * 60 * 60 * 24
+                  ]
+                }
+              },
+              else: null
+            }
           }
         }
       },
@@ -1334,6 +1385,9 @@ router.get('/', optionalAuth, [
         cargoOwnerName: load.cargoOwnerName || load.postedByName || 'Anonymous Cargo Owner',
         bidCount: load.bidCount || 0,
         viewCount: load.viewCount || 0,
+        daysUntilPickup: load.pickupDate ? 
+          Math.ceil((new Date(load.pickupDate) - new Date()) / (1000 * 60 * 60 * 24)) : 
+          null,
         postedBy: load.postedBy ? {
           _id: load.postedBy,
           name: load.cargoOwnerName || 'Anonymous',
@@ -1369,8 +1423,6 @@ router.get('/', optionalAuth, [
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    
-
     // Return successful response
     return res.json({
       status: 'success',
@@ -1388,25 +1440,7 @@ router.get('/', optionalAuth, [
     });
 
   } catch (err) {
-    // Try to provide debug information in development
-    if (process.env.NODE_ENV === 'development') {
-      try {
-        const db = mongoose.connection.db;
-        const totalCount = await db.collection('loads').countDocuments({});
-        console.log(`Total loads in database: ${totalCount}`);
-        
-        const sampleLoads = await db.collection('loads').find({}).limit(3).toArray();
-        console.log('Sample loads:', sampleLoads.map(l => ({
-          id: l._id,
-          title: l.title,
-          status: l.status,
-          isActive: l.isActive,
-          hasPostedBy: !!l.postedBy
-        })));
-      } catch (debugError) {
-        console.error('Debug query failed:', debugError);
-      }
-    }
+    console.error('Get loads error:', err);
     
     return res.status(500).json({
       status: 'error',
