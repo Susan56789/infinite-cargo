@@ -1,6 +1,6 @@
 // middleware/auth.js
 const jwt = require('jsonwebtoken');
-const User = require('../models/user'); 
+const mongoose = require('mongoose');
 
 module.exports = async (req, res, next) => {
   try {
@@ -81,12 +81,11 @@ module.exports = async (req, res, next) => {
 
     // Handle different token structures
     let userEmail;
-    let userId = decoded._id || decoded.id || decoded.user?.id;
+    let userId = decoded._id || decoded.id;
     
     if (decoded.user && decoded.user.email) {
       // Token structure: { user: { email: "..." }, ... }
       userEmail = decoded.user.email;
-      userId = decoded.user.id || decoded.user._id || userId;
     } else if (decoded.email) {
       // Token structure: { email: "...", ... }
       userEmail = decoded.email;
@@ -97,25 +96,24 @@ module.exports = async (req, res, next) => {
       });
     }
 
-    // FIXED: Use unified User model instead of separate collections
-    let user;
-    try {
-      if (userId) {
-        // First try to find by ID if available
-        user = await User.findById(userId);
-      }
-      
-      if (!user && userEmail) {
-        // Fallback to email lookup
-        user = await User.findOne({ email: userEmail });
-      }
-    } catch (dbError) {
-      console.error('Auth middleware - Database error:', dbError.message);
+    // Get database connection
+    const db = mongoose.connection.db;
+    if (!db) {
+      console.error('Auth middleware - Database connection not available');
       return res.status(500).json({
         status: 'error',
-        message: 'Database error during authentication'
+        message: 'Database connection error'
       });
     }
+
+    // Lookup user in both collections
+    const [driverUser, cargoOwnerUser] = await Promise.all([
+      db.collection('drivers').findOne({ email: userEmail }),
+      db.collection('cargo-owners').findOne({ email: userEmail })
+    ]);
+
+    const user = driverUser || cargoOwnerUser;
+    const userType = driverUser ? 'driver' : cargoOwnerUser ? 'cargo_owner' : null;
 
     if (!user) {
       console.log('Auth middleware - User not found for email:', userEmail);
@@ -140,31 +138,11 @@ module.exports = async (req, res, next) => {
       });
     }
 
-    // FIXED: Ensure userType is properly set
-    let userType = user.userType || decoded.userType;
-    
-    // Fallback userType detection if not explicitly set
-    if (!userType) {
-      if (user.driverProfile || user.vehicleType) {
-        userType = 'driver';
-      } else if (user.cargoOwnerProfile || user.companyName) {
-        userType = 'cargo_owner';
-      } else {
-        // Default based on which profile fields are present
-        userType = 'cargo_owner'; // Default assumption
-      }
-    }
-
-    // Normalize userType variations
-    if (['cargoOwner', 'cargo-owner', 'cargo_owner'].includes(userType)) {
-      userType = 'cargo_owner';
-    }
-
     // Set user information in request object
     req.user = {
-      id: user._id.toString(),
+      id: user._id,
       email: user.email,
-      name: user.name || user.fullName || '',
+      name: user.name || '',
       phone: user.phone || '',
       userType: userType,
       isVerified: user.isVerified || false,
@@ -173,11 +151,10 @@ module.exports = async (req, res, next) => {
       profileCompleted: user.profileCompleted || false,
       driverProfile: user.driverProfile || null,
       cargoOwnerProfile: user.cargoOwnerProfile || null,
-      companyName: user.companyName || user.cargoOwnerProfile?.companyName || '',
       accountStatus: user.accountStatus || 'active'
     };
 
-    console.log('Auth middleware - Authentication successful for:', user.email, 'Type:', userType, 'ID:', user._id);
+    console.log('Auth middleware - Authentication successful for:', user.email, 'Type:', userType);
     next();
 
   } catch (error) {
