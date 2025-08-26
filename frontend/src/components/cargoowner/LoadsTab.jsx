@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {  Package, Eye, Ban, 
   MapPin, ArrowRight, ChevronLeft, Calendar, 
-  Zap, Loader2,SortAsc, SortDesc, Truck, CheckCircle, XCircle,
+  Zap, Loader2, SortAsc, SortDesc, Truck, CheckCircle, XCircle,
   Download, ChevronRight, Trash2, Edit2,
   Pause, CheckCircle2, 
-  X, MoreVertical, Clock
+  X, MoreVertical, Clock, Filter, Search, Menu
 } from 'lucide-react';
 
 import { getAuthHeader, logout, getUser } from '../../utils/auth';
@@ -44,6 +44,11 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     totalPages: 0
   });
 
+  // Mobile state
+  const [showFilters, setShowFilters] = useState(false);
+  const [showMobileSort, setShowMobileSort] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
   // Edit Load Modal State
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingLoad, setEditingLoad] = useState(null);
@@ -80,6 +85,21 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       'Content-Type': 'application/json'
     };
   };
+
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) {
+        setShowFilters(false);
+        setShowMobileSort(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Status configuration
   const statusConfig = {
@@ -215,9 +235,8 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     setUser({ displayName: 'Anonymous Cargo Owner', ...user });
   };
 
-  //  Improved fetch loads function with better debouncing
+  // Improved fetch loads function with better debouncing
   const fetchLoads = useCallback(async (page = 1, customFilters = null, force = false) => {
-    // Create a unique key for this fetch request
     const requestKey = JSON.stringify({
       page,
       filters: customFilters || filters,
@@ -225,12 +244,10 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       limit: pagination.limit
     });
 
-    // If this is the same request as last time and not forced, skip it
     if (lastFetchRef.current === requestKey && !force) {
       return;
     }
 
-    // Clear any existing timeout
     if (fetchTimeoutRef.current) {
       clearTimeout(fetchTimeoutRef.current);
     }
@@ -331,7 +348,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           });
         }
 
-        // Store this request as the last successful one
         lastFetchRef.current = requestKey;
 
       } else {
@@ -359,7 +375,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     }
   }, [filters, sortConfig, pagination.limit]);
 
-  // Update load status function
+  // FIXED: Update load status function with better error handling
   const updateLoadStatus = async () => {
     try {
       setLoading(true);
@@ -383,10 +399,17 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         throw new Error('Authentication required. Please log in again.');
       }
 
+      // FIXED: Enhanced request body to match backend expectations
       const requestBody = {
         status: statusUpdateData.newStatus,
         reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
       };
+
+      console.log('Sending status update request:', {
+        url: `${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`,
+        body: requestBody,
+        headers: authHeaders
+      });
 
       const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
         method: 'PATCH',
@@ -395,11 +418,15 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         body: JSON.stringify(requestBody)
       });
 
+      console.log('Status update response:', response.status, response.statusText);
+
       if (!response.ok) {
         let errorMessage = 'Failed to update load status';
         
         try {
           const errorData = await response.json();
+          console.error('Status update error details:', errorData);
+          
           if (response.status === 401) {
             errorMessage = 'Session expired. Please refresh the page and log in again.';
             logout();
@@ -408,12 +435,17 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             errorMessage = 'You don\'t have permission to update this load status.';
           } else if (response.status === 400) {
             errorMessage = errorData.message || 'Invalid status update request';
+            // Log validation errors if present
+            if (errorData.errors) {
+              console.error('Validation errors:', errorData.errors);
+            }
           } else if (response.status === 404) {
             errorMessage = 'Load not found';
           } else {
             errorMessage = errorData.message || errorMessage;
           }
         } catch (parseError) {
+          console.error('Error parsing response:', parseError);
           errorMessage = `HTTP ${response.status}: ${response.statusText}`;
         }
         
@@ -421,9 +453,9 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       }
 
       const data = await response.json();
+      console.log('Status update success:', data);
 
       if (data.status === 'success') {
-        // Update the load in local state
         setLoads(prevLoads => 
           prevLoads.map(load => {
             if (load._id === statusUpdateData.loadId) {
@@ -441,7 +473,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           })
         );
         
-        // Close modal and reset
         setShowStatusUpdateModal(false);
         setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
         
@@ -506,7 +537,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
       const data = await response.json();
       if (data.status === 'success') {
-        // Update local state
         setLoads(prevLoads => prevLoads.filter(load => load._id !== loadId));
         setSelectedLoads(prev => {
           const newSet = new Set(prev);
@@ -514,7 +544,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           return newSet;
         });
         
-        // Update pagination
         const newTotal = Math.max(0, pagination.total - 1);
         const newTotalPages = Math.ceil(newTotal / pagination.limit);
         
@@ -594,7 +623,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
       const data = await response.json();
       if (data.status === 'success' && data.data?.load) {
-        // Update the load in local state
         setLoads(prevLoads => 
           prevLoads.map(load => 
             load._id === loadId ? { ...load, ...data.data.load } : load
@@ -760,7 +788,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     fetchLoads(1, null, true);
   }, []);
 
-  //  Better debounced filter/sort effect
+  // Better debounced filter/sort effect
   useEffect(() => {
     if (initialLoading) return;
 
@@ -784,6 +812,12 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     const handleClickOutside = (event) => {
       if (!event.target.closest('.dropdown-container')) {
         setDropdownOpenId(null);
+      }
+      if (!event.target.closest('.mobile-filter-container')) {
+        setShowFilters(false);
+      }
+      if (!event.target.closest('.mobile-sort-container')) {
+        setShowMobileSort(false);
       }
     };
 
@@ -873,7 +907,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     openEditModal(load);
   };
 
-  
   const handleBulkAction = async (action) => {
     if (selectedLoads.size === 0) {
       setError('Please select at least one load.');
@@ -1020,38 +1053,303 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">My Loads</h1>
-            <p className="text-gray-600 mt-1">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 md:p-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex-1">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900">My Loads</h1>
+            <p className="text-gray-600 text-sm md:text-base mt-1">
               Manage your cargo shipments and track their status
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          
+          {/* Mobile Action Buttons */}
+          <div className="flex items-center gap-2 md:gap-3">
+            {/* Mobile Filter Button */}
+            {isMobile && (
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+              >
+                <Filter className="h-4 w-4" />
+                Filter
+              </button>
+            )}
+            
+            {/* Mobile Sort Button */}
+            {isMobile && (
+              <button
+                onClick={() => setShowMobileSort(!showMobileSort)}
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+              >
+                <Menu className="h-4 w-4" />
+                Sort
+              </button>
+            )}
+            
+            {/* Post Load Button */}
+            {onPostLoad && (
+              <button
+                onClick={onPostLoad}
+                className="flex items-center gap-2 px-3 md:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition-colors"
+              >
+                <Package className="h-4 w-4" />
+                <span className="hidden sm:inline">Post Load</span>
+                <span className="sm:hidden">Post</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start justify-between">
+            <p className="text-red-800 text-sm">{error}</p>
             <button
               onClick={() => setError('')}
-              className="ml-auto text-red-600 hover:text-red-800"
+              className="ml-2 text-red-600 hover:text-red-800"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
+        )}
+      </div>
+
+      {/* Desktop Filters */}
+      {!isMobile && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 md:p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+            <div className="lg:col-span-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <input
+                  type="text"
+                  placeholder="Search loads..."
+                  value={filters.search}
+                  onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <select
+                value={filters.status}
+                onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Status</option>
+                <option value="posted">Posted</option>
+                <option value="available">Available</option>
+                <option value="receiving_bids">Receiving Bids</option>
+                <option value="assigned">Assigned</option>
+                <option value="in_transit">In Transit</option>
+                <option value="delivered">Delivered</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+            
+            <div>
+              <input
+                type="number"
+                placeholder="Min Budget"
+                value={filters.minBudget}
+                onChange={(e) => setFilters(prev => ({ ...prev, minBudget: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            
+            <div>
+              <input
+                type="number"
+                placeholder="Max Budget"
+                value={filters.maxBudget}
+                onChange={(e) => setFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.urgent}
+                  onChange={(e) => setFilters(prev => ({ ...prev, urgent: e.target.checked }))}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="ml-2 text-sm text-gray-700">Urgent Only</span>
+              </label>
+            </div>
+          </div>
+          
+          <div className="flex justify-end mt-4">
+            <button
+              onClick={clearFilters}
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Clear Filters
+            </button>
+          </div>
         </div>
-      
+      )}
+
+      {/* Mobile Filters Overlay */}
+      {isMobile && showFilters && (
+        <div className="mobile-filter-container bg-white rounded-lg shadow-lg border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Filter Loads</h3>
+            <button
+              onClick={() => setShowFilters(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <input
+                  type="text"
+                  placeholder="Search loads..."
+                  value={filters.search}
+                  onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select
+                value={filters.status}
+                onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Status</option>
+                <option value="posted">Posted</option>
+                <option value="available">Available</option>
+                <option value="receiving_bids">Receiving Bids</option>
+                <option value="assigned">Assigned</option>
+                <option value="in_transit">In Transit</option>
+                <option value="delivered">Delivered</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Min Budget</label>
+                <input
+                  type="number"
+                  placeholder="Min Budget"
+                  value={filters.minBudget}
+                  onChange={(e) => setFilters(prev => ({ ...prev, minBudget: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget</label>
+                <input
+                  type="number"
+                  placeholder="Max Budget"
+                  value={filters.maxBudget}
+                  onChange={(e) => setFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.urgent}
+                  onChange={(e) => setFilters(prev => ({ ...prev, urgent: e.target.checked }))}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="ml-2 text-sm text-gray-700">Show urgent loads only</span>
+              </label>
+            </div>
+            
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={clearFilters}
+                className="flex-1 px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 border border-gray-300 rounded-lg transition-colors"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => setShowFilters(false)}
+                className="flex-1 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Sort Overlay */}
+      {isMobile && showMobileSort && (
+        <div className="mobile-sort-container bg-white rounded-lg shadow-lg border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Sort By</h3>
+            <button
+              onClick={() => setShowMobileSort(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          
+          <div className="space-y-2">
+            {[
+              { key: 'createdAt', label: 'Date Created' },
+              { key: 'budget', label: 'Budget' },
+              { key: 'status', label: 'Status' },
+              { key: 'pickupDate', label: 'Pickup Date' }
+            ].map((option) => (
+              <button
+                key={option.key}
+                onClick={() => {
+                  handleSort(option.key);
+                  setShowMobileSort(false);
+                }}
+                className={`flex items-center justify-between w-full px-3 py-2 text-left rounded-lg transition-colors ${
+                  sortConfig.key === option.key 
+                    ? 'bg-blue-100 text-blue-700' 
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                <span>{option.label}</span>
+                {sortConfig.key === option.key && (
+                  sortConfig.direction === 'asc' ? 
+                    <SortAsc className="h-4 w-4" /> : 
+                    <SortDesc className="h-4 w-4" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Bulk Actions */}
       {selectedLoads.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-blue-800">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 md:p-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <p className="text-blue-800 text-sm md:text-base">
               {selectedLoads.size} load{selectedLoads.size !== 1 ? 's' : ''} selected
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
               <button
                 onClick={() => handleBulkAction('export')}
                 disabled={loading}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 text-sm bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
               >
                 <Download className="h-4 w-4" />
                 Export
@@ -1059,10 +1357,10 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
               <button
                 onClick={() => handleBulkAction('cancel')}
                 disabled={loading}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
               >
                 <Ban className="h-4 w-4" />
-                Cancel Selected
+                Cancel
               </button>
             </div>
           </div>
@@ -1071,74 +1369,70 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
       {/* Loads List */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        {/* Table Header */}
-        <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <label className="flex items-center">
-                <input
-                  type="checkbox"
-                  checked={loads.length > 0 && selectedLoads.size === loads.length}
-                  onChange={selectAllLoads}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="ml-2 text-sm text-gray-700">
-                  Select all ({loads.length})
-                </span>
-              </label>
-            </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <span>Sort by:</span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleSort('createdAt')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                    sortConfig.key === 'createdAt' 
-                      ? 'bg-blue-100 text-blue-700' 
-                      : 'hover:bg-gray-100'
-                  }`}
-                >
-                  Date
-                  {sortConfig.key === 'createdAt' && (
-                    sortConfig.direction === 'asc' ? 
-                      <SortAsc className="h-3 w-3" /> : 
-                      <SortDesc className="h-3 w-3" />
-                  )}
-                </button>
-                <button
-                  onClick={() => handleSort('budget')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                    sortConfig.key === 'budget' 
-                      ? 'bg-blue-100 text-blue-700' 
-                      : 'hover:bg-gray-100'
-                  }`}
-                >
-                  Budget
-                  {sortConfig.key === 'budget' && (
-                    sortConfig.direction === 'asc' ? 
-                      <SortAsc className="h-3 w-3" /> : 
-                      <SortDesc className="h-3 w-3" />
-                  )}
-                </button>
-                <button
-                  onClick={() => handleSort('status')}
-                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                    sortConfig.key === 'status' 
-                      ? 'bg-blue-100 text-blue-700' 
-                      : 'hover:bg-gray-100'
-                  }`}
-                >
-                  Status
-                  {sortConfig.key === 'status' && (
-                    sortConfig.direction === 'asc' ? 
-                      <SortAsc className="h-3 w-3" /> : 
-                      <SortDesc className="h-3 w-3" />
-                  )}
-                </button>
+        {/* Desktop Table Header - Hidden on mobile */}
+        {!isMobile && (
+          <div className="px-6 py-4 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={loads.length > 0 && selectedLoads.size === loads.length}
+                    onChange={selectAllLoads}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="ml-2 text-sm text-gray-700">
+                    Select all ({loads.length})
+                  </span>
+                </label>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <span>Sort by:</span>
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: 'createdAt', label: 'Date' },
+                    { key: 'budget', label: 'Budget' },
+                    { key: 'status', label: 'Status' }
+                  ].map((option) => (
+                    <button
+                      key={option.key}
+                      onClick={() => handleSort(option.key)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                        sortConfig.key === option.key 
+                          ? 'bg-blue-100 text-blue-700' 
+                          : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      {option.label}
+                      {sortConfig.key === option.key && (
+                        sortConfig.direction === 'asc' ? 
+                          <SortAsc className="h-3 w-3" /> : 
+                          <SortDesc className="h-3 w-3" />
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* Mobile Select All - Only on mobile */}
+        {isMobile && loads.length > 0 && (
+          <div className="px-4 py-3 border-b border-gray-200">
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={loads.length > 0 && selectedLoads.size === loads.length}
+                onChange={selectAllLoads}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="ml-2 text-sm text-gray-700">
+                Select all ({loads.length})
+              </span>
+            </label>
+          </div>
+        )}
 
         {/* Loads List Content */}
         {loading && loads.length === 0 ? (
@@ -1149,10 +1443,10 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             </div>
           </div>
         ) : loads.length === 0 ? (
-          <div className="text-center py-12">
+          <div className="text-center py-12 px-4">
             <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
-            <p className="text-gray-600 mb-4">
+            <p className="text-gray-600 mb-4 max-w-md mx-auto">
               You haven't posted any loads yet or no loads match your current filters.
             </p>
             {onPostLoad && (
@@ -1168,88 +1462,89 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         ) : (
           <div className="divide-y divide-gray-200">
             {loads.map((load) => (
-              <div key={load._id} className="p-6 hover:bg-gray-50 transition-colors">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-4">
-                    {/* Checkbox */}
-                    <label className="flex items-center mt-1">
-                      <input
-                        type="checkbox"
-                        checked={selectedLoads.has(load._id)}
-                        onChange={() => toggleLoadSelection(load._id)}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </label>
+              <div key={load._id} className="p-4 md:p-6 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start gap-3 md:gap-4">
+                  {/* Checkbox */}
+                  <label className="flex items-center mt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedLoads.has(load._id)}
+                      onChange={() => toggleLoadSelection(load._id)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
 
-                    {/* Load Info */}
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                            {load.title}
-                            {load.isUrgent && (
-                              <span className="ml-2 inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
-                                <Zap className="h-3 w-3" />
-                                Urgent
-                              </span>
-                            )}
-                          </h3>
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(load.status)}`}>
-                              {getStatusIcon(load.status)}
-                              {getStatusLabel(load.status)}
+                  {/* Load Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-2 md:gap-4 mb-2">
+                      <div className="flex-1">
+                        <h3 className="text-base md:text-lg font-semibold text-gray-900 mb-1 break-words">
+                          {load.title}
+                          {load.isUrgent && (
+                            <span className="ml-2 inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                              <Zap className="h-3 w-3" />
+                              Urgent
                             </span>
-                            {load.bidCount > 0 && (
-                              <span className="text-sm text-gray-600">
-                                {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xl font-bold text-gray-900">{formatCurrency(load.budget)}</p>
-                          <p className="text-sm text-gray-600">{load.weight} kg</p>
+                          )}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <span className={`inline-flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium border ${getStatusColor(load.status)}`}>
+                            {getStatusIcon(load.status)}
+                            {getStatusLabel(load.status)}
+                          </span>
+                          {load.bidCount > 0 && (
+                            <span className="text-xs md:text-sm text-gray-600">
+                              {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
+                            </span>
+                          )}
                         </div>
                       </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-lg md:text-xl font-bold text-gray-900">{formatCurrency(load.budget)}</p>
+                        <p className="text-sm text-gray-600">{load.weight} kg</p>
+                      </div>
+                    </div>
 
-                      {/* Description */}
-                      {load.description && (
-                        <p className="text-gray-700 mb-3 line-clamp-2">{load.description}</p>
-                      )}
+                    {/* Description */}
+                    {load.description && (
+                      <p className="text-gray-700 text-sm md:text-base mb-3 line-clamp-2">{load.description}</p>
+                    )}
 
-                      {/* Route and Details */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <MapPin className="h-4 w-4 flex-shrink-0" />
-                          <span className="truncate">
+                    {/* Route and Details - Mobile Optimized */}
+                    <div className="space-y-2 md:space-y-0 md:grid md:grid-cols-2 gap-4 mb-3">
+                      <div className="flex items-start md:items-center gap-2 text-sm text-gray-600">
+                        <MapPin className="h-4 w-4 flex-shrink-0 mt-0.5 md:mt-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="block md:inline truncate">
                             {typeof load.pickupLocation === 'string' ? load.pickupLocation : load.pickupLocation?.address || 'N/A'}
                           </span>
-                          <ArrowRight className="h-4 w-4 flex-shrink-0" />
-                          <span className="truncate">
+                          <ArrowRight className="h-3 w-3 inline mx-1 hidden md:inline-block" />
+                          <span className="block md:inline text-xs text-gray-500 md:text-sm md:text-gray-600">→</span>
+                          <span className="block md:inline truncate">
                             {typeof load.deliveryLocation === 'string' ? load.deliveryLocation : load.deliveryLocation?.address || 'N/A'}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Calendar className="h-4 w-4 flex-shrink-0" />
-                          <span>Pickup: {formatDate(load.pickupDate)}</span>
-                        </div>
                       </div>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Calendar className="h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">Pickup: {formatDate(load.pickupDate)}</span>
+                      </div>
+                    </div>
 
-                      {/* Meta Info */}
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span>Posted {formatDate(load.createdAt)}</span>
-                        {load.cargoType && (
-                          <span className="capitalize">{load.cargoType.replace(/_/g, ' ')}</span>
-                        )}
-                        {load.vehicleType && (
-                          <span className="capitalize">{load.vehicleType.replace(/_/g, ' ')}</span>
-                        )}
-                      </div>
+                    {/* Meta Info */}
+                    <div className="flex flex-wrap items-center gap-2 md:gap-4 text-xs md:text-sm text-gray-500">
+                      <span>Posted {formatDate(load.createdAt)}</span>
+                      {load.cargoType && (
+                        <span className="capitalize">{load.cargoType.replace(/_/g, ' ')}</span>
+                      )}
+                      {load.vehicleType && (
+                        <span className="capitalize">{load.vehicleType.replace(/_/g, ' ')}</span>
+                      )}
                     </div>
                   </div>
 
-                  {/* Actions */}
-                  <div className="relative dropdown-container">
+                  {/* Actions - Mobile optimized dropdown */}
+                  <div className="relative dropdown-container shrink-0">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1329,36 +1624,38 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           </div>
         )}
 
-        {/* Pagination */}
+        {/* Pagination - Mobile optimized */}
         {pagination.totalPages > 1 && (
-          <div className="px-6 py-4 border-t border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-600">
+          <div className="px-4 md:px-6 py-4 border-t border-gray-200">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="text-sm text-gray-600 order-2 sm:order-1">
                 Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
                 {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
                 {pagination.total} loads
               </div>
-              <div className="flex items-center gap-2">
+              
+              <div className="flex items-center gap-1 sm:gap-2 order-1 sm:order-2">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page <= 1 || loading}
-                  className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+                  className="flex items-center gap-1 px-2 md:px-3 py-2 text-xs md:text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
                 >
                   <ChevronLeft className="h-4 w-4" />
-                  Previous
+                  <span className="hidden sm:inline">Previous</span>
                 </button>
                 
+                {/* Mobile: Show fewer page numbers */}
                 <div className="flex items-center gap-1">
-                  {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+                  {Array.from({ length: Math.min(isMobile ? 3 : 5, pagination.totalPages) }, (_, i) => {
                     let pageNum;
-                    if (pagination.totalPages <= 5) {
+                    if (pagination.totalPages <= (isMobile ? 3 : 5)) {
                       pageNum = i + 1;
-                    } else if (pagination.page <= 3) {
+                    } else if (pagination.page <= (isMobile ? 2 : 3)) {
                       pageNum = i + 1;
-                    } else if (pagination.page >= pagination.totalPages - 2) {
-                      pageNum = pagination.totalPages - 4 + i;
+                    } else if (pagination.page >= pagination.totalPages - (isMobile ? 1 : 2)) {
+                      pageNum = pagination.totalPages - (isMobile ? 2 : 4) + i;
                     } else {
-                      pageNum = pagination.page - 2 + i;
+                      pageNum = pagination.page - (isMobile ? 1 : 2) + i;
                     }
 
                     return (
@@ -1366,7 +1663,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                         key={pageNum}
                         onClick={() => handlePageChange(pageNum)}
                         disabled={loading}
-                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                        className={`px-2 md:px-3 py-2 text-xs md:text-sm font-medium rounded-lg transition-colors ${
                           pageNum === pagination.page
                             ? 'bg-blue-600 text-white'
                             : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
@@ -1381,9 +1678,9 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                 <button
                   onClick={() => handlePageChange(pagination.page + 1)}
                   disabled={pagination.page >= pagination.totalPages || loading}
-                  className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+                  className="flex items-center gap-1 px-2 md:px-3 py-2 text-xs md:text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
                 >
-                  Next
+                  <span className="hidden sm:inline">Next</span>
                   <ChevronRight className="h-4 w-4" />
                 </button>
               </div>
@@ -1395,7 +1692,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       {/* Loading Overlay */}
       {loading && loads.length > 0 && (
         <div className="fixed inset-0 bg-black bg-opacity-25 flex items-center justify-center z-40">
-          <div className="bg-white rounded-lg p-6 flex items-center gap-3 shadow-lg">
+          <div className="bg-white rounded-lg p-6 flex items-center gap-3 shadow-lg mx-4">
             <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
             <span className="text-gray-700">Updating...</span>
           </div>
@@ -1427,10 +1724,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         vehicleTypeOptions={vehicleTypeOptions}
       />
     </div>
-    </div>
-  )
-}
-  
-
+  );
+};
 
 export default LoadsTab;
