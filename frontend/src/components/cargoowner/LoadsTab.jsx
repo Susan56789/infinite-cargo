@@ -1,25 +1,22 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {  Package, Eye, Ban, 
-  MapPin, ArrowRight, ChevronLeft, Calendar, 
+  MapPin, ArrowRight, ChevronLeft,  
   Zap, Loader2, SortAsc, SortDesc, Truck, CheckCircle, XCircle,
   Download, ChevronRight, Trash2, Edit2,
   Pause, CheckCircle2, 
-  X, MoreVertical, Clock, Filter, Search, Menu
+  X, Clock, Filter, Menu, Settings, 
 } from 'lucide-react';
 
 import { getAuthHeader, logout, getUser } from '../../utils/auth';
 import StatusUpdateModal from './modals/StatusUpdateModal';
 import EditLoadModal from './modals/EditLoadModal';
 
+
 const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   // State management
   const [filters, setFilters] = useState({
     search: '',
     status: 'all',
-    minBudget: '',
-    maxBudget: '',
-    pickupDate: '',
-    deliveryDate: '',
     urgent: false
   });
   
@@ -34,7 +31,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   const [selectedLoads, setSelectedLoads] = useState(new Set());
   const [loads, setLoads] = useState([]);
   const [user, setUser] = useState(null);
-  const [dropdownOpenId, setDropdownOpenId] = useState(null);
   const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
   const [statusUpdateData, setStatusUpdateData] = useState({ loadId: '', newStatus: '', reason: '' });
   const [pagination, setPagination] = useState({
@@ -71,6 +67,9 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   const [editFormErrors, setEditFormErrors] = useState({});
   const [isEditSubmitting, setIsEditSubmitting] = useState(false);
 
+  // Action menu state
+  const [activeActionMenu, setActiveActionMenu] = useState(null);
+
   // Prevent excessive re-renders
   const lastFetchRef = useRef(null);
   const fetchTimeoutRef = useRef(null);
@@ -86,72 +85,41 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     };
   };
 
-  const dropdownStyles = `
-  .status-dropdown {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 4px;
-    width: 240px;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-    z-index: 50;
-    max-height: 400px;
-    overflow-y: auto;
-  }
-
-  @media (max-width: 768px) {
-    .status-dropdown {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      right: auto;
-      transform: translate(-50%, -50%);
-      width: 90vw;
-      max-width: 320px;
-      max-height: 70vh;
+  const getActualLoadStatus = (load) => {
+    const now = new Date();
+    
+    // Check if load should be expired
+    const isExpired = (
+      (load.biddingEndDate && new Date(load.biddingEndDate) < now) ||
+      (load.pickupDate && new Date(load.pickupDate) < now && ['posted', 'available', 'receiving_bids'].includes(load.status))
+    );
+    
+    if (isExpired && ['posted', 'available', 'receiving_bids'].includes(load.status)) {
+      return 'expired';
     }
-  }
-`;
-
-const getActualLoadStatus = (load) => {
-  const now = new Date();
-  
-  // Check if load should be expired
-  const isExpired = (
-    (load.biddingEndDate && new Date(load.biddingEndDate) < now) ||
-    (load.pickupDate && new Date(load.pickupDate) < now && ['posted', 'available', 'receiving_bids'].includes(load.status))
-  );
-  
-  if (isExpired && ['posted', 'available', 'receiving_bids'].includes(load.status)) {
-    return 'expired';
-  }
-  
-  return load.status;
-};
-
-// Update your loads mapping in the component
-const normalizedLoads = loads.map(load => {
-  const actualStatus = getActualLoadStatus(load);
-  
-  return {
-    ...load,
-    status: actualStatus,
-    originalStatus: load.status, 
-    title: load.title || 'Untitled Load',
-    budget: load.budget || 0,
-    createdAt: load.createdAt || new Date().toISOString(),
-    bidCount: load.bidCount || 0,
-    isActive: actualStatus === 'expired' ? false : (load.isActive !== undefined ? load.isActive : true),
-    weight: load.weight || 0,
-    cargoType: load.cargoType || 'other',
-    vehicleType: load.vehicleType || 'any',
-    isExpired: actualStatus === 'expired'
+    
+    return load.status;
   };
-});
 
+  // Update your loads mapping in the component
+  const normalizedLoads = loads.map(load => {
+    const actualStatus = getActualLoadStatus(load);
+    
+    return {
+      ...load,
+      status: actualStatus,
+      originalStatus: load.status, 
+      title: load.title || 'Untitled Load',
+      budget: load.budget || 0,
+      createdAt: load.createdAt || new Date().toISOString(),
+      bidCount: load.bidCount || 0,
+      isActive: actualStatus === 'expired' ? false : (load.isActive !== undefined ? load.isActive : true),
+      weight: load.weight || 0,
+      cargoType: load.cargoType || 'other',
+      vehicleType: load.vehicleType || 'any',
+      isExpired: actualStatus === 'expired'
+    };
+  });
 
   // Handle window resize
   useEffect(() => {
@@ -343,14 +311,6 @@ const normalizedLoads = loads.map(load => {
         queryParams.append('status', currentFilters.status.trim());
       }
 
-      if (currentFilters.minBudget && !isNaN(parseFloat(currentFilters.minBudget))) {
-        queryParams.append('minBudget', currentFilters.minBudget);
-      }
-
-      if (currentFilters.maxBudget && !isNaN(parseFloat(currentFilters.maxBudget))) {
-        queryParams.append('maxBudget', currentFilters.maxBudget);
-      }
-
       if (currentFilters.urgent === true) {
         queryParams.append('urgentOnly', 'true');
       }
@@ -472,14 +432,12 @@ const normalizedLoads = loads.map(load => {
         reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
       };
 
-
       const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
         method: 'PATCH',
         headers: authHeaders,
         credentials: 'include',
         body: JSON.stringify(requestBody)
       });
-
 
       if (!response.ok) {
         let errorMessage = 'Failed to update load status';
@@ -514,7 +472,6 @@ const normalizedLoads = loads.map(load => {
       }
 
       const data = await response.json();
-      
 
       if (data.status === 'success') {
         setLoads(prevLoads => 
@@ -868,11 +825,11 @@ const normalizedLoads = loads.map(load => {
     };
   }, [filters, sortConfig]);
 
-  // Close dropdown when clicking outside
+  // Close action menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (!event.target.closest('.dropdown-container')) {
-        setDropdownOpenId(null);
+      if (!event.target.closest('.action-menu-container')) {
+        setActiveActionMenu(null);
       }
       if (!event.target.closest('.mobile-filter-container')) {
         setShowFilters(false);
@@ -1080,23 +1037,20 @@ const normalizedLoads = loads.map(load => {
       reason: ''
     });
     setShowStatusUpdateModal(true);
-    setDropdownOpenId(null);
+    setActiveActionMenu(null);
   };
 
   const handleDeleteLoad = async (loadId) => {
     if (window.confirm('Are you sure you want to delete this load? This action cannot be undone.')) {
       await deleteLoad(loadId);
     }
+    setActiveActionMenu(null);
   };
 
   const clearFilters = () => {
     setFilters({
       search: '',
       status: 'all',
-      minBudget: '',
-      maxBudget: '',
-      pickupDate: '',
-      deliveryDate: '',
       urgent: false
     });
   };
@@ -1177,21 +1131,18 @@ const normalizedLoads = loads.map(load => {
         )}
       </div>
 
-      {/* Desktop Filters */}
+      {/* Simple Filters - Desktop Only */}
       {!isMobile && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 md:p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-            <div className="lg:col-span-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <input
-                  type="text"
-                  placeholder="Search loads..."
-                  value={filters.search}
-                  onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Search loads..."
+                value={filters.search}
+                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
             </div>
             
             <div>
@@ -1211,26 +1162,6 @@ const normalizedLoads = loads.map(load => {
               </select>
             </div>
             
-            <div>
-              <input
-                type="number"
-                placeholder="Min Budget"
-                value={filters.minBudget}
-                onChange={(e) => setFilters(prev => ({ ...prev, minBudget: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            
-            <div>
-              <input
-                type="number"
-                placeholder="Max Budget"
-                value={filters.maxBudget}
-                onChange={(e) => setFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-            
             <div className="flex items-center gap-4">
               <label className="flex items-center">
                 <input
@@ -1241,16 +1172,16 @@ const normalizedLoads = loads.map(load => {
                 />
                 <span className="ml-2 text-sm text-gray-700">Urgent Only</span>
               </label>
+              
+              {(filters.search || filters.status !== 'all' || filters.urgent) && (
+                <button
+                  onClick={clearFilters}
+                  className="px-3 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Clear
+                </button>
+              )}
             </div>
-          </div>
-          
-          <div className="flex justify-end mt-4">
-            <button
-              onClick={clearFilters}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Clear Filters
-            </button>
           </div>
         </div>
       )}
@@ -1271,16 +1202,13 @@ const normalizedLoads = loads.map(load => {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <input
-                  type="text"
-                  placeholder="Search loads..."
-                  value={filters.search}
-                  onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+              <input
+                type="text"
+                placeholder="Search loads..."
+                value={filters.search}
+                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
             </div>
             
             <div>
@@ -1299,30 +1227,6 @@ const normalizedLoads = loads.map(load => {
                 <option value="delivered">Delivered</option>
                 <option value="completed">Completed</option>
               </select>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Min Budget</label>
-                <input
-                  type="number"
-                  placeholder="Min Budget"
-                  value={filters.minBudget}
-                  onChange={(e) => setFilters(prev => ({ ...prev, minBudget: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Max Budget</label>
-                <input
-                  type="number"
-                  placeholder="Max Budget"
-                  value={filters.maxBudget}
-                  onChange={(e) => setFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
             </div>
             
             <div>
@@ -1375,23 +1279,21 @@ const normalizedLoads = loads.map(load => {
               { key: 'status', label: 'Status' },
               { key: 'pickupDate', label: 'Pickup Date' }
             ].map((option) => (
-              <button
+             <button
                 key={option.key}
                 onClick={() => {
                   handleSort(option.key);
                   setShowMobileSort(false);
                 }}
-                className={`flex items-center justify-between w-full px-3 py-2 text-left rounded-lg transition-colors ${
-                  sortConfig.key === option.key 
-                    ? 'bg-blue-100 text-blue-700' 
-                    : 'hover:bg-gray-100'
+                className={`flex items-center justify-between w-full p-3 text-left hover:bg-gray-50 rounded-lg transition-colors ${
+                  sortConfig.key === option.key ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
                 }`}
               >
                 <span>{option.label}</span>
                 {sortConfig.key === option.key && (
                   sortConfig.direction === 'asc' ? 
-                    <SortAsc className="h-4 w-4" /> : 
-                    <SortDesc className="h-4 w-4" />
+                  <SortAsc className="h-4 w-4" /> : 
+                  <SortDesc className="h-4 w-4" />
                 )}
               </button>
             ))}
@@ -1399,116 +1301,48 @@ const normalizedLoads = loads.map(load => {
         </div>
       )}
 
-      {/* Bulk Actions */}
+      {/* Bulk Actions Bar */}
       {selectedLoads.size > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 md:p-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <p className="text-blue-800 text-sm md:text-base">
-              {selectedLoads.size} load{selectedLoads.size !== 1 ? 's' : ''} selected
-            </p>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-sm text-blue-800">
+              {selectedLoads.size} load{selectedLoads.size > 1 ? 's' : ''} selected
+            </div>
+            <div className="flex gap-2">
               <button
                 onClick={() => handleBulkAction('export')}
                 disabled={loading}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 text-sm bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
+                className="flex items-center gap-2 px-3 py-1 text-sm bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 rounded-lg transition-colors disabled:opacity-50"
               >
                 <Download className="h-4 w-4" />
-                Export
+                Export CSV
               </button>
               <button
                 onClick={() => handleBulkAction('cancel')}
                 disabled={loading}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                className="flex items-center gap-2 px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50"
               >
                 <Ban className="h-4 w-4" />
-                Cancel
+                Cancel Selected
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Loads List */}
+      {/* Loads List/Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        {/* Desktop Table Header - Hidden on mobile */}
-        {!isMobile && (
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={loads.length > 0 && selectedLoads.size === loads.length}
-                    onChange={selectAllLoads}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="ml-2 text-sm text-gray-700">
-                    Select all ({loads.length})
-                  </span>
-                </label>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span>Sort by:</span>
-                <div className="flex items-center gap-1">
-                  {[
-                    { key: 'createdAt', label: 'Date' },
-                    { key: 'budget', label: 'Budget' },
-                    { key: 'status', label: 'Status' }
-                  ].map((option) => (
-                    <button
-                      key={option.key}
-                      onClick={() => handleSort(option.key)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                        sortConfig.key === option.key 
-                          ? 'bg-blue-100 text-blue-700' 
-                          : 'hover:bg-gray-100'
-                      }`}
-                    >
-                      {option.label}
-                      {sortConfig.key === option.key && (
-                        sortConfig.direction === 'asc' ? 
-                          <SortAsc className="h-3 w-3" /> : 
-                          <SortDesc className="h-3 w-3" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
+        {normalizedLoads.length === 0 ? (
+          <div className="p-8 text-center">
+            <div className="mx-auto w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <Package className="h-12 w-12 text-gray-400" />
             </div>
-          </div>
-        )}
-
-        {/* Mobile Select All - Only on mobile */}
-        {isMobile && loads.length > 0 && (
-          <div className="px-4 py-3 border-b border-gray-200">
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={loads.length > 0 && selectedLoads.size === loads.length}
-                onChange={selectAllLoads}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="ml-2 text-sm text-gray-700">
-                Select all ({loads.length})
-              </span>
-            </label>
-          </div>
-        )}
-
-        {/* Loads List Content */}
-        {loading && loads.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center">
-              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
-              <p className="text-gray-600">Loading loads...</p>
-            </div>
-          </div>
-        ) : loads.length === 0 ? (
-          <div className="text-center py-12 px-4">
-            <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No loads found</h3>
-            <p className="text-gray-600 mb-4 max-w-md mx-auto">
-              You haven't posted any loads yet or no loads match your current filters.
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No Loads Found</h3>
+            <p className="text-gray-600 mb-4">
+              {(filters.search || filters.status !== 'all' || filters.urgent) 
+                ? 'Try adjusting your filters to see more results.'
+                : 'Get started by posting your first load.'
+              }
             </p>
             {onPostLoad && (
               <button
@@ -1521,269 +1355,429 @@ const normalizedLoads = loads.map(load => {
             )}
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {loads.map((load) => (
-              <div key={load._id} className="p-4 md:p-6 hover:bg-gray-50 transition-colors">
-                <div className="flex items-start gap-3 md:gap-4">
-                  {/* Checkbox */}
-                  <label className="flex items-center mt-1">
-                    <input
-                      type="checkbox"
-                      checked={selectedLoads.has(load._id)}
-                      onChange={() => toggleLoadSelection(load._id)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                  </label>
+          <>
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="w-12 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedLoads.size === normalizedLoads.length && normalizedLoads.length > 0}
+                        onChange={selectAllLoads}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('title')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Load Details
+                        {sortConfig.key === 'title' && (
+                          sortConfig.direction === 'asc' ? 
+                          <SortAsc className="h-3 w-3" /> : 
+                          <SortDesc className="h-3 w-3" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('status')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Status
+                        {sortConfig.key === 'status' && (
+                          sortConfig.direction === 'asc' ? 
+                          <SortAsc className="h-3 w-3" /> : 
+                          <SortDesc className="h-3 w-3" />
+                        )}
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Route
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('budget')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Budget
+                        {sortConfig.key === 'budget' && (
+                          sortConfig.direction === 'asc' ? 
+                          <SortAsc className="h-3 w-3" /> : 
+                          <SortDesc className="h-3 w-3" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleSort('createdAt')}
+                    >
+                      <div className="flex items-center gap-1">
+                        Created
+                        {sortConfig.key === 'createdAt' && (
+                          sortConfig.direction === 'asc' ? 
+                          <SortAsc className="h-3 w-3" /> : 
+                          <SortDesc className="h-3 w-3" />
+                        )}
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {normalizedLoads.map((load) => (
+                    <tr 
+                      key={load._id} 
+                      className={`hover:bg-gray-50 transition-colors ${
+                        selectedLoads.has(load._id) ? 'bg-blue-50' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedLoads.has(load._id)}
+                          onChange={() => toggleLoadSelection(load._id)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start gap-2">
+                              <h3 className="text-sm font-medium text-gray-900 truncate">
+                                {load.title}
+                              </h3>
+                              {load.isUrgent && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                  <Zap className="h-3 w-3 mr-1" />
+                                  Urgent
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {load.cargoType?.replace(/_/g, ' ')} • {load.weight}kg
+                            </p>
+                            <p className="text-xs text-gray-600 mt-1 line-clamp-2">
+                              {load.description}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(load.status)}`}>
+                          {getStatusIcon(load.status)}
+                          {getStatusLabel(load.status)}
+                        </span>
+                        {load.bidCount > 0 && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="text-xs text-gray-900">
+                          <div className="flex items-center gap-1 mb-1">
+                            <MapPin className="h-3 w-3 text-green-600" />
+                            <span className="truncate max-w-[120px]">
+                              {load.pickupLocation?.address || load.pickupLocation}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <MapPin className="h-3 w-3 text-red-600" />
+                            <span className="truncate max-w-[120px]">
+                              {load.deliveryLocation?.address || load.deliveryLocation}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="text-sm font-medium text-gray-900">
+                          {formatCurrency(load.budget)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="text-xs text-gray-500">
+                          {formatDate(load.createdAt)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleViewDetails(load._id)}
+                            className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                            title="View Details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          
+                          {canEditLoad(load) && (
+                            <button
+                              onClick={() => handleEditLoad(load)}
+                              className="p-1 text-gray-400 hover:text-green-600 transition-colors"
+                              title="Edit Load"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </button>
+                          )}
 
-                  {/* Load Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-2 md:gap-4 mb-2">
-                      <div className="flex-1">
-                        <h3 className="text-base md:text-lg font-semibold text-gray-900 mb-1 break-words">
-                          {load.title}
+                          {(canChangeStatus(load) || canDeleteLoad(load)) && (
+                            <div className="action-menu-container relative">
+                              <button
+                                onClick={() => setActiveActionMenu(activeActionMenu === load._id ? null : load._id)}
+                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="More Actions"
+                              >
+                                <Settings className="h-4 w-4" />
+                              </button>
+
+                              {activeActionMenu === load._id && (
+                                <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
+                                  {canChangeStatus(load) && getAvailableStatusTransitions(load.status).map((status) => (
+                                    <button
+                                      key={status}
+                                      onClick={() => handleUpdateLoadStatus(load._id, status)}
+                                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                    >
+                                      {getStatusIcon(status)}
+                                      Change to {getStatusLabel(status)}
+                                    </button>
+                                  ))}
+                                  
+                                  {canChangeStatus(load) && canDeleteLoad(load) && (
+                                    <div className="border-t border-gray-100 my-1" />
+                                  )}
+                                  
+                                  {canDeleteLoad(load) && (
+                                    <button
+                                      onClick={() => handleDeleteLoad(load._id)}
+                                      className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      Delete Load
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="md:hidden divide-y divide-gray-200">
+              {normalizedLoads.map((load) => (
+                <div 
+                  key={load._id} 
+                  className={`p-4 ${selectedLoads.has(load._id) ? 'bg-blue-50' : ''}`}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedLoads.has(load._id)}
+                        onChange={() => toggleLoadSelection(load._id)}
+                        className="mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start gap-2 mb-1">
+                          <h3 className="text-sm font-medium text-gray-900">
+                            {load.title}
+                          </h3>
                           {load.isUrgent && (
-                            <span className="ml-2 inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
-                              <Zap className="h-3 w-3" />
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                              <Zap className="h-3 w-3 mr-1" />
                               Urgent
                             </span>
                           )}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
-                          <span className={`inline-flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium border ${getStatusColor(getActualLoadStatus(load))} ${getActualLoadStatus(load) === 'expired' ? 'animate-pulse' : ''}`}>
-  {getStatusIcon(getActualLoadStatus(load))}
-  {getStatusLabel(getActualLoadStatus(load))}
-  {getActualLoadStatus(load) !== load.status && (
-    <span className="text-xs opacity-75">(Auto-detected)</span>
-  )}
-</span>
-                          {load.bidCount > 0 && (
-                            <span className="text-xs md:text-sm text-gray-600">
-                              {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
-                            </span>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-2">
+                          {load.cargoType?.replace(/_/g, ' ')} • {load.weight}kg
+                        </p>
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(load.status)}`}>
+                          {getStatusIcon(load.status)}
+                          {getStatusLabel(load.status)}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="action-menu-container relative ml-2">
+                      <button
+                        onClick={() => setActiveActionMenu(activeActionMenu === load._id ? null : load._id)}
+                        className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                      >
+                        <Settings className="h-4 w-4" />
+                      </button>
+
+                      {activeActionMenu === load._id && (
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
+                          <button
+                            onClick={() => handleViewDetails(load._id)}
+                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <Eye className="h-4 w-4" />
+                            View Details
+                          </button>
+                          
+                          {canEditLoad(load) && (
+                            <button
+                              onClick={() => handleEditLoad(load)}
+                              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                              Edit Load
+                            </button>
+                          )}
+
+                          {canChangeStatus(load) && getAvailableStatusTransitions(load.status).map((status) => (
+                            <button
+                              key={status}
+                              onClick={() => handleUpdateLoadStatus(load._id, status)}
+                              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              {getStatusIcon(status)}
+                              Change to {getStatusLabel(status)}
+                            </button>
+                          ))}
+                          
+                          {canDeleteLoad(load) && (
+                            <>
+                              <div className="border-t border-gray-100 my-1" />
+                              <button
+                                onClick={() => handleDeleteLoad(load._id)}
+                                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete Load
+                              </button>
+                            </>
                           )}
                         </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-lg md:text-xl font-bold text-gray-900">{formatCurrency(load.budget)}</p>
-                        <p className="text-sm text-gray-600">{load.weight} kg</p>
-                      </div>
-                    </div>
-
-                    {/* Description */}
-                    {load.description && (
-                      <p className="text-gray-700 text-sm md:text-base mb-3 line-clamp-2">{load.description}</p>
-                    )}
-
-                    {/* Route and Details - Mobile Optimized */}
-                    <div className="space-y-2 md:space-y-0 md:grid md:grid-cols-2 gap-4 mb-3">
-                      <div className="flex items-start md:items-center gap-2 text-sm text-gray-600">
-                        <MapPin className="h-4 w-4 flex-shrink-0 mt-0.5 md:mt-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="block md:inline truncate">
-                            {typeof load.pickupLocation === 'string' ? load.pickupLocation : load.pickupLocation?.address || 'N/A'}
-                          </span>
-                          <ArrowRight className="h-3 w-3 inline mx-1 hidden md:inline-block" />
-                          <span className="block md:inline text-xs text-gray-500 md:text-sm md:text-gray-600">→</span>
-                          <span className="block md:inline truncate">
-                            {typeof load.deliveryLocation === 'string' ? load.deliveryLocation : load.deliveryLocation?.address || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Calendar className="h-4 w-4 flex-shrink-0" />
-                        <span className="truncate">Pickup: {formatDate(load.pickupDate)}</span>
-                      </div>
-                    </div>
-
-                    {/* Meta Info */}
-                    <div className="flex flex-wrap items-center gap-2 md:gap-4 text-xs md:text-sm text-gray-500">
-                      <span>Posted {formatDate(load.createdAt)}</span>
-                      {load.cargoType && (
-                        <span className="capitalize">{load.cargoType.replace(/_/g, ' ')}</span>
-                      )}
-                      {load.vehicleType && (
-                        <span className="capitalize">{load.vehicleType.replace(/_/g, ' ')}</span>
                       )}
                     </div>
                   </div>
 
-                  {/* Actions - Mobile optimized dropdown */}
-                  <div className="relative dropdown-container shrink-0">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDropdownOpenId(dropdownOpenId === load._id ? null : load._id);
-                      }}
-                      className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                      <MoreVertical className="h-5 w-5" />
-                    </button>
+                  <div className="space-y-2 text-xs text-gray-600">
+                    <div className="flex items-start gap-1">
+                      <MapPin className="h-3 w-3 text-green-600 mt-0.5 flex-shrink-0" />
+                      <span>From: {load.pickupLocation?.address || load.pickupLocation}</span>
+                    </div>
+                    <div className="flex items-start gap-1">
+                      <MapPin className="h-3 w-3 text-red-600 mt-0.5 flex-shrink-0" />
+                      <span>To: {load.deliveryLocation?.address || load.deliveryLocation}</span>
+                    </div>
+                  </div>
 
-                    {dropdownOpenId === load._id && (
-  <>
-    <style>{dropdownStyles}</style>
-    <div className="status-dropdown">
-      <div className="py-1">
-        <button
-          onClick={() => {
-            handleViewDetails(load._id);
-            setDropdownOpenId(null);
-          }}
-          className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-        >
-          <Eye className="h-4 w-4" />
-          View Details
-        </button>
-
-        {canEditLoad(load) && (
-          <button
-            onClick={() => {
-              handleEditLoad(load);
-              setDropdownOpenId(null);
-            }}
-            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-          >
-            <Edit2 className="h-4 w-4" />
-            Edit Load
-          </button>
-        )}
-
-        {canChangeStatus(load) && (
-          <div className="border-t border-gray-200 my-1">
-            <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Change Status
-            </div>
-            <div className="max-h-48 overflow-y-auto">
-              {getAvailableStatusTransitions(load.status).map((status) => (
-                <button
-                  key={status}
-                  onClick={() => {
-                    handleUpdateLoadStatus(load._id, status);
-                    setDropdownOpenId(null);
-                  }}
-                  className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                >
-                  {getStatusIcon(status)}
-                  <span className="truncate">{getStatusLabel(status)}</span>
-                </button>
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                    <div className="text-sm font-medium text-gray-900">
+                      {formatCurrency(load.budget)}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      {load.bidCount > 0 && (
+                        <span>{load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}</span>
+                      )}
+                      <span>{formatDate(load.createdAt)}</span>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
-          </div>
-        )}
 
-        {canDeleteLoad(load) && (
-          <div className="border-t border-gray-200 mt-1">
-            <button
-              onClick={() => {
-                handleDeleteLoad(load._id);
-                setDropdownOpenId(null);
-              }}
-              className="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete Load
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  </>
-)}
+            {/* Pagination */}
+            {pagination.totalPages > 1 && (
+              <div className="px-4 py-4 border-t border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-700">
+                    Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
+                    {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
+                    {pagination.total} results
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handlePageChange(pagination.page - 1)}
+                      disabled={pagination.page === 1 || loading}
+                      className="p-2 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:hover:text-gray-400"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    
+                    <div className="flex items-center gap-1">
+                      {[...Array(Math.min(5, pagination.totalPages))].map((_, index) => {
+                        let pageNum;
+                        if (pagination.totalPages <= 5) {
+                          pageNum = index + 1;
+                        } else if (pagination.page <= 3) {
+                          pageNum = index + 1;
+                        } else if (pagination.page >= pagination.totalPages - 2) {
+                          pageNum = pagination.totalPages - 4 + index;
+                        } else {
+                          pageNum = pagination.page - 2 + index;
+                        }
+
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => handlePageChange(pageNum)}
+                            disabled={loading}
+                            className={`px-3 py-1 text-sm rounded-md ${
+                              pageNum === pagination.page
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-700 hover:bg-gray-100 disabled:hover:bg-transparent'
+                            } disabled:cursor-not-allowed`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    
+                    <button
+                      onClick={() => handlePageChange(pagination.page + 1)}
+                      disabled={pagination.page === pagination.totalPages || loading}
+                      className="p-2 text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:hover:text-gray-400"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Pagination - Mobile optimized */}
-        {pagination.totalPages > 1 && (
-          <div className="px-4 md:px-6 py-4 border-t border-gray-200">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="text-sm text-gray-600 order-2 sm:order-1">
-                Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
-                {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
-                {pagination.total} loads
-              </div>
-              
-              <div className="flex items-center gap-1 sm:gap-2 order-1 sm:order-2">
-                <button
-                  onClick={() => handlePageChange(pagination.page - 1)}
-                  disabled={pagination.page <= 1 || loading}
-                  className="flex items-center gap-1 px-2 md:px-3 py-2 text-xs md:text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  <span className="hidden sm:inline">Previous</span>
-                </button>
-                
-                {/* Mobile: Show fewer page numbers */}
-                <div className="flex items-center gap-1">
-                  {Array.from({ length: Math.min(isMobile ? 3 : 5, pagination.totalPages) }, (_, i) => {
-                    let pageNum;
-                    if (pagination.totalPages <= (isMobile ? 3 : 5)) {
-                      pageNum = i + 1;
-                    } else if (pagination.page <= (isMobile ? 2 : 3)) {
-                      pageNum = i + 1;
-                    } else if (pagination.page >= pagination.totalPages - (isMobile ? 1 : 2)) {
-                      pageNum = pagination.totalPages - (isMobile ? 2 : 4) + i;
-                    } else {
-                      pageNum = pagination.page - (isMobile ? 1 : 2) + i;
-                    }
-
-                    return (
-                      <button
-                        key={pageNum}
-                        onClick={() => handlePageChange(pageNum)}
-                        disabled={loading}
-                        className={`px-2 md:px-3 py-2 text-xs md:text-sm font-medium rounded-lg transition-colors ${
-                          pageNum === pagination.page
-                            ? 'bg-blue-600 text-white'
-                            : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        {pageNum}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={() => handlePageChange(pagination.page + 1)}
-                  disabled={pagination.page >= pagination.totalPages || loading}
-                  className="flex items-center gap-1 px-2 md:px-3 py-2 text-xs md:text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-                >
-                  <span className="hidden sm:inline">Next</span>
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </div>
 
       {/* Loading Overlay */}
-      {loading && loads.length > 0 && (
+      {loading && (
         <div className="fixed inset-0 bg-black bg-opacity-25 flex items-center justify-center z-40">
-          <div className="bg-white rounded-lg p-6 flex items-center gap-3 shadow-lg mx-4">
+          <div className="bg-white rounded-lg p-6 flex items-center gap-3">
             <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-            <span className="text-gray-700">Updating...</span>
+            <span className="text-gray-700">Processing...</span>
           </div>
         </div>
       )}
 
-      {/* Modals */}
+      {/* Status Update Modal */}
       <StatusUpdateModal
         show={showStatusUpdateModal}
         onClose={() => setShowStatusUpdateModal(false)}
-        onUpdate={updateLoadStatus}
+        onSubmit={updateLoadStatus}
         statusUpdateData={statusUpdateData}
-        setStatusUpdateData={setStatusUpdateData}
-        getStatusColor={getStatusColor}
-        getStatusIcon={getStatusIcon}
-        getStatusLabel={getStatusLabel}
-        loading={loading}
+        onStatusChange={(field, value) => setStatusUpdateData(prev => ({ ...prev, [field]: value }))}
+        statusConfig={statusConfig}
+        isSubmitting={loading}
       />
 
+      {/* Edit Load Modal */}
       <EditLoadModal
         show={showEditModal}
         onClose={closeEditModal}
