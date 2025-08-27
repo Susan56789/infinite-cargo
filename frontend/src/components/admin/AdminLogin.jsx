@@ -18,7 +18,7 @@ const AdminLogin = () => {
   // Check if admin is already logged in
   useEffect(() => {
     if (authManager.isAuthenticated(true)) {
-      console.log('Admin already logged in, redirecting to dashboard');
+      
       navigate('/admin/dashboard');
     }
   }, [navigate]);
@@ -75,7 +75,6 @@ const AdminLogin = () => {
     try {
       const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
       
-      console.log('Attempting admin login...');
 
       const response = await fetch(`${API_BASE_URL}/admin/login`, {
         method: 'POST',
@@ -89,10 +88,9 @@ const AdminLogin = () => {
       });
 
       const data = await response.json();
-      console.log('Login response:', data);
+     
 
       if (response.ok && data.status === 'success' && data.token && data.admin) {
-        console.log('Admin login successful');
         
         // Store admin auth data - using sessionStorage for admin (rememberMe = false, isAdmin = true)
         authManager.setAuth(data.token, data.admin, false, true);
@@ -102,7 +100,6 @@ const AdminLogin = () => {
         const storedUser = authManager.getUser(true);
         const storedToken = authManager.getToken(true);
         
-        console.log('Auth verification:', { isAuth, hasUser: !!storedUser, hasToken: !!storedToken });
         
         if (isAuth && storedUser && storedToken) {
           setLoginSuccess(true);

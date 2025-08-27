@@ -375,7 +375,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     }
   }, [filters, sortConfig, pagination.limit]);
 
-  // FIXED: Update load status function with better error handling
+  //  Update load status function with better error handling
   const updateLoadStatus = async () => {
     try {
       setLoading(true);
@@ -399,17 +399,12 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         throw new Error('Authentication required. Please log in again.');
       }
 
-      // FIXED: Enhanced request body to match backend expectations
+      //  Enhanced request body to match backend expectations
       const requestBody = {
         status: statusUpdateData.newStatus,
         reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
       };
 
-      console.log('Sending status update request:', {
-        url: `${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`,
-        body: requestBody,
-        headers: authHeaders
-      });
 
       const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
         method: 'PATCH',
@@ -418,7 +413,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
         body: JSON.stringify(requestBody)
       });
 
-      console.log('Status update response:', response.status, response.statusText);
 
       if (!response.ok) {
         let errorMessage = 'Failed to update load status';
@@ -453,7 +447,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       }
 
       const data = await response.json();
-      console.log('Status update success:', data);
+      
 
       if (data.status === 'success') {
         setLoads(prevLoads => 

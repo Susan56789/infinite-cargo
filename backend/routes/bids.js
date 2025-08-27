@@ -58,7 +58,7 @@ const bidValidation = [
   body('additionalServices').optional().isArray().withMessage('Additional services must be an array'),
   body('terms.paymentMethod').optional().isIn(['cash', 'bank_transfer', 'mobile_money', 'check', 'cheque']).withMessage('Invalid payment method'),
   
-  // Fixed: Accept both schema and frontend values
+  //  Accept both schema and frontend values
   body('terms.paymentTiming').optional().isIn([
     'upfront', 'on_pickup', 'on_delivery', '50_50_split', // Schema values
     'advance', 'weekly' // Frontend values that will be mapped
@@ -914,7 +914,7 @@ router.post('/:id/accept', auth, async (req, res) => {
       load.assignedDate = new Date();
       load.assignedAt = new Date(); // Make sure this field exists for consistency
       load.status = 'driver_assigned';
-      load.acceptedBid = bid._id; // Fixed: Only assign the bid ID
+      load.acceptedBid = bid._id; //  Only assign the bid ID
       
       await load.save({ session });
 
@@ -1283,7 +1283,7 @@ router.post('/:id/reject', auth, [
       });
     }
 
-    // FIXED: Improved authorization check logic (same as accept endpoint)
+    //  Improved authorization check logic (same as accept endpoint)
     const userIdString = req.user.id || req.user._id?.toString();
     let isAuthorized = false;
 
@@ -1307,7 +1307,7 @@ router.post('/:id/reject', auth, [
       console.log('Checking unpopulated bid.cargoOwner:', isAuthorized);
     }
 
-    // ADDITIONAL FIX: Direct database query as final check
+    // Direct database query as final check
     if (!isAuthorized) {
       console.log('Performing direct database check for rejection...');
       

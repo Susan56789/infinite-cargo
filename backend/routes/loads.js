@@ -683,7 +683,7 @@ router.post('/', auth, [
       });
     }
 
-    // FIXED: Get the user from the correct collection based on userType
+    //  Get the user from the correct collection based on userType
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
     let user;
@@ -698,7 +698,7 @@ router.post('/', auth, [
         ? new mongoose.Types.ObjectId(userId) 
         : userId;
 
-      // CRITICAL FIX: Search in the correct collection based on userType
+      // CRITICAL  Search in the correct collection based on userType
       if (req.user.userType === 'cargo_owner') {
         user = await db.collection('cargo-owners').findOne({ _id: userObjectId });
       } else if (req.user.userType === 'driver') {
@@ -1530,7 +1530,7 @@ router.put('/:id', auth, [
       });
     }
 
-    // FIXED: More flexible userType check
+    //  More flexible userType check
     const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
     if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
       console.log('Access denied - userType check failed:', {
@@ -1587,7 +1587,7 @@ router.put('/:id', auth, [
       });
     }
 
-    // FIXED: Allow editing of more statuses, but with restrictions
+    //  Allow editing of more statuses, but with restrictions
     const editableStatuses = ['posted', 'available', 'receiving_bids','expired'];
     const restrictedEditStatuses = ['assigned', 'driver_assigned', 'in_transit'];
     
@@ -1890,7 +1890,7 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // FIXED: More flexible userType check
+    //  More flexible userType check
     const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
     if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
       console.log('Access denied - userType check failed:', {

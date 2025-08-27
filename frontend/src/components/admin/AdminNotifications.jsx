@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   Bell,
-  BellRing,
   Check,
   CheckCircle,
   X,
   Trash2,
-  Filter,
   Search,
   RefreshCw,
-  MoreVertical,
   AlertTriangle,
   Info,
   Star,
@@ -19,8 +16,6 @@ import {
   DollarSign,
   Settings,
   Clock,
-  Archive,
-  Download,
   Send,
   Eye,
   EyeOff

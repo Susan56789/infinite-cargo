@@ -71,7 +71,7 @@ const ensureBasicSubscription = async (userId, db) => {
     // Create new basic subscription
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(userId),
-      planId: 'basic', // Fixed: use planId instead of SUBSCRIPTION_PLANS.basic.id
+      planId: 'basic', //  use planId instead of SUBSCRIPTION_PLANS.basic.id
       planName: SUBSCRIPTION_PLANS.basic.name,
       price: SUBSCRIPTION_PLANS.basic.price,
       currency: 'KES',

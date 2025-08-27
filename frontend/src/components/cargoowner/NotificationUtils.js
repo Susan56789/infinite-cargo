@@ -225,7 +225,6 @@ export class NotificationSocket {
       this.ws = new WebSocket(`wss://infinite-cargo-api.onrender.com/ws/notifications?userId=${this.userId}&userType=${this.userType}`);
       
       this.ws.onopen = () => {
-        console.log('Notification WebSocket connected');
         this.reconnectAttempts = 0;
       };
 
@@ -255,7 +254,6 @@ export class NotificationSocket {
   handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
       
       setTimeout(() => {
         this.connect();

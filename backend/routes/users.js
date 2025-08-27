@@ -954,7 +954,7 @@ router.post('/verify-reset-code', corsHandler, [
       db.collection('cargo-owners').findOne({
         email: email.toLowerCase().trim(),
         passwordResetCode: code.toString(),
-        passwordResetCodeExpires: { $gt: new Date() } // FIX: Use correct field name
+        passwordResetCodeExpires: { $gt: new Date() } //  Use correct field name
       })
     ]);
 
@@ -1112,14 +1112,14 @@ router.post(
         const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
         const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        // Update user record - FIX: Use correct field name and actual Date value
+        // Update user record -  Use correct field name and actual Date value
         const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
         await collection.updateOne(
           { _id: user._id },
           {
             $set: {
               passwordResetCode: resetCode,
-              passwordResetCodeExpires: resetCodeExpiry, // FIX: Store actual Date, not query
+              passwordResetCodeExpires: resetCodeExpiry, //  Store actual Date, not query
               passwordResetRequestedAt: new Date(),
               resetCodeVerified: false,
               updatedAt: new Date()

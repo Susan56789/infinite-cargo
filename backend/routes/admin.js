@@ -225,7 +225,7 @@ router.post('/users/:id/verify', adminAuth, async (req, res) => {
       });
     }
 
-    // FIX: Correct audit log
+    //  Correct audit log
     try {
       const auditLogsCollection = db.collection('audit_logs');
       await auditLogsCollection.insertOne({
@@ -291,7 +291,7 @@ router.post('/users/:id/status', adminAuth, async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
 
-    // FIX: Correct audit log
+    //  Correct audit log
     try {
       const auditLogsCollection = db.collection('audit_logs');
       await auditLogsCollection.insertOne({

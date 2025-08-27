@@ -170,7 +170,7 @@ userSchema.statics.createUserInCollection = async function(userData) {
   }
 };
 
-// FIXED: Static method to find user across collections with proper error handling
+//  Static method to find user across collections with proper error handling
 userSchema.statics.findUserByEmail = async function(email) {
   try {
     if (!email) {

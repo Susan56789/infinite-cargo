@@ -139,7 +139,7 @@ const DriverProfile = () => {
         return;
       }
 
-      console.log('Fetching profile with token:', token.substring(0, 20) + '...');
+     
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'GET',
@@ -219,7 +219,7 @@ const DriverProfile = () => {
         vehicleYear: updateData.vehicleYear ? parseInt(updateData.vehicleYear) : null
       };
 
-      console.log('Updating profile with data:', finalUpdateData);
+     
 
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/profile', {
         method: 'PUT',

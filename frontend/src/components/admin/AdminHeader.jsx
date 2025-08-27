@@ -33,7 +33,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         error.message.includes('401') ||
         error.message.includes('Unauthorized')
       )) {
-        console.log('Auth error in notifications, clearing state...');
+       
         // Clear notification state on auth errors
         setNotificationCount(0);
         setRecentNotifications([]);

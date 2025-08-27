@@ -387,7 +387,7 @@ adminSchema.statics.createSuperAdmin = async function(adminData) {
   }
 };
 
-// FIXED: Static method to get dashboard statistics with proper error handling
+//  Static method to get dashboard statistics with proper error handling
 adminSchema.statics.getDashboardStats = async function() {
   try {
     // Ensure mongoose connection exists

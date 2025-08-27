@@ -411,7 +411,7 @@ router.get('/dashboard', auth, async (req, res) => {
       // Notifications
       notifications
     ] = await Promise.all([
-      // FIXED: Active bookings with comprehensive status matching
+      //  Active bookings with comprehensive status matching
       bookingsCollection.find({
         driverId,
         status: { $in: activeJobStatuses }
@@ -2432,7 +2432,7 @@ router.post('/availability', auth, [
 
     const { isAvailable } = req.body;
 
-    // FIXED: Use the correct collection and handle the result properly
+    //  Use the correct collection and handle the result properly
     const db = mongoose.connection.db;
     
     // Try updating in the drivers collection first
@@ -2476,7 +2476,7 @@ router.post('/availability', auth, [
       });
     }
 
-    // FIXED: Ensure we have the correct data structure
+    //  Ensure we have the correct data structure
     const updatedAvailability = result.driverProfile?.isAvailable ?? isAvailable;
 
     console.log(`Driver ${req.user.id} availability updated to: ${updatedAvailability}`);

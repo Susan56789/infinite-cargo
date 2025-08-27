@@ -70,7 +70,7 @@ const BidCard = ({ bid, formatCurrency, formatDate }) => {
     return statusTexts[status] || status.replace('_', ' ').toUpperCase();
   };
 
-  // FIXED: Comprehensive load info extraction with fallbacks
+  //  Comprehensive load info extraction with fallbacks
   const getLoadInfo = (bidData) => {
     // Try multiple possible data structures
     const loadInfo = bidData.load || bidData.loadInfo || bidData.loadDetails || {};
@@ -330,7 +330,7 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
       .slice(0, 3);
   };
 
-  // FIXED: More comprehensive bid statistics calculation
+  //  More comprehensive bid statistics calculation
   const getBidsSummary = () => {
     if (validBids.length === 0) {
       return { total: 0, pending: 0, accepted: 0, counterOffers: 0 };
@@ -358,7 +358,7 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
   const summary = getBidsSummary();
   const recentBids = getRecentBids();
 
-  // FIXED: Default formatCurrency and formatDate functions if not provided
+  //  Default formatCurrency and formatDate functions if not provided
   const safeFormatCurrency = React.useCallback((amount, currency = 'KES') => {
     if (formatCurrency) {
       return formatCurrency(amount, currency);
@@ -418,7 +418,7 @@ const MyBidsSection = ({ myBids = [], formatCurrency, formatDate, loading = fals
           )}
         </div>
         
-        {/* FIXED: Summary stats with better styling and error handling */}
+        {/*  Summary stats with better styling and error handling */}
         <div className="grid grid-cols-4 gap-4 mt-4">
           <div className="text-center p-3 bg-gray-50 rounded-lg">
             <div className="text-2xl font-bold text-gray-900">{summary.total}</div>

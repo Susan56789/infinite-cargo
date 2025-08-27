@@ -122,7 +122,7 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
     
     if (!validateForm()) return;
 
-    // FIXED: Match backend API expectations exactly
+    //  Match backend API expectations exactly
     const bidPayload = {
       load: load._id,  // Backend expects 'load' field
       bidAmount: parseFloat(bidData.bidAmount),
@@ -781,7 +781,7 @@ const LoadSearch = () => {
         ...getAuthHeaders()
       };
 
-      // FIXED: Prepare payload to match backend validation exactly
+      //  Prepare payload to match backend validation exactly
       const payload = {
         load: bidData.load,  // Backend expects 'load' field (MongoDB ObjectId)
         bidAmount: parseFloat(bidData.bidAmount),
@@ -1026,7 +1026,7 @@ const LoadSearch = () => {
     }));
   };
 
-  // FIXED: Handle bid form submission with proper error handling
+  //  Handle bid form submission with proper error handling
   const handleBidFormSubmit = async (loadId, bidData) => {
     setBidStates(prev => ({
       ...prev,

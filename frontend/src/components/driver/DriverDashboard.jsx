@@ -111,7 +111,7 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // FIXED: Fetch driver statistics with better error handling and data mapping
+  //  Fetch driver statistics with better error handling and data mapping
   const fetchDriverStats = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, stats: true }));
     
@@ -210,7 +210,7 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // FIXED: Fetch active jobs using dedicated endpoint with comprehensive status matching
+  //  Fetch active jobs using dedicated endpoint with comprehensive status matching
   const fetchActiveJobs = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, bookings: true }));
     
@@ -335,7 +335,7 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // FIXED: Fetch available loads with better filtering
+  //  Fetch available loads with better filtering
   const fetchAvailableLoads = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, loads: true }));
     
@@ -417,7 +417,7 @@ const DriverDashboard = () => {
     if (response.ok) {
       const bidsData = await response.json();
       
-      // FIXED: Extract bids exactly like BidsPage does
+      //  Extract bids exactly like BidsPage does
       let bids = [];
       if (bidsData.data?.bids) {
         bids = bidsData.data.bids;
@@ -546,7 +546,7 @@ const fetchDashboardData = useCallback(async (showLoader = true) => {
           );
         }
 
-        // FIXED: Better bids extraction from dashboard endpoint
+        //  Better bids extraction from dashboard endpoint
         let myBidsFromDashboard = [];
         if (data.myBids && Array.isArray(data.myBids)) {
           myBidsFromDashboard = data.myBids;
@@ -724,7 +724,7 @@ const toggleAvailability = async () => {
       return;
     }
 
-    // FIXED: Get the actual updated value from the server response
+    //  Get the actual updated value from the server response
     const serverUpdatedValue = responseData.data?.isAvailable;
     
     if (serverUpdatedValue === undefined || serverUpdatedValue === null) {
