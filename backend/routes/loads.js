@@ -10,6 +10,61 @@ const corsHandler = require('../middleware/corsHandler');
 
 router.use(corsHandler);
 
+const checkAndUpdateExpiredLoads = async () => {
+  try {
+    const now = new Date();
+    
+    // Find loads that should be expired
+    const expiredLoads = await Load.find({
+      $or: [
+        // Loads where bidding end date has passed
+        {
+          biddingEndDate: { $lt: now },
+          status: { $in: ['posted', 'available', 'receiving_bids'] },
+          isActive: true
+        },
+        // Loads where pickup date has passed and still not assigned
+        {
+          pickupDate: { $lt: now },
+          status: { $in: ['posted', 'available', 'receiving_bids'] },
+          isActive: true
+        }
+      ]
+    });
+
+    if (expiredLoads.length > 0) {
+      console.log(`Found ${expiredLoads.length} expired loads, updating...`);
+      
+      // Update all expired loads
+      await Load.updateMany(
+        {
+          _id: { $in: expiredLoads.map(load => load._id) }
+        },
+        {
+          $set: {
+            status: 'expired',
+            isActive: false,
+            expiredAt: now,
+            updatedAt: now
+          },
+          $push: {
+            statusHistory: {
+              status: 'expired',
+              changedAt: now,
+              reason: 'Automatically expired due to passed deadline',
+              userRole: 'system'
+            }
+          }
+        }
+      );
+    }
+
+    return expiredLoads.length;
+  } catch (error) {
+    console.error('Error checking expired loads:', error);
+    return 0;
+  }
+};
 
 const optionalAuth = (req, res, next) => {
   try {
@@ -1699,8 +1754,17 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     console.log('Delete load request for ID:', req.params.id);
 
-    // Check if user is cargo owner
-    if (!req.user || req.user.userType !== 'cargo_owner') {
+    // Authentication check
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Authentication required'
+      });
+    }
+
+    // More flexible userType check
+    const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
+    if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. Only cargo owners can delete loads.'
@@ -1726,13 +1790,14 @@ router.delete('/:id', auth, async (req, res) => {
 
     // Check ownership
     if (load.postedBy.toString() !== req.user.id.toString()) {
-  return res.status(403).json({ 
-    message: 'You can only delete your loads.' 
-  });
-}
+      return res.status(403).json({
+        status: 'error',
+        message: 'You can only delete your own loads'
+      });
+    }
 
     // Check if load can be deleted (only certain statuses)
-    const deletableStatuses = ['posted','available', 'receiving_bids', 'not_available', 'cancelled'];
+    const deletableStatuses = ['posted', 'available', 'receiving_bids', 'not_available', 'cancelled', 'expired'];
     if (!deletableStatuses.includes(load.status)) {
       return res.status(400).json({
         status: 'error',
@@ -1740,26 +1805,65 @@ router.delete('/:id', auth, async (req, res) => {
       });
     }
 
-    // Delete associated bids first
+    // Start a transaction to ensure data consistency
+    const session = await mongoose.startSession();
+    
     try {
-      await Bid.deleteMany({ load: req.params.id });
-      console.log('Associated bids deleted for load:', req.params.id);
-    } catch (bidError) {
-      console.warn('Error deleting associated bids:', bidError);
+      await session.withTransaction(async () => {
+        // Delete associated bids first
+        const Bid = mongoose.model('Bid');
+        const deletedBids = await Bid.deleteMany({ load: req.params.id }).session(session);
+        console.log('Associated bids deleted for load:', req.params.id, 'Count:', deletedBids.deletedCount);
+        
+        // Delete any notifications related to this load
+        const Notification = mongoose.model('Notification');
+        if (Notification) {
+          await Notification.deleteMany({ 
+            $or: [
+              { loadId: req.params.id },
+              { 'metadata.loadId': req.params.id }
+            ]
+          }).session(session);
+        }
+        
+        // Delete the load
+        const deletedLoad = await Load.findByIdAndDelete(req.params.id).session(session);
+        
+        if (!deletedLoad) {
+          throw new Error('Load not found during deletion');
+        }
+      });
+
+      console.log('Load deleted successfully:', req.params.id);
+
+      res.json({
+        status: 'success',
+        message: 'Load deleted successfully'
+      });
+
+    } finally {
+      await session.endSession();
     }
-
-    // Delete the load
-    await Load.findByIdAndDelete(req.params.id);
-
-    console.log('Load deleted successfully:', req.params.id);
-
-    res.json({
-      status: 'success',
-      message: 'Load deleted successfully'
-    });
 
   } catch (error) {
     console.error('Delete load error:', error);
+    
+    // Provide more specific error messages
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid load ID format'
+      });
+    }
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation error during deletion',
+        errors: Object.values(error.errors).map(err => err.message)
+      });
+    }
+
     res.status(500).json({
       status: 'error',
       message: 'Server error deleting load',
@@ -1867,7 +1971,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 // @desc    Update load status (cargo owners only)
 // @access  Private
 router.patch('/:id/status', auth, [
-  body('status').isIn(['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled']).withMessage('Invalid status'),
+  body('status').isIn(['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit', 'on_hold', 'delivered', 'completed', 'not_available', 'cancelled', 'expired']).withMessage('Invalid status'),
   body('reason').optional().trim().isLength({ min: 1, max: 500 }).withMessage('Reason must be between 1-500 characters')
 ], async (req, res) => {
   try {
@@ -1890,7 +1994,7 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    //  More flexible userType check
+    // More flexible userType check
     const allowedUserTypes = ['cargo_owner', 'cargoOwner', 'cargo-owner'];
     if (!req.user.userType || !allowedUserTypes.includes(req.user.userType)) {
       console.log('Access denied - userType check failed:', {
@@ -1947,8 +2051,8 @@ router.patch('/:id/status', auth, [
     // Status transition validation
     const statusTransitions = {
       posted: ['available', 'receiving_bids', 'not_available', 'cancelled'],
-      available: ['receiving_bids', 'assigned', 'driver_assigned', 'not_available', 'cancelled'],
-      receiving_bids: ['assigned', 'driver_assigned', 'not_available', 'cancelled'],
+      available: ['receiving_bids', 'assigned', 'driver_assigned', 'not_available', 'cancelled', 'expired'],
+      receiving_bids: ['assigned', 'driver_assigned', 'not_available', 'cancelled', 'expired'],
       assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'],
       driver_assigned: ['in_transit', 'on_hold', 'cancelled', 'receiving_bids'],
       in_transit: ['delivered', 'on_hold'],
@@ -1957,7 +2061,7 @@ router.patch('/:id/status', auth, [
       completed: [],
       not_available: ['posted', 'available', 'receiving_bids'],
       cancelled: ['posted', 'available'],
-      expired: ['available', 'posted']
+      expired: ['available', 'posted', 'receiving_bids']
     };
 
     const currentStatus = load.status || 'posted';
@@ -1970,7 +2074,7 @@ router.patch('/:id/status', auth, [
       });
     }
 
-    // Status history entry
+    // Create status history entry with proper ObjectId
     const statusHistoryEntry = {
       status,
       changedAt: new Date(),
@@ -1979,32 +2083,55 @@ router.patch('/:id/status', auth, [
       userRole: req.user.userType || 'cargo_owner'
     };
 
-    // Update data
+    // Build update data carefully
     const updateData = {
       status,
       updatedAt: new Date(),
-      $push: {
-        statusHistory: statusHistoryEntry
-      }
+      modifiedBy: req.user.id,
+      statusChangeReason: reason || `Status changed to ${status}`
     };
 
     // Special handling for certain statuses
     if (status === 'not_available' || status === 'cancelled') {
       updateData.isActive = false;
+      if (status === 'cancelled') {
+        updateData.cancelledAt = new Date();
+        updateData.cancellationReason = reason || 'Cancelled by cargo owner';
+      }
     } else if (['posted', 'available', 'receiving_bids'].includes(status)) {
       updateData.isActive = true;
+    } else if (status === 'expired') {
+      updateData.isActive = false;
+      updateData.expiredAt = new Date();
     }
 
     if (status === 'delivered') {
       updateData.deliveredAt = new Date();
+    } else if (status === 'on_hold') {
+      updateData.onHoldAt = new Date();
+      updateData.onHoldReason = reason || 'Put on hold';
+    } else if (status === 'in_transit') {
+      updateData.startedAt = new Date();
+    } else if (status === 'assigned') {
+      updateData.assignedAt = new Date();
     }
 
     console.log('Updating load status with data:', updateData);
 
+    // Use findByIdAndUpdate with proper options
     const updatedLoad = await Load.findByIdAndUpdate(
       req.params.id,
-      updateData,
-      { new: true, runValidators: true }
+      {
+        ...updateData,
+        $push: {
+          statusHistory: statusHistoryEntry
+        }
+      },
+      { 
+        new: true, 
+        runValidators: true,
+        useFindAndModify: false
+      }
     ).populate('postedBy', 'name email companyName cargoOwnerProfile')
      .populate('assignedDriver', 'name phone email');
 
@@ -2043,11 +2170,11 @@ router.patch('/:id/status', auth, [
 // @route   GET /api/loads/:userId/my-loads
 // @desc    Get all loads posted by a specific user (AUTHENTICATION REQUIRED)
 // @access  Private (User can only access their own loads, or admin)
-router.get('/:userId/my-loads',  auth, [
+router.get('/:userId/my-loads', auth, [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
   query('status').optional().isIn([
-    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired','available'
+    'posted', 'receiving_bids', 'assigned', 'in_transit', 'delivered', 'cancelled', 'expired', 'available'
   ]).withMessage('Invalid status'),
   query('search').optional().trim()
 ], async (req, res) => {
@@ -2085,11 +2212,55 @@ router.get('/:userId/my-loads',  auth, [
       });
     }
 
+    // First, update expired loads for this user
+    try {
+      const now = new Date();
+      const expiredLoadsUpdate = await Load.updateMany(
+        {
+          postedBy: userId,
+          $or: [
+            {
+              biddingEndDate: { $lt: now },
+              status: { $in: ['posted', 'available', 'receiving_bids'] }
+            },
+            {
+              pickupDate: { $lt: now },
+              status: { $in: ['posted', 'available', 'receiving_bids'] }
+            }
+          ]
+        },
+        {
+          $set: {
+            status: 'expired',
+            isActive: false,
+            expiredAt: now,
+            updatedAt: now
+          },
+          $push: {
+            statusHistory: {
+              status: 'expired',
+              changedAt: now,
+              changedBy: new mongoose.Types.ObjectId(userId),
+              reason: 'Automatically expired due to passed deadline',
+              userRole: 'system'
+            }
+          }
+        }
+      );
+      
+      if (expiredLoadsUpdate.modifiedCount > 0) {
+        console.log(`Updated ${expiredLoadsUpdate.modifiedCount} expired loads for user ${userId}`);
+      }
+    } catch (expirationError) {
+      console.warn('Error updating expired loads:', expirationError);
+      // Continue even if expiration update fails
+    }
+
     // Build query
     let query = { postedBy: userId };
 
     // Apply status filter
-    if (status) {
+    if (status && status !== 'all') {
       query.status = status;
     }
 
@@ -2106,26 +2277,52 @@ router.get('/:userId/my-loads',  auth, [
     // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Execute query
+    // Execute query with proper error handling
     const loads = await Load.find(query)
-      .populate('postedBy', 'name email phone location isVerified')
-      .populate('assignedDriver', 'name phone email location vehicleType rating profilePicture')
+      .populate({
+        path: 'postedBy',
+        select: 'name email phone location isVerified cargoOwnerProfile companyName',
+        options: { strictPopulate: false }
+      })
+      .populate({
+        path: 'assignedDriver',
+        select: 'name phone email location vehicleType rating profilePicture',
+        options: { strictPopulate: false }
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .lean();
+      .lean()
+      .catch(err => {
+        console.error('Error fetching loads:', err);
+        throw new Error('Failed to fetch loads from database');
+      });
 
-    const totalLoads = await Load.countDocuments(query);
+    const totalLoads = await Load.countDocuments(query).catch(err => {
+      console.error('Error counting loads:', err);
+      return 0;
+    });
+    
     const totalPages = Math.ceil(totalLoads / parseInt(limit));
 
-    // Get bid counts for each load
+    // Get bid counts for each load with better error handling
     let bidCountMap = {};
     if (loads.length > 0) {
       try {
         const loadIds = loads.map(load => load._id);
         const bidCounts = await Bid.aggregate([
-          { $match: { load: { $in: loadIds }, status: { $nin: ['withdrawn', 'expired'] } } },
-          { $group: { _id: '$load', count: { $sum: 1 } } }
+          { 
+            $match: { 
+              load: { $in: loadIds }, 
+              status: { $nin: ['withdrawn', 'expired'] } 
+            } 
+          },
+          { 
+            $group: { 
+              _id: '$load', 
+              count: { $sum: 1 } 
+            } 
+          }
         ]);
 
         bidCounts.forEach(item => {
@@ -2133,23 +2330,42 @@ router.get('/:userId/my-loads',  auth, [
         });
       } catch (bidError) {
         console.warn('Error fetching bid counts:', bidError);
+        // Continue without bid counts
       }
     }
 
-    // Add bid counts and additional analytics
-    const loadsWithAnalytics = loads.map(load => ({
-      ...load,
-      bidCount: bidCountMap[load._id.toString()] || 0,
-      daysActive: Math.floor((new Date() - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
-      isExpired: load.biddingEndDate && new Date() > new Date(load.biddingEndDate)
-    }));
+    // Add bid counts and additional analytics with proper null checks
+    const loadsWithAnalytics = loads.map(load => {
+      const now = new Date();
+      const createdAt = new Date(load.createdAt);
+      const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
+      const biddingEndDate = load.biddingEndDate ? new Date(load.biddingEndDate) : null;
+      
+      // Check if load should be considered expired
+      const shouldBeExpired = (
+        (biddingEndDate && biddingEndDate < now && ['posted', 'available', 'receiving_bids'].includes(load.status)) ||
+        (pickupDate && pickupDate < now && ['posted', 'available', 'receiving_bids'].includes(load.status))
+      );
+      
+      return {
+        ...load,
+        bidCount: bidCountMap[load._id.toString()] || 0,
+        daysActive: Math.floor((now - createdAt) / (1000 * 60 * 60 * 24)),
+        isExpired: shouldBeExpired || load.status === 'expired',
+        daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null,
+        // Override status if it should be expired
+        status: shouldBeExpired ? 'expired' : load.status,
+        isActive: shouldBeExpired ? false : load.isActive
+      };
+    });
 
-    // Calculate summary statistics
+    // Calculate summary statistics with null safety
     const summary = {
       totalLoads,
-      activeLoads: loads.filter(l => l.isActive && ['available','posted', 'receiving_bids'].includes(l.status)).length,
-      completedLoads: loads.filter(l => l.status === 'delivered').length,
-      inTransitLoads: loads.filter(l => l.status === 'in_transit').length,
+      activeLoads: loadsWithAnalytics.filter(l => l.isActive && ['available', 'posted', 'receiving_bids'].includes(l.status)).length,
+      completedLoads: loadsWithAnalytics.filter(l => l.status === 'delivered').length,
+      inTransitLoads: loadsWithAnalytics.filter(l => l.status === 'in_transit').length,
+      expiredLoads: loadsWithAnalytics.filter(l => l.status === 'expired').length,
       totalBids: Object.values(bidCountMap).reduce((sum, count) => sum + count, 0)
     };
 
@@ -2162,7 +2378,8 @@ router.get('/:userId/my-loads',  auth, [
           totalPages,
           totalLoads,
           hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
         },
         summary,
         filters: {
@@ -2174,9 +2391,25 @@ router.get('/:userId/my-loads',  auth, [
 
   } catch (error) {
     console.error('Get user loads error:', error);
-    res.status(500).json({
+    
+    // Provide specific error messages based on error type
+    let errorMessage = 'Server error fetching user loads';
+    let statusCode = 500;
+    
+    if (error.name === 'CastError') {
+      errorMessage = 'Invalid user ID format';
+      statusCode = 400;
+    } else if (error.name === 'ValidationError') {
+      errorMessage = 'Validation error in load data';
+      statusCode = 400;
+    } else if (error.message.includes('Failed to fetch loads')) {
+      errorMessage = 'Database connection error. Please try again.';
+      statusCode = 503;
+    }
+    
+    res.status(statusCode).json({
       status: 'error',
-      message: 'Server error fetching user loads',
+      message: errorMessage,
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

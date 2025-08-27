@@ -86,6 +86,73 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     };
   };
 
+  const dropdownStyles = `
+  .status-dropdown {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 4px;
+    width: 240px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    z-index: 50;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  @media (max-width: 768px) {
+    .status-dropdown {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      right: auto;
+      transform: translate(-50%, -50%);
+      width: 90vw;
+      max-width: 320px;
+      max-height: 70vh;
+    }
+  }
+`;
+
+const getActualLoadStatus = (load) => {
+  const now = new Date();
+  
+  // Check if load should be expired
+  const isExpired = (
+    (load.biddingEndDate && new Date(load.biddingEndDate) < now) ||
+    (load.pickupDate && new Date(load.pickupDate) < now && ['posted', 'available', 'receiving_bids'].includes(load.status))
+  );
+  
+  if (isExpired && ['posted', 'available', 'receiving_bids'].includes(load.status)) {
+    return 'expired';
+  }
+  
+  return load.status;
+};
+
+// Update your loads mapping in the component
+const normalizedLoads = loads.map(load => {
+  const actualStatus = getActualLoadStatus(load);
+  
+  return {
+    ...load,
+    status: actualStatus,
+    originalStatus: load.status, 
+    title: load.title || 'Untitled Load',
+    budget: load.budget || 0,
+    createdAt: load.createdAt || new Date().toISOString(),
+    bidCount: load.bidCount || 0,
+    isActive: actualStatus === 'expired' ? false : (load.isActive !== undefined ? load.isActive : true),
+    weight: load.weight || 0,
+    cargoType: load.cargoType || 'other',
+    vehicleType: load.vehicleType || 'any',
+    isExpired: actualStatus === 'expired'
+  };
+});
+
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -1482,10 +1549,13 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                           )}
                         </h3>
                         <div className="flex flex-wrap items-center gap-2 mb-2">
-                          <span className={`inline-flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium border ${getStatusColor(load.status)}`}>
-                            {getStatusIcon(load.status)}
-                            {getStatusLabel(load.status)}
-                          </span>
+                          <span className={`inline-flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium border ${getStatusColor(getActualLoadStatus(load))} ${getActualLoadStatus(load) === 'expired' ? 'animate-pulse' : ''}`}>
+  {getStatusIcon(getActualLoadStatus(load))}
+  {getStatusLabel(getActualLoadStatus(load))}
+  {getActualLoadStatus(load) !== load.status && (
+    <span className="text-xs opacity-75">(Auto-detected)</span>
+  )}
+</span>
                           {load.bidCount > 0 && (
                             <span className="text-xs md:text-sm text-gray-600">
                               {load.bidCount} bid{load.bidCount !== 1 ? 's' : ''}
@@ -1550,67 +1620,75 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                     </button>
 
                     {dropdownOpenId === load._id && (
-                      <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
-                        <div className="py-1">
-                          <button
-                            onClick={() => {
-                              handleViewDetails(load._id);
-                              setDropdownOpenId(null);
-                            }}
-                            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                          >
-                            <Eye className="h-4 w-4" />
-                            View Details
-                          </button>
+  <>
+    <style>{dropdownStyles}</style>
+    <div className="status-dropdown">
+      <div className="py-1">
+        <button
+          onClick={() => {
+            handleViewDetails(load._id);
+            setDropdownOpenId(null);
+          }}
+          className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+        >
+          <Eye className="h-4 w-4" />
+          View Details
+        </button>
 
-                          {canEditLoad(load) && (
-                            <button
-                              onClick={() => {
-                                handleEditLoad(load);
-                                setDropdownOpenId(null);
-                              }}
-                              className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                            >
-                              <Edit2 className="h-4 w-4" />
-                              Edit Load
-                            </button>
-                          )}
+        {canEditLoad(load) && (
+          <button
+            onClick={() => {
+              handleEditLoad(load);
+              setDropdownOpenId(null);
+            }}
+            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            <Edit2 className="h-4 w-4" />
+            Edit Load
+          </button>
+        )}
 
-                          {canChangeStatus(load) && (
-                            <div className="border-t border-gray-200 my-1">
-                              <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                                Change Status
-                              </div>
-                              {getAvailableStatusTransitions(load.status).map((status) => (
-                                <button
-                                  key={status}
-                                  onClick={() => handleUpdateLoadStatus(load._id, status)}
-                                  className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                                >
-                                  {getStatusIcon(status)}
-                                  {getStatusLabel(status)}
-                                </button>
-                              ))}
-                            </div>
-                          )}
+        {canChangeStatus(load) && (
+          <div className="border-t border-gray-200 my-1">
+            <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wide">
+              Change Status
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              {getAvailableStatusTransitions(load.status).map((status) => (
+                <button
+                  key={status}
+                  onClick={() => {
+                    handleUpdateLoadStatus(load._id, status);
+                    setDropdownOpenId(null);
+                  }}
+                  className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  {getStatusIcon(status)}
+                  <span className="truncate">{getStatusLabel(status)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-                          {canDeleteLoad(load) && (
-                            <div className="border-t border-gray-200 mt-1">
-                              <button
-                                onClick={() => {
-                                  handleDeleteLoad(load._id);
-                                  setDropdownOpenId(null);
-                                }}
-                                className="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Delete Load
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
+        {canDeleteLoad(load) && (
+          <div className="border-t border-gray-200 mt-1">
+            <button
+              onClick={() => {
+                handleDeleteLoad(load._id);
+                setDropdownOpenId(null);
+              }}
+              className="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Load
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  </>
+)}
                   </div>
                 </div>
               </div>
