@@ -15,137 +15,228 @@ const Header = () => {
   const location = useLocation();
   const mountedRef = useRef(true);
   const unsubscribeRef = useRef(null);
+  const lastUserIdRef = useRef(null);
+  const syncTimeoutRef = useRef(null);
 
-  // Update user state from auth data
+  // Enhanced user state update with better comparison
   const updateUser = useCallback(() => {
     if (!mountedRef.current) return;
 
-    const isAuth = isAuthenticated();
-    const userData = isAuth ? getUser() : null;
-    
-    setUser(prevUser => {
-      if (!isAuth) return null;
-      if (userData && (!prevUser || prevUser._id !== userData._id)) {
-        return userData;
+    try {
+      const isAuth = isAuthenticated();
+      const userData = isAuth ? getUser() : null;
+      
+      // Better comparison logic
+      const currentUserId = userData?._id || userData?.id;
+      const lastUserId = lastUserIdRef.current;
+      
+      if (!isAuth) {
+        if (user !== null) {
+          console.log('[Header] User logged out, clearing state');
+          setUser(null);
+          lastUserIdRef.current = null;
+        }
+        return;
       }
-      return prevUser;
-    });
-  }, []);
-
-  const forceSync = useCallback(() => {
-  authManager._syncFromStorage();
-  updateUser();
-}, [updateUser]);
-
-
-useEffect(() => {
-  const handleUserLoggedIn = (e) => {
-
-    // Force immediate sync
-    setTimeout(() => {
-      forceSync();
-    }, 100);
-    
-    if (e.detail?.user) {
-      setUser(e.detail.user);
+      
+      if (userData && currentUserId) {
+        if (currentUserId !== lastUserId || !user) {
+          console.log('[Header] User state updated:', {
+            userId: currentUserId,
+            userType: userData.userType || userData.type,
+            name: userData.name
+          });
+          setUser(userData);
+          lastUserIdRef.current = currentUserId;
+        }
+      }
+    } catch (error) {
+      console.error('[Header] Error updating user state:', error);
     }
-  };
+  }, [user]);
 
-  const handleUserLoggedOut = () => {
-   
-    setUser(null);
-  };
-
-  const handleAuthStateChanged = () => {
+  // Enhanced force sync function
+  const forceSync = useCallback(() => {
+    if (!mountedRef.current) return;
     
-    setTimeout(() => {
-      forceSync();
+    console.log('[Header] Force syncing auth state...');
+    
+    // Clear any pending sync
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
+    
+    // Force sync with the auth manager
+    authManager._forceSyncFromStorage(false); // Regular user
+    
+    // Update user state after sync
+    syncTimeoutRef.current = setTimeout(() => {
+      updateUser();
     }, 50);
-  };
+  }, [updateUser]);
 
-  window.addEventListener('userLoggedIn', handleUserLoggedIn);
-  window.addEventListener('userLoggedOut', handleUserLoggedOut);
-  window.addEventListener('authStateChanged', handleAuthStateChanged);
-
-  return () => {
-    window.removeEventListener('userLoggedIn', handleUserLoggedIn);
-    window.removeEventListener('userLoggedOut', handleUserLoggedOut);
-    window.removeEventListener('authStateChanged', handleAuthStateChanged);
-  };
-}, [forceSync]);
-
-  // Initialize and setup auth listeners
+  // Initialize auth listener and state
   useEffect(() => {
     mountedRef.current = true;
+    
+    console.log('[Header] Initializing auth listener...');
 
-    // Listen to AuthManager state changes
-    unsubscribeRef.current = authManager.addAuthListener((authState) => {
+    // Ensure auth manager is initialized
+    if (!authManager.isInitialized) {
+      authManager.initialize();
+    }
+
+    // Listen to AuthManager state changes with enhanced callback
+    unsubscribeRef.current = authManager.addAuthListener((authData) => {
       if (!mountedRef.current) return;
-      setUser(authState.isAuthenticated ? authState.user : null);
+      
+      const userAuthState = authData.user || authData; // Handle both formats
+      console.log('[Header] Auth state changed:', {
+        isAuthenticated: userAuthState?.isAuthenticated,
+        userId: userAuthState?.user?._id || userAuthState?.user?.id,
+        tabId: authData.tabId
+      });
+      
+      setUser(userAuthState?.isAuthenticated ? userAuthState.user : null);
     });
 
-    // Initial auth check
-    updateUser();
+    // Initial auth check with delay to ensure initialization
+    setTimeout(() => {
+      updateUser();
+    }, 100);
 
     return () => {
       mountedRef.current = false;
-      unsubscribeRef.current?.();
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
     };
   }, [updateUser]);
 
-  // Cross-tab sync via storage events
+  // Enhanced cross-tab sync via storage events
   useEffect(() => {
     const handleStorageChange = (e) => {
-      const authKeys = ['infiniteCargoUser', 'infiniteCargoToken', 'infiniteCargoTokenTimestamp'];
+      if (!mountedRef.current) return;
+      
+      const authKeys = [
+        'infiniteCargoUser', 
+        'infiniteCargoToken', 
+        'infiniteCargoTokenTimestamp',
+        'infiniteCargoTabSync'
+      ];
       
       if (authKeys.includes(e.key)) {
-        setTimeout(() => {
-          authManager._syncFromStorage();
-          updateUser();
-        }, 50);
+        console.log('[Header] Storage change detected:', e.key);
+        
+        // Throttled sync to prevent excessive updates
+        if (syncTimeoutRef.current) {
+          clearTimeout(syncTimeoutRef.current);
+        }
+        
+        syncTimeoutRef.current = setTimeout(() => {
+          forceSync();
+        }, 100);
       }
     };
 
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [updateUser]);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [forceSync]);
 
-  // Sync when tab becomes active
+  // Enhanced tab focus/visibility handling
   useEffect(() => {
     const handleTabActive = () => {
+      if (!mountedRef.current) return;
+      
+      console.log('[Header] Tab became active, syncing auth...');
+      
+      // Always force sync when tab becomes active
       setTimeout(() => {
-        authManager._syncFromStorage();
-        updateUser();
-      }, 100);
+        forceSync();
+      }, 50);
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden && mountedRef.current) {
+        handleTabActive();
+      }
+    };
+
+    // Focus events
     window.addEventListener('focus', handleTabActive);
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) handleTabActive();
+    
+    // Visibility change events
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Page show events (for back/forward navigation)
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted && mountedRef.current) {
+        console.log('[Header] Page restored from cache, syncing...');
+        handleTabActive();
+      }
     });
 
     return () => {
       window.removeEventListener('focus', handleTabActive);
-      document.removeEventListener('visibilitychange', handleTabActive);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handleTabActive);
     };
-  }, [updateUser]);
+  }, [forceSync]);
 
-  // Listen for custom auth events
+  // Enhanced custom auth event handlers
   useEffect(() => {
     const handleUserLoggedIn = (e) => {
-      if (e.detail?.user) setUser(e.detail.user);
+      console.log('[Header] User logged in event received');
+      
+      // Force immediate sync and update
+      setTimeout(() => {
+        forceSync();
+        
+        // Also set user directly if provided in event
+        if (e.detail?.user && mountedRef.current) {
+          setUser(e.detail.user);
+          lastUserIdRef.current = e.detail.user._id || e.detail.user.id;
+        }
+      }, 50);
     };
 
-    const handleUserLoggedOut = () => setUser(null);
+    const handleUserLoggedOut = (e) => {
+      console.log('[Header] User logged out event received');
+      
+      if (mountedRef.current) {
+        setUser(null);
+        lastUserIdRef.current = null;
+      }
+    };
 
+    const handleAuthStateChanged = () => {
+      console.log('[Header] Auth state changed event received');
+      
+      setTimeout(() => {
+        forceSync();
+      }, 25);
+    };
+
+    // Listen for auth events
     window.addEventListener('userLoggedIn', handleUserLoggedIn);
     window.addEventListener('userLoggedOut', handleUserLoggedOut);
+    window.addEventListener('authStateChanged', handleAuthStateChanged);
 
     return () => {
       window.removeEventListener('userLoggedIn', handleUserLoggedIn);
       window.removeEventListener('userLoggedOut', handleUserLoggedOut);
+      window.removeEventListener('authStateChanged', handleAuthStateChanged);
     };
-  }, []);
+  }, [forceSync]);
 
   // Close menus on route change
   useEffect(() => {
@@ -153,16 +244,29 @@ useEffect(() => {
     setDropdowns({ services: false, drivers: false, cargo: false });
   }, [location.pathname]);
 
+  // Enhanced logout handler
   const handleLogout = async () => {
     try {
+      console.log('[Header] Logging out user...');
+      
+      // Clear local state immediately
       setUser(null);
+      lastUserIdRef.current = null;
       setIsMenuOpen(false);
       setDropdowns({ services: false, drivers: false, cargo: false });
       
-      window.dispatchEvent(new CustomEvent('userLoggedOut'));
+      // Dispatch logout event
+      window.dispatchEvent(new CustomEvent('userLoggedOut', {
+        detail: { source: 'header', timestamp: Date.now() }
+      }));
+      
+      // Call auth manager logout
       await authManager.logout();
+      
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('[Header] Logout failed:', error);
+      
+      // Fallback: force clear and redirect
       authManager.clearAuth();
       navigate('/');
     }
@@ -185,8 +289,27 @@ useEffect(() => {
 
   const isActiveLink = (path) => location.pathname === path;
 
-  const getUserType = () => user?.userType || user?.user_type || user?.type;
-  const getUserDisplayName = () => user?.name || user?.username || user?.email?.split('@')[0] || 'User';
+  // Enhanced user data extraction
+  const getUserType = () => {
+    if (!user) return null;
+    return user.userType || user.user_type || user.type || user.role;
+  };
+
+  const getUserDisplayName = () => {
+    if (!user) return 'User';
+    return user.name || user.username || user.firstName || user.email?.split('@')[0] || 'User';
+  };
+
+  const getUserTypeDisplay = () => {
+    const userType = getUserType();
+    const types = {
+      driver: 'Driver',
+      cargo_owner: 'Cargo Owner',
+      cargo_shipper: 'Cargo Owner',
+      admin: 'Admin'
+    };
+    return types[userType] || 'User';
+  };
 
   // Navigation data
   const navigationSections = {
@@ -221,6 +344,11 @@ useEffect(() => {
       { to: '/find-drivers', text: 'Find Drivers' },
       { to: '/support', text: 'Support' }
     ],
+    cargo_shipper: [
+      { to: '/cargo-dashboard', text: 'Dashboard' },
+      { to: '/find-drivers', text: 'Find Drivers' },
+      { to: '/support', text: 'Support' }
+    ],
     admin: [
       { to: '/admin/dashboard', text: 'Admin Dashboard' },
       { to: '/support', text: 'Support' }
@@ -230,16 +358,6 @@ useEffect(() => {
   const getUserNavigation = () => {
     const userType = getUserType();
     return userNavigation[userType] || userNavigation.driver;
-  };
-
-  const getUserTypeDisplay = () => {
-    const userType = getUserType();
-    const types = {
-      driver: 'Driver',
-      cargo_owner: 'Cargo Owner',
-      admin: 'Admin'
-    };
-    return types[userType] || 'User';
   };
 
   // Dropdown component

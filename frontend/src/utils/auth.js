@@ -10,118 +10,147 @@ class AuthManager {
     this.ADMIN_TOKEN_KEY = 'adminToken';
     this.ADMIN_USER_KEY = 'adminData';
     this.ADMIN_TOKEN_TIMESTAMP_KEY = 'adminTokenTimestamp';
+    this.CROSS_TAB_SYNC_KEY = 'infiniteCargoTabSync';
     
     // 6 hours in milliseconds
-    this.TOKEN_EXPIRY_DURATION = 6 * 60 * 60 * 1000; // 6 hours
-    this.WARNING_THRESHOLD = 30 * 60 * 1000; // 30 minutes before expiry
+    this.TOKEN_EXPIRY_DURATION = 6 * 60 * 60 * 1000;
+    this.WARNING_THRESHOLD = 30 * 60 * 1000;
     
-    // Add internal state tracking to prevent race conditions
+    // Enhanced state management
     this.isInitialized = false;
     this.authState = null;
+    this.adminAuthState = null;
     this.listeners = new Set();
     this.expiryCheckInterval = null;
     this.warningShown = false;
     
-    // Enhanced cross-tab sync
+    // Cross-tab sync improvements
     this.lastSyncTime = 0;
-    this.SYNC_THROTTLE = 100; // 100ms throttle for sync operations
+    this.SYNC_THROTTLE = 50; // Reduced throttle for faster sync
+    this.syncInProgress = false;
+    this.tabId = this._generateTabId();
+    this.lastHeartbeat = Date.now();
+    this.heartbeatInterval = null;
+    
+    // Bind methods to preserve context
+    this._handleStorageChange = this._handleStorageChange.bind(this);
+    this._handleTabFocus = this._handleTabFocus.bind(this);
+    this._handleVisibilityChange = this._handleVisibilityChange.bind(this);
+    this._heartbeat = this._heartbeat.bind(this);
   }
 
-  // Enhanced initialize method with better cross-tab support
+  // Generate unique tab identifier
+  _generateTabId() {
+    return Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  // Enhanced initialize method with immediate sync
   initialize() {
     if (this.isInitialized) return;
-    
     try {
-      // Force a fresh read from storage for new tabs
-      this._syncFromStorage();
+      // Force immediate sync for both user types
+      this._forceSyncFromStorage(false); // Regular user
+      this._forceSyncFromStorage(true);  // Admin user
       
-      // Set up enhanced storage listeners
-      this._setupStorageListeners();
+      // Set up all event listeners
+      this._setupEventListeners();
+      
+      // Start heartbeat for tab coordination
+      this._startHeartbeat();
       
       this.isInitialized = true;
-     
+      
+      
+      // Notify listeners after initialization
       this._notifyListeners();
+      
     } catch (error) {
       console.error('Failed to initialize auth state:', error);
       this.authState = { token: null, user: null, isAuthenticated: false };
+      this.adminAuthState = { token: null, user: null, isAuthenticated: false };
       this.isInitialized = true;
     }
   }
 
-  // New method to sync state from storage
-  _syncFromStorage(isAdmin = false) {
+  // Force sync from storage without throttling
+  _forceSyncFromStorage(isAdmin = false) {
+    if (this.syncInProgress) {
+      
+      setTimeout(() => this._forceSyncFromStorage(isAdmin), 10);
+      return;
+    }
+    
+    this.syncInProgress = true;
+    
     try {
+      
       const token = this._getTokenFromStorage(isAdmin);
       const user = this._getUserFromStorage(isAdmin);
       
       if (token && user) {
-        // Validate token and check custom expiry
         if (this._validateTokenAndExpiry(token, isAdmin)) {
-          if (!isAdmin) {
-            this.authState = { token, user, isAuthenticated: true };
-            this._startExpiryMonitoring(isAdmin);
+          const authState = { token, user, isAuthenticated: true };
+          
+          if (isAdmin) {
+            this.adminAuthState = authState;
+          } else {
+            this.authState = authState;
+            this._startExpiryMonitoring(false);
           }
           
           return true;
         } else {
-          // Clear invalid/expired auth data
+          
           this.clearAuth(isAdmin);
-          if (!isAdmin) {
-            this.authState = { token: null, user: null, isAuthenticated: false };
-          }
-         
-        }
-      } else {
-        if (!isAdmin) {
-          this.authState = { token: null, user: null, isAuthenticated: false };
         }
       }
+      
+      // Set empty state if no valid auth
+      const emptyState = { token: null, user: null, isAuthenticated: false };
+      if (isAdmin) {
+        this.adminAuthState = emptyState;
+      } else {
+        this.authState = emptyState;
+      }
+      
       return false;
+      
     } catch (error) {
-      console.error('Error syncing from storage:', error);
+      console.error('Error in force sync from storage:', error);
       return false;
+    } finally {
+      this.syncInProgress = false;
     }
   }
 
-  // New method to get token directly from storage without validation
-  _getTokenFromStorage(isAdmin = false) {
-    try {
-      const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
-      return localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
-    } catch (error) {
-      console.error('Error getting token from storage:', error);
-      return null;
-    }
-  }
-
-  // New method to get user directly from storage without validation
-  _getUserFromStorage(isAdmin = false) {
-    try {
-      const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
-      const userStr = localStorage.getItem(userKey) || sessionStorage.getItem(userKey);
-      return userStr ? JSON.parse(userStr) : null;
-    } catch (error) {
-      console.error('Error getting user from storage:', error);
-      return null;
-    }
-  }
-
-  // Enhanced storage listener setup
-  _setupStorageListeners() {
-    // Listen for storage events (cross-tab sync)
-    window.addEventListener('storage', (e) => {
-      this._handleStorageChange(e);
+  // Enhanced event listener setup
+  _setupEventListeners() {
+    // Storage events for cross-tab sync
+    window.addEventListener('storage', this._handleStorageChange);
+    
+    // Tab focus events
+    window.addEventListener('focus', this._handleTabFocus);
+    window.addEventListener('blur', () => {
+    
     });
-
-    // Listen for focus events (tab becomes active)
-    window.addEventListener('focus', () => {
-      this._handleTabFocus();
+    
+    // Visibility change events
+    document.addEventListener('visibilitychange', this._handleVisibilityChange);
+    
+    // Before unload cleanup
+    window.addEventListener('beforeunload', () => {
+      this._stopHeartbeat();
     });
-
-    // Listen for visibility change (tab becomes visible)
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        this._handleTabFocus();
+    
+    // Page show/hide events (for back/forward navigation)
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) {
+        
+        setTimeout(() => {
+          this._forceSyncFromStorage(false);
+          this._forceSyncFromStorage(true);
+          this._notifyListeners();
+        }, 50);
       }
     });
   }
@@ -134,43 +163,135 @@ class AuthManager {
       this.TOKEN_TIMESTAMP_KEY,
       this.ADMIN_TOKEN_KEY,
       this.ADMIN_USER_KEY,
-      this.ADMIN_TOKEN_TIMESTAMP_KEY
+      this.ADMIN_TOKEN_TIMESTAMP_KEY,
+      this.CROSS_TAB_SYNC_KEY
     ];
     
     if (authKeys.includes(e.key)) {
+     
+      
       this._throttledSync();
     }
   }
 
-  // Handle tab focus/visibility change
+  // Handle tab becoming active
   _handleTabFocus() {
-    // Always sync when tab becomes active
+    
+    this.lastHeartbeat = Date.now();
+    
+    // Always force sync when tab becomes active
     setTimeout(() => {
-      this._syncFromStorage();
+      this._forceSyncFromStorage(false);
+      this._forceSyncFromStorage(true);
       this._notifyListeners();
-    }, 50);
+      this._broadcastTabSync();
+    }, 10);
   }
 
-  // Throttled sync to prevent excessive operations
-  _throttledSync() {
+  // Handle visibility change
+  _handleVisibilityChange() {
+    if (!document.hidden) {
+      this._handleTabFocus();
+    }
+  }
+
+  // Throttled sync with immediate execution option
+  _throttledSync(immediate = false) {
     const now = Date.now();
-    if (now - this.lastSyncTime < this.SYNC_THROTTLE) {
+    
+    if (!immediate && now - this.lastSyncTime < this.SYNC_THROTTLE) {
       return;
     }
     
     this.lastSyncTime = now;
+    
     setTimeout(() => {
-      this._syncFromStorage();
+      this._forceSyncFromStorage(false);
+      this._forceSyncFromStorage(true);
       this._notifyListeners();
-    }, 10);
+    }, immediate ? 0 : 10);
   }
 
-  // Private method to validate token and custom expiry
+  // Start heartbeat for tab coordination
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    
+    this.heartbeatInterval = setInterval(this._heartbeat, 2000); // Every 2 seconds
+    this._heartbeat(); // Initial heartbeat
+  }
+
+  // Stop heartbeat
+  _stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  // Heartbeat function for tab coordination
+  _heartbeat() {
+    try {
+      const heartbeatData = {
+        tabId: this.tabId,
+        timestamp: Date.now(),
+        hasAuth: this.authState?.isAuthenticated || false,
+        hasAdminAuth: this.adminAuthState?.isAuthenticated || false,
+        userType: this.authState?.user?.userType,
+        userId: this.authState?.user?._id || this.authState?.user?.id
+      };
+      
+      localStorage.setItem(this.CROSS_TAB_SYNC_KEY, JSON.stringify(heartbeatData));
+      this.lastHeartbeat = Date.now();
+      
+    } catch (error) {
+      console.error('Heartbeat error:', error);
+    }
+  }
+
+  // Broadcast tab sync event
+  _broadcastTabSync() {
+    try {
+      const syncData = {
+        tabId: this.tabId,
+        timestamp: Date.now(),
+        action: 'sync_request'
+      };
+      
+      localStorage.setItem(this.CROSS_TAB_SYNC_KEY, JSON.stringify(syncData));
+    } catch (error) {
+      console.error('Broadcast sync error:', error);
+    }
+  }
+
+  // Get token from storage
+  _getTokenFromStorage(isAdmin = false) {
+    try {
+      const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
+      return localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
+    } catch (error) {
+      console.error('Error getting token from storage:', error);
+      return null;
+    }
+  }
+
+  // Get user from storage
+  _getUserFromStorage(isAdmin = false) {
+    try {
+      const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
+      const userStr = localStorage.getItem(userKey) || sessionStorage.getItem(userKey);
+      return userStr ? JSON.parse(userStr) : null;
+    } catch (error) {
+      console.error('Error getting user from storage:', error);
+      return null;
+    }
+  }
+
+  // Validate token and custom expiry
   _validateTokenAndExpiry(token, isAdmin = false) {
     try {
       if (!token) return false;
       
-      // First check JWT expiry
+      // Check JWT expiry
       const decoded = jwtDecode(token);
       const currentTime = Date.now() / 1000;
       
@@ -178,7 +299,7 @@ class AuthManager {
         return false;
       }
       
-      // Then check custom 6-hour expiry
+      // Check custom 6-hour expiry
       const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
       const tokenTimestamp = this._getTokenTimestamp(timestampKey);
       
@@ -211,6 +332,203 @@ class AuthManager {
     }
   }
 
+  // Enhanced setAuth with immediate cross-tab sync
+  setAuth(token, user, rememberMe = false, isAdmin = false) {
+    try {
+      
+
+      const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
+      const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
+      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
+
+      // Validate token before storing
+      if (!this._validateToken(token)) {
+        console.error('Attempting to store invalid token');
+        return false;
+      }
+
+      const storage = rememberMe && !isAdmin ? localStorage : sessionStorage;
+      const currentTimestamp = Date.now();
+      
+      // Store auth data
+      storage.setItem(tokenKey, token);
+      storage.setItem(userKey, JSON.stringify(user));
+      storage.setItem(timestampKey, currentTimestamp.toString());
+      
+      if (rememberMe && !isAdmin) {
+        localStorage.setItem(this.REMEMBER_KEY, 'true');
+      }
+      
+      // Clear from other storage type
+      const otherStorage = storage === localStorage ? sessionStorage : localStorage;
+      otherStorage.removeItem(tokenKey);
+      otherStorage.removeItem(userKey);
+      otherStorage.removeItem(timestampKey);
+      
+      if (!isAdmin && !rememberMe) {
+        localStorage.removeItem(this.REMEMBER_KEY);
+      }
+
+      // Update internal state immediately
+      const authStateData = { token, user, isAuthenticated: true };
+      if (isAdmin) {
+        this.adminAuthState = authStateData;
+      } else {
+        this.authState = authStateData;
+        this._startExpiryMonitoring(false);
+      }
+
+      // Immediate cross-tab sync
+      this._broadcastTabSync();
+      
+      // Force sync in other tabs
+      setTimeout(() => {
+        this._broadcastTabSync();
+      }, 50);
+      
+      // Notify listeners
+      this._notifyListeners();
+      return true;
+      
+    } catch (error) {
+      console.error('Failed to store auth data:', error);
+      return false;
+    }
+  }
+
+  // Enhanced getToken method
+  getToken(isAdmin = false) {
+    // Ensure initialized
+    if (!this.isInitialized) {
+      this.initialize();
+    }
+
+    try {
+      const stateKey = isAdmin ? 'adminAuthState' : 'authState';
+      const currentState = this[stateKey];
+
+      // First try internal state
+      if (currentState?.token && currentState.isAuthenticated) {
+        if (this._validateTokenAndExpiry(currentState.token, isAdmin)) {
+          return currentState.token;
+        }
+      }
+
+      // Fallback to storage with forced sync
+      this._forceSyncFromStorage(isAdmin);
+      const updatedState = this[stateKey];
+      
+      return updatedState?.isAuthenticated ? updatedState.token : null;
+      
+    } catch (error) {
+      console.error('Failed to get token:', error);
+      return null;
+    }
+  }
+
+  // Enhanced getUser method
+  getUser(isAdmin = false) {
+    // Ensure initialized
+    if (!this.isInitialized) {
+      this.initialize();
+    }
+
+    try {
+      const stateKey = isAdmin ? 'adminAuthState' : 'authState';
+      const currentState = this[stateKey];
+
+      // First try internal state
+      if (currentState?.user && currentState.isAuthenticated) {
+        // Verify token is still valid
+        if (this.getToken(isAdmin)) {
+          return currentState.user;
+        }
+      }
+
+      // Fallback to storage with forced sync
+      this._forceSyncFromStorage(isAdmin);
+      const updatedState = this[stateKey];
+      
+      return updatedState?.isAuthenticated ? updatedState.user : null;
+      
+    } catch (error) {
+      console.error('Failed to get user data:', error);
+      return null;
+    }
+  }
+
+  // Enhanced isAuthenticated method
+  isAuthenticated(isAdmin = false) {
+    // Ensure initialized
+    if (!this.isInitialized) {
+      this.initialize();
+    }
+
+    try {
+      // Force a fresh check
+      const token = this.getToken(isAdmin);
+      const user = this.getUser(isAdmin);
+      const isValid = !!(token && user);
+      
+      // Update state if changed
+      const stateKey = isAdmin ? 'adminAuthState' : 'authState';
+      const currentState = this[stateKey];
+      
+      if (!currentState || currentState.isAuthenticated !== isValid) {
+        this[stateKey] = { token, user, isAuthenticated: isValid };
+        this._notifyListeners();
+      }
+      
+      return isValid;
+      
+    } catch (error) {
+      console.error('Error checking authentication:', error);
+      return false;
+    }
+  }
+
+  // Enhanced clearAuth method
+  clearAuth(isAdmin = false) {
+    try {
+      
+
+      if (isAdmin) {
+        localStorage.removeItem(this.ADMIN_TOKEN_KEY);
+        localStorage.removeItem(this.ADMIN_USER_KEY);
+        localStorage.removeItem(this.ADMIN_TOKEN_TIMESTAMP_KEY);
+        sessionStorage.removeItem(this.ADMIN_TOKEN_KEY);
+        sessionStorage.removeItem(this.ADMIN_USER_KEY);
+        sessionStorage.removeItem(this.ADMIN_TOKEN_TIMESTAMP_KEY);
+        
+        this.adminAuthState = { token: null, user: null, isAuthenticated: false };
+      } else {
+        localStorage.removeItem(this.TOKEN_KEY);
+        localStorage.removeItem(this.USER_KEY);
+        localStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
+        localStorage.removeItem(this.REMEMBER_KEY);
+        sessionStorage.removeItem(this.TOKEN_KEY);
+        sessionStorage.removeItem(this.USER_KEY);
+        sessionStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
+        
+        this.authState = { token: null, user: null, isAuthenticated: false };
+        
+        // Clear expiry monitoring
+        if (this.expiryCheckInterval) {
+          clearInterval(this.expiryCheckInterval);
+          this.expiryCheckInterval = null;
+        }
+        this.warningShown = false;
+      }
+      
+      // Broadcast change to other tabs
+      this._broadcastTabSync();
+      this._notifyListeners();
+      
+    } catch (error) {
+      console.error('Failed to clear auth data:', error);
+    }
+  }
+
   // Start monitoring token expiry
   _startExpiryMonitoring(isAdmin = false) {
     // Clear existing interval
@@ -223,7 +541,7 @@ class AuthManager {
     // Check every minute
     this.expiryCheckInterval = setInterval(() => {
       this._checkTokenExpiry(isAdmin);
-    }, 60000); // 1 minute
+    }, 60000);
 
     // Also check immediately
     setTimeout(() => {
@@ -266,6 +584,8 @@ class AuthManager {
 
   // Handle token expiry
   _handleTokenExpiry(isAdmin = false) {
+   
+    
     // Clear the monitoring interval
     if (this.expiryCheckInterval) {
       clearInterval(this.expiryCheckInterval);
@@ -299,81 +619,7 @@ class AuthManager {
     console.warn('Token expiry warning:', message);
   }
 
-  // Add listener for auth state changes
-  addAuthListener(listener) {
-    this.listeners.add(listener);
-    
-    // Return unsubscribe function
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  // Notify all listeners of auth state changes
-  _notifyListeners() {
-    this.listeners.forEach(listener => {
-      try {
-        listener(this.authState);
-      } catch (error) {
-        console.error('Error in auth listener:', error);
-      }
-    });
-  }
-
-  setAuth(token, user, rememberMe = false, isAdmin = false) {
-    try {
-      const tokenKey = isAdmin ? this.ADMIN_TOKEN_KEY : this.TOKEN_KEY;
-      const userKey = isAdmin ? this.ADMIN_USER_KEY : this.USER_KEY;
-      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
-
-      // Validate token before storing
-      if (!this._validateToken(token)) {
-        console.error('Attempting to store invalid token');
-        return false;
-      }
-
-      const storage = rememberMe && !isAdmin ? localStorage : sessionStorage;
-      const currentTimestamp = Date.now();
-      
-      // Store token, user, and timestamp
-      storage.setItem(tokenKey, token);
-      storage.setItem(userKey, JSON.stringify(user));
-      storage.setItem(timestampKey, currentTimestamp.toString());
-      
-      if (rememberMe && !isAdmin) {
-        localStorage.setItem(this.REMEMBER_KEY, 'true');
-      }
-      
-      // Clear from other storage type
-      const otherStorage = storage === localStorage ? sessionStorage : localStorage;
-      otherStorage.removeItem(tokenKey);
-      otherStorage.removeItem(userKey);
-      otherStorage.removeItem(timestampKey);
-      
-      if (!isAdmin) {
-        if (!rememberMe) {
-          localStorage.removeItem(this.REMEMBER_KEY);
-        }
-      }
-
-      // Update internal state
-      if (!isAdmin) {
-        this.authState = { token, user, isAuthenticated: true };
-        this._notifyListeners();
-      }
-
-      // Start expiry monitoring
-      this._startExpiryMonitoring(isAdmin);
-
-      
-      return true;
-    } catch (error) {
-      console.error('Failed to store auth data:', error);
-      return false;
-    }
-  }
-
-  // Private method to validate token without side effects
+  // Validate token without side effects
   _validateToken(token) {
     try {
       if (!token) return false;
@@ -387,224 +633,34 @@ class AuthManager {
     }
   }
 
-  // Enhanced getToken method
-  getToken(isAdmin = false) {
-    try {
-      // First try to get from internal state for non-admin
-      if (!isAdmin && this.authState?.token && this.authState.isAuthenticated) {
-        // Still validate expiry
-        if (this._validateTokenAndExpiry(this.authState.token, isAdmin)) {
-          return this.authState.token;
-        }
-      }
-
-      // Fallback to storage
-      const token = this._getTokenFromStorage(isAdmin);
-      
-      // Validate token and expiry before returning
-      if (token && !this._validateTokenAndExpiry(token, isAdmin)) {
-        this.clearAuth(isAdmin);
-        return null;
-      }
-      
-      // Update internal state if token is valid and this is for regular user
-      if (!isAdmin && token && this.authState) {
-        this.authState.token = token;
-        this.authState.isAuthenticated = true;
-      }
-      
-      return token;
-    } catch (error) {
-      console.error('Failed to get token:', error);
-      return null;
-    }
-  }
-
-  // Enhanced getUser method
-  getUser(isAdmin = false) {
-    try {
-      // First try to get from internal state for non-admin
-      if (!isAdmin && this.authState?.user && this.authState.isAuthenticated) {
-        // Verify we still have a valid token
-        const token = this.getToken(isAdmin);
-        if (token) {
-          return this.authState.user;
-        }
-      }
-
-      // Fallback to storage
-      const user = this._getUserFromStorage(isAdmin);
-      
-      if (!user) return null;
-      
-      // If we have user data but no valid token, clear the data
-      const token = this.getToken(isAdmin);
-      if (!token) {
-        this.clearAuth(isAdmin);
-        return null;
-      }
-      
-      // Update internal state if user is valid and this is for regular user
-      if (!isAdmin && user && this.authState) {
-        this.authState.user = user;
-        this.authState.isAuthenticated = true;
-      }
-      
-      return user;
-    } catch (error) {
-      console.error('Failed to get user data:', error);
-      return null;
-    }
-  }
-
-  // Enhanced isAuthenticated method
-  isAuthenticated(isAdmin = false) {
-    // Initialize if not done already
-    if (!this.isInitialized) {
-      this.initialize();
-    }
-
-    try {
-      // For non-admin, first check internal state, but always validate with storage
-      const token = this.getToken(isAdmin);
-      const user = this.getUser(isAdmin);
-      const isValid = !!(token && user);
-      
-      // Update internal state for non-admin
-      if (!isAdmin) {
-        if (!this.authState) {
-          this.authState = { token, user, isAuthenticated: isValid };
-        } else if (this.authState.isAuthenticated !== isValid) {
-          this.authState.isAuthenticated = isValid;
-          this.authState.token = token;
-          this.authState.user = user;
-          this._notifyListeners();
-        }
-        
-        if (!isValid && this.expiryCheckInterval) {
-          // Stop monitoring if user is no longer authenticated
-          clearInterval(this.expiryCheckInterval);
-          this.expiryCheckInterval = null;
-        } else if (isValid && !this.expiryCheckInterval) {
-          // Start monitoring if user is authenticated but monitoring not active
-          this._startExpiryMonitoring(isAdmin);
-        }
-      }
-      
-      return isValid;
-    } catch (error) {
-      console.error('Error checking authentication:', error);
-      if (!isAdmin && this.authState) {
-        this.authState.isAuthenticated = false;
-        this._notifyListeners();
-      }
-      return false;
-    }
-  }
-
-  getTokenRemainingTime(isAdmin = false) {
-    try {
-      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
-      const tokenTimestamp = this._getTokenTimestamp(timestampKey);
-      
-      if (!tokenTimestamp) return 0;
-
-      const currentTime = Date.now();
-      const tokenAge = currentTime - tokenTimestamp;
-      const remainingTime = this.TOKEN_EXPIRY_DURATION - tokenAge;
-      
-      return Math.max(0, Math.floor(remainingTime / (60 * 1000))); // Return minutes
-    } catch (error) {
-      console.error('Error getting token remaining time:', error);
-      return 0;
-    }
-  }
-
-  isTokenExpiringSoon(isAdmin = false) {
-    try {
-      const remainingTimeMs = this.getTokenRemainingTime(isAdmin) * 60 * 1000;
-      return remainingTimeMs <= this.WARNING_THRESHOLD && remainingTimeMs > 0;
-    } catch (error) {
-      console.error('Error checking token expiry:', error);
-      return true;
-    }
-  }
-
-  async refreshToken(isAdmin = false) {
-    try {
-      // Define your refresh endpoint
-      const endpoint = isAdmin ? '/api/admin/refresh-token' : '/api/users/refresh-token';
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          ...this.getAuthHeader(isAdmin),
-          'Content-Type': 'application/json',
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to refresh token');
-      }
-
-      const data = await response.json();
-      const newToken = data.token;
-      const user = this.getUser(isAdmin);
-
-      // Save new token and reset timestamp
-      this.setAuth(newToken, user, (!isAdmin && localStorage.getItem(this.REMEMBER_KEY) === 'true'), isAdmin);
-      return newToken;
-    } catch (error) {
-      console.error('Error refreshing token:', error);
-      throw error;
-    }
-  }
-
-  clearAuth(isAdmin = false) {
-    try {
-      if (isAdmin) {
-        localStorage.removeItem(this.ADMIN_TOKEN_KEY);
-        localStorage.removeItem(this.ADMIN_USER_KEY);
-        localStorage.removeItem(this.ADMIN_TOKEN_TIMESTAMP_KEY);
-        sessionStorage.removeItem(this.ADMIN_TOKEN_KEY);
-        sessionStorage.removeItem(this.ADMIN_USER_KEY);
-        sessionStorage.removeItem(this.ADMIN_TOKEN_TIMESTAMP_KEY);
-      } else {
-        localStorage.removeItem(this.TOKEN_KEY);
-        localStorage.removeItem(this.USER_KEY);
-        localStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
-        localStorage.removeItem(this.REMEMBER_KEY);
-        sessionStorage.removeItem(this.TOKEN_KEY);
-        sessionStorage.removeItem(this.USER_KEY);
-        sessionStorage.removeItem(this.TOKEN_TIMESTAMP_KEY);
-        
-        // Update internal state
-        this.authState = { token: null, user: null, isAuthenticated: false };
-        this._notifyListeners();
-        
-        // Clear expiry monitoring
-        if (this.expiryCheckInterval) {
-          clearInterval(this.expiryCheckInterval);
-          this.expiryCheckInterval = null;
-        }
-        this.warningShown = false;
-      }
-      
-     
-    } catch (error) {
-      console.error('Failed to clear auth data:', error);
-    }
-  }
-
-  getAuthHeader(isAdmin = false) {
-    if (!this.isAuthenticated(isAdmin)) {
-      return {};
-    }
+  // Add listener for auth state changes
+  addAuthListener(listener) {
+    this.listeners.add(listener);
     
-    const token = this.getToken(isAdmin);
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    // Return unsubscribe function
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
+  // Notify all listeners of auth state changes
+  _notifyListeners() {
+    const authData = {
+      user: this.authState,
+      admin: this.adminAuthState,
+      tabId: this.tabId
+    };
+    
+    this.listeners.forEach(listener => {
+      try {
+        listener(authData);
+      } catch (error) {
+        console.error('Error in auth listener:', error);
+      }
+    });
+  }
+
+  // Force logout due to expiry
   forceLogoutDueToExpiry(isAdmin = false) {
     // Clear all auth data
     this.clearAuth(isAdmin);
@@ -617,7 +673,7 @@ class AuthManager {
     const redirectPath = isAdmin ? '/admin/login' : '/login';
     const message = isAdmin 
       ? 'Your admin session has expired. Please login again.'
-      : 'Your session has expired . Please login again.';
+      : 'Your session has expired. Please login again.';
     
     // Show alert and redirect
     setTimeout(() => {
@@ -626,6 +682,7 @@ class AuthManager {
     }, 100);
   }
 
+  // Logout method
   async logout(isAdmin = false) {
     try {
       const endpoint = isAdmin ? '/api/admin/logout' : '/api/users/logout';
@@ -642,26 +699,43 @@ class AuthManager {
     }
   }
 
-  // Extended session (refresh page)
-  extendSession(isAdmin = false) {
-    const user = this.getUser(isAdmin);
-    const token = this.getToken(isAdmin);
-    const rememberMe = !isAdmin && localStorage.getItem(this.REMEMBER_KEY) === 'true';
-    
-    if (user && token) {
-      // Reset the timestamp to extend the session
-      this.setAuth(token, user, rememberMe, isAdmin);
-      this.warningShown = false;
-      
-      // Dispatch session extended event
-      window.dispatchEvent(new CustomEvent('sessionExtended', {
-        detail: { isAdmin, remainingTime: this.getTokenRemainingTime(isAdmin) }
-      }));
-      
-      return true;
+  // Get auth header
+  getAuthHeader(isAdmin = false) {
+    if (!this.isAuthenticated(isAdmin)) {
+      return {};
     }
     
-    return false;
+    const token = this.getToken(isAdmin);
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  // Other utility methods remain the same...
+  getTokenRemainingTime(isAdmin = false) {
+    try {
+      const timestampKey = isAdmin ? this.ADMIN_TOKEN_TIMESTAMP_KEY : this.TOKEN_TIMESTAMP_KEY;
+      const tokenTimestamp = this._getTokenTimestamp(timestampKey);
+      
+      if (!tokenTimestamp) return 0;
+
+      const currentTime = Date.now();
+      const tokenAge = currentTime - tokenTimestamp;
+      const remainingTime = this.TOKEN_EXPIRY_DURATION - tokenAge;
+      
+      return Math.max(0, Math.floor(remainingTime / (60 * 1000)));
+    } catch (error) {
+      console.error('Error getting token remaining time:', error);
+      return 0;
+    }
+  }
+
+  isTokenExpiringSoon(isAdmin = false) {
+    try {
+      const remainingTimeMs = this.getTokenRemainingTime(isAdmin) * 60 * 1000;
+      return remainingTimeMs <= this.WARNING_THRESHOLD && remainingTimeMs > 0;
+    } catch (error) {
+      console.error('Error checking token expiry:', error);
+      return true;
+    }
   }
 
   getUserType(isAdmin = false) {
@@ -702,37 +776,81 @@ class AuthManager {
         return '/dashboard';
     }
   }
+
+  extendSession(isAdmin = false) {
+    const user = this.getUser(isAdmin);
+    const token = this.getToken(isAdmin);
+    const rememberMe = !isAdmin && localStorage.getItem(this.REMEMBER_KEY) === 'true';
+    
+    if (user && token) {
+      // Reset the timestamp to extend the session
+      this.setAuth(token, user, rememberMe, isAdmin);
+      this.warningShown = false;
+      
+      // Dispatch session extended event
+      window.dispatchEvent(new CustomEvent('sessionExtended', {
+        detail: { isAdmin, remainingTime: this.getTokenRemainingTime(isAdmin) }
+      }));
+      
+      return true;
+    }
+    
+    return false;
+  }
 }
 
 // Create singleton instance
 export const authManager = new AuthManager();
 
-// Enhanced initialization that runs immediately and on DOM ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    authManager.initialize();
-  });
-} else {
-  // DOM is already loaded
-  authManager.initialize();
-}
-
-// Also initialize on window load as a fallback
-window.addEventListener('load', () => {
+// Enhanced initialization
+const initializeAuth = () => {
   if (!authManager.isInitialized) {
+    
     authManager.initialize();
   }
-});
+};
 
-// Request notification permission on first load
+// Multiple initialization triggers
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeAuth);
+} else {
+  // DOM is already loaded
+  initializeAuth();
+}
+
+// Fallback initialization
+window.addEventListener('load', initializeAuth);
+
+// Additional safety net - initialize after a short delay
+setTimeout(initializeAuth, 100);
+
+// Request notification permission
 if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
 }
 
-// Simplified exports that use the singleton
-export const isAuthenticated = (isAdmin = false) => authManager.isAuthenticated(isAdmin);
-export const getToken = (isAdmin = false) => authManager.getToken(isAdmin);
-export const getUser = (isAdmin = false) => authManager.getUser(isAdmin);
+// Enhanced exports
+export const isAuthenticated = (isAdmin = false) => {
+  if (!authManager.isInitialized) {
+    authManager.initialize();
+  }
+  return authManager.isAuthenticated(isAdmin);
+};
+
+export const getToken = (isAdmin = false) => {
+  if (!authManager.isInitialized) {
+    authManager.initialize();
+  }
+  return authManager.getToken(isAdmin);
+};
+
+export const getUser = (isAdmin = false) => {
+  if (!authManager.isInitialized) {
+    authManager.initialize();
+  }
+  return authManager.getUser(isAdmin);
+};
+
 export const getUserType = (isAdmin = false) => authManager.getUserType(isAdmin);
 export const getAuthHeader = (isAdmin = false) => authManager.getAuthHeader(isAdmin);
 export const logout = (isAdmin = false) => authManager.logout(isAdmin);
