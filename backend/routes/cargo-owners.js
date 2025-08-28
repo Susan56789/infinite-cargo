@@ -411,6 +411,238 @@ router.put('/profile',  auth, cargoOwnerLimiter, profileValidation, async (req, 
   }
 });
 
+// @route   DELETE /api/cargo-owners/profile
+// @desc    Delete cargo owner profile and account
+// @access  Private (Cargo owners only)
+router.delete('/profile', auth, cargoOwnerLimiter, async (req, res) => {
+  try {
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Cargo owners only.'
+      });
+    }
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const cargoOwnersCollection = db.collection('cargo-owners');
+    const loadsCollection = db.collection('loads');
+    const bidsCollection = db.collection('bids');
+    const subscriptionsCollection = db.collection('subscriptions');
+    const notificationsCollection = db.collection('notifications');
+
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+
+    // Check for active loads or subscriptions that prevent deletion
+    const activeLoads = await loadsCollection.countDocuments({
+      postedBy: userId,
+      status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] }
+    });
+
+    if (activeLoads > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot delete account. You have ${activeLoads} active load(s). Please cancel or complete them first.`,
+        activeLoads
+      });
+    }
+
+    const activeSubscription = await subscriptionsCollection.findOne({
+      userId: userId,
+      status: 'active'
+    });
+
+    if (activeSubscription) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot delete account with active subscription. Please cancel subscription first.',
+        subscription: {
+          planName: activeSubscription.planName,
+          status: activeSubscription.status
+        }
+      });
+    }
+
+    // Begin deletion process - use transactions for data integrity
+    const session = await mongoose.startSession();
+    
+    try {
+      await session.withTransaction(async () => {
+        // 1. Delete or anonymize completed loads
+        await loadsCollection.updateMany(
+          { 
+            postedBy: userId,
+            status: { $in: ['delivered', 'completed', 'cancelled'] }
+          },
+          { 
+            $set: { 
+              postedByName: 'Deleted User',
+              cargoOwnerName: 'Deleted User',
+              contactPerson: {
+                name: 'Deleted User',
+                phone: '',
+                email: ''
+              },
+              deletedAt: new Date()
+            },
+            $unset: { postedBy: 1 }
+          },
+          { session }
+        );
+
+        // 2. Delete associated bids for the user's loads
+        const userLoadIds = await loadsCollection.distinct('_id', { postedBy: userId }, { session });
+        if (userLoadIds.length > 0) {
+          await bidsCollection.deleteMany(
+            { loadId: { $in: userLoadIds } },
+            { session }
+          );
+        }
+
+        // 3. Delete notifications related to the user
+        await notificationsCollection.deleteMany(
+          { 
+            $or: [
+              { userId: userId },
+              { 'data.cargoOwnerId': req.user.id }
+            ]
+          },
+          { session }
+        );
+
+        // 4. Delete expired/inactive subscriptions
+        await subscriptionsCollection.deleteMany(
+          { 
+            userId: userId,
+            status: { $in: ['expired', 'cancelled', 'rejected'] }
+          },
+          { session }
+        );
+
+        // 5. Finally delete the cargo owner profile
+        const deleteResult = await cargoOwnersCollection.deleteOne(
+          { _id: userId },
+          { session }
+        );
+
+        if (deleteResult.deletedCount === 0) {
+          throw new Error('Cargo owner profile not found');
+        }
+      });
+
+      // Log the deletion for audit purposes
+      console.log(`Cargo owner profile deleted: ${req.user.id} at ${new Date().toISOString()}`);
+
+      res.json({
+        status: 'success',
+        message: 'Profile and account deleted successfully',
+        data: {
+          deletedAt: new Date().toISOString(),
+          completedLoadsAnonymized: true,
+          relatedDataCleaned: true
+        }
+      });
+
+    } catch (transactionError) {
+      console.error('Transaction error during profile deletion:', transactionError);
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to delete profile completely. Please try again.',
+        error: process.env.NODE_ENV === 'development' ? transactionError.message : undefined
+      });
+    } finally {
+      await session.endSession();
+    }
+
+  } catch (error) {
+    console.error('Delete profile error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/cargo-owners/profile/deactivate
+// @desc    Deactivate cargo owner profile (soft delete alternative)
+// @access  Private (Cargo owners only)
+router.post('/profile/deactivate', auth, cargoOwnerLimiter, async (req, res) => {
+  try {
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Cargo owners only.'
+      });
+    }
+
+    const { reason } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const cargoOwnersCollection = db.collection('cargo-owners');
+
+    // Check for active loads
+    const loadsCollection = db.collection('loads');
+    const activeLoads = await loadsCollection.countDocuments({
+      postedBy: new mongoose.Types.ObjectId(req.user.id),
+      status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] }
+    });
+
+    if (activeLoads > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot deactivate account. You have ${activeLoads} active load(s). Please cancel or complete them first.`,
+        activeLoads
+      });
+    }
+
+    // Deactivate the account
+    const result = await cargoOwnersCollection.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(req.user.id) },
+      { 
+        $set: { 
+          isActive: false,
+          deactivatedAt: new Date(),
+          deactivationReason: reason || 'User requested deactivation',
+          updatedAt: new Date()
+        }
+      },
+      { 
+        returnDocument: 'after',
+        projection: {
+          password: 0,
+          loginHistory: 0,
+          registrationIp: 0
+        }
+      }
+    );
+
+    if (!result.value) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Cargo owner not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Account deactivated successfully. You can reactivate by contacting support.',
+      data: {
+        profile: result.value
+      }
+    });
+
+  } catch (error) {
+    console.error('Deactivate profile error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deactivating profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   GET /api/cargo-owners/loads/:id/bids
 // @desc    Get bids for a specific load
 // @access  Private (Cargo owner - load owner only)

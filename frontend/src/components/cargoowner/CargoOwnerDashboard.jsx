@@ -73,14 +73,18 @@ const CargoOwnerDashboard = () => {
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    companyName: '',
-    location: '',
-    businessType: '',
-    description: ''
-  });
+  name: '',
+  email: '',
+  phone: '',
+  alternatePhone: '',
+  companyName: '',
+  businessType: '',
+  website: '',
+  address: '',
+  city: '',
+  country: '',
+  description: ''
+});
 
   const [filters, setFilters] = useState({
     status: '',
@@ -99,23 +103,31 @@ const CargoOwnerDashboard = () => {
   };
 
   useEffect(() => {
-    // Check authentication using AuthManager
-    if (!isAuthenticated() || getUserType() !== 'cargo_owner') {
-      window.location.href = '/login';
-      return;
-    }
+  // Check authentication using AuthManager
+  if (!isAuthenticated() || getUserType() !== 'cargo_owner') {
+    window.location.href = '/login';
+    return;
+  }
 
-    const userData = getUser();
-    setUser(userData);
-    setProfileForm({
-      name: userData?.name || '',
-      email: userData?.email || '',
-      phone: userData?.phone || '',
-      companyName: userData?.companyName || '',
-      location: userData?.location || '',
-      businessType: userData?.businessType || '',
-      description: userData?.description || ''
-    });
+  const userData = getUser();
+  setUser(userData);
+
+
+   setProfileForm({
+  name: userData?.name || '',
+  email: userData?.email || '',
+  phone: userData?.phone || '',
+  alternatePhone: userData?.alternatePhone || '',
+  companyName: userData?.cargoOwnerProfile?.companyName || '',
+  businessType: userData?.cargoOwnerProfile?.businessType || '',
+  website: userData?.cargoOwnerProfile?.website || '',
+  address: userData?.cargoOwnerProfile?.address || '',
+  city: userData?.cargoOwnerProfile?.city || '',
+  country: userData?.cargoOwnerProfile?.country || '',
+  description: userData?.cargoOwnerProfile?.description || ''
+});
+
+
     fetchDashboardData();
   }, []);
 
@@ -1129,37 +1141,313 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     }
   };
 
-  const handleUpdateProfile = async (e) => {
-    e.preventDefault();
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/cargo-owners/profile`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(profileForm)
-      });
+const handleUpdateProfile = async (e) => {
+  e.preventDefault();
 
-      if (response.status === 401) {
-        handleLogout();
+  try {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    const authHeaders = getAuthHeaders();
+
+    if (!authHeaders.Authorization) {
+      setError('Authentication required. Please refresh the page and log in again.');
+      return;
+    }
+
+    // Validate required fields
+    if (!profileForm.name || profileForm.name.trim().length < 2) {
+      setError('Name must be at least 2 characters long');
+      return;
+    }
+
+    if (
+      profileForm.phone &&
+      !/^[\+]?[\d\s\-\(\)]{10,15}$/.test(profileForm.phone.replace(/\s/g, ''))
+    ) {
+      setError('Please enter a valid phone number');
+      return;
+    }
+
+    if (profileForm.website && profileForm.website.trim() && !profileForm.website.startsWith('http')) {
+      setError('Website URL must start with http:// or https://');
+      return;
+    }
+
+    // Build payload with correct nesting
+    const updatePayload = {
+      phone: profileForm.phone?.trim() || undefined,
+      alternatePhone: profileForm.alternatePhone?.trim() || undefined,
+      cargoOwnerProfile: {
+        companyName: profileForm.companyName?.trim() || undefined,
+        businessType: profileForm.businessType || undefined,
+        website: profileForm.website?.trim() || undefined,
+        address: profileForm.address?.trim() || undefined,
+        city: profileForm.city?.trim() || undefined,
+        country: profileForm.country?.trim() || undefined,
+        description: profileForm.description?.trim() || undefined
+      }
+    };
+
+    // Clean undefined values inside cargoOwnerProfile
+    Object.keys(updatePayload.cargoOwnerProfile).forEach((key) => {
+      if (updatePayload.cargoOwnerProfile[key] === undefined) {
+        delete updatePayload.cargoOwnerProfile[key];
+      }
+    });
+
+    // Clean undefined values at root
+    Object.keys(updatePayload).forEach((key) => {
+      if (updatePayload[key] === undefined) {
+        delete updatePayload[key];
+      }
+    });
+
+    console.log('Profile update payload:', updatePayload);
+
+    const response = await fetch(`${API_BASE_URL}/cargo-owners/profile`, {
+      method: 'PUT',
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(updatePayload)
+    });
+
+    if (response.status === 401) {
+      setError('Session expired. Please refresh the page and log in again.');
+      return;
+    }
+
+    if (response.status === 403) {
+      setError('Access denied. Only cargo owners can update profiles.');
+      return;
+    }
+
+    let data;
+    try {
+      const responseText = await response.text();
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse profile update response:', parseError);
+      if (response.ok) {
+        data = { status: 'success', message: 'Profile updated successfully' };
+      } else {
+        setError(`Server returned invalid response. Status: ${response.status}`);
         return;
       }
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setUser({ ...user, ...profileForm });
-        setSuccess('Profile updated successfully!');
-        setShowProfileModal(false);
-      } else {
-        setError(data.message || 'Failed to update profile');
-      }
-    } catch (error) {
-      console.error('Error updating profile:', error);
-      setError(`Failed to update profile: ${error.message}`);
-    } finally {
-      setLoading(false);
     }
-  };
+
+    if (response.ok) {
+      const updatedUser = {
+        ...user,
+        ...profileForm,
+        cargoOwnerProfile: {
+          ...user?.cargoOwnerProfile,
+          ...updatePayload.cargoOwnerProfile
+        }
+      };
+
+      setUser(updatedUser);
+      setSuccess('Profile updated successfully!');
+      setShowProfileModal(false);
+
+      // Refresh dashboard
+      await fetchDashboardData();
+    } else {
+      let errorMessage = data?.message || 'Failed to update profile';
+
+      if (response.status === 400) {
+        if (data.errors && Array.isArray(data.errors)) {
+          errorMessage = data.errors.map((err) => err.msg || err.message).join(', ');
+        }
+      }
+
+      setError(errorMessage);
+      console.error('Profile update error:', {
+        status: response.status,
+        data,
+        payload: updatePayload
+      });
+    }
+  } catch (error) {
+    console.error('Error updating profile:', error);
+
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error. Please check your internet connection and try again.');
+    } else {
+      setError(`Failed to update profile: ${error.message}`);
+    }
+  } finally {
+    setLoading(false);
+  }
+};
+
+
+const handleDeleteProfile = async () => {
+  try {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization) {
+      setError('Authentication required. Please refresh the page and log in again.');
+      return;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/cargo-owners/profile`, {
+      method: 'DELETE',
+      headers: authHeaders
+    });
+
+    if (response.status === 401) {
+      setError('Session expired. Please refresh the page and log in again.');
+      return;
+    }
+
+    let data;
+    try {
+      const responseText = await response.text();
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse delete response:', parseError);
+      if (response.ok) {
+        data = { status: 'success', message: 'Account deleted successfully' };
+      } else {
+        setError(`Server returned invalid response. Status: ${response.status}`);
+        return;
+      }
+    }
+
+    if (response.ok) {
+      setSuccess('Account deleted successfully. You will be redirected to the homepage.');
+      
+      // Clear auth and redirect after a delay
+      setTimeout(() => {
+        handleLogout();
+      }, 2000);
+      
+    } else {
+      let errorMessage = data?.message || 'Failed to delete account';
+      
+      if (response.status === 400) {
+        // Handle specific deletion prevention cases
+        if (data.activeLoads) {
+          errorMessage = `Cannot delete account. You have ${data.activeLoads} active loads. Please cancel or complete them first.`;
+        }
+        if (data.subscription) {
+          errorMessage = 'Cannot delete account with active subscription. Please cancel your subscription first.';
+        }
+      }
+      
+      setError(errorMessage);
+      console.error('Account deletion error:', {
+        status: response.status,
+        data
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error deleting profile:', error);
+    
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error. Please check your internet connection and try again.');
+    } else {
+      setError(`Failed to delete account: ${error.message}`);
+    }
+  } finally {
+    setLoading(false);
+    setShowProfileModal(false);
+  }
+};
+
+const handleDeactivateProfile = async (reason = '') => {
+  try {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    const authHeaders = getAuthHeaders();
+    
+    if (!authHeaders.Authorization) {
+      setError('Authentication required. Please refresh the page and log in again.');
+      return;
+    }
+
+    const payload = {
+      reason: reason.trim() || 'User requested deactivation'
+    };
+
+    const response = await fetch(`${API_BASE_URL}/cargo-owners/profile/deactivate`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify(payload)
+    });
+
+    if (response.status === 401) {
+      setError('Session expired. Please refresh the page and log in again.');
+      return;
+    }
+
+    let data;
+    try {
+      const responseText = await response.text();
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse deactivate response:', parseError);
+      if (response.ok) {
+        data = { status: 'success', message: 'Account deactivated successfully' };
+      } else {
+        setError(`Server returned invalid response. Status: ${response.status}`);
+        return;
+      }
+    }
+
+    if (response.ok) {
+      setSuccess('Account deactivated successfully. Contact support to reactivate. You will be logged out in a moment.');
+      
+      // Update user state to reflect deactivation
+      setUser({ ...user, isActive: false, deactivatedAt: new Date().toISOString() });
+      
+      // Log out after a delay
+      setTimeout(() => {
+        handleLogout();
+      }, 3000);
+      
+    } else {
+      let errorMessage = data?.message || 'Failed to deactivate account';
+      
+      if (response.status === 400) {
+        if (data.activeLoads) {
+          errorMessage = `Cannot deactivate account. You have ${data.activeLoads} active loads. Please cancel or complete them first.`;
+        }
+      }
+      
+      setError(errorMessage);
+      console.error('Account deactivation error:', {
+        status: response.status,
+        data,
+        payload
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error deactivating profile:', error);
+    
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('Network error. Please check your internet connection and try again.');
+    } else {
+      setError(`Failed to deactivate account: ${error.message}`);
+    }
+  } finally {
+    setLoading(false);
+    setShowProfileModal(false);
+  }
+};
+
 
   const fetchBids = async () => {
     try {
@@ -1551,13 +1839,15 @@ const getSubscriptionStatus = (subscription) => {
       />
 
       <ProfileModal 
-        showProfileModal={showProfileModal}
-        profileForm={profileForm}
-        setProfileForm={setProfileForm}
-        loading={loading}
-        onSubmit={handleUpdateProfile}
-        onClose={() => setShowProfileModal(false)}
-      />
+  showProfileModal={showProfileModal}
+  profileForm={profileForm}
+  setProfileForm={setProfileForm}
+  loading={loading}
+  onSubmit={handleUpdateProfile}
+  onClose={() => setShowProfileModal(false)}
+  onDeleteProfile={handleDeleteProfile}
+  onDeactivateProfile={handleDeactivateProfile}
+/>
 
       <SubscriptionModal 
         showSubscriptionModal={showSubscriptionModal}
