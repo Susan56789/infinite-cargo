@@ -32,7 +32,7 @@ const Header = () => {
       
       if (!isAuth) {
         if (user !== null) {
-          console.log('[Header] User logged out, clearing state');
+          
           setUser(null);
           lastUserIdRef.current = null;
         }
@@ -41,11 +41,6 @@ const Header = () => {
       
       if (userData && currentUserId) {
         if (currentUserId !== lastUserId || !user) {
-          console.log('[Header] User state updated:', {
-            userId: currentUserId,
-            userType: userData.userType || userData.type,
-            name: userData.name
-          });
           setUser(userData);
           lastUserIdRef.current = currentUserId;
         }
@@ -59,7 +54,7 @@ const Header = () => {
   const forceSync = useCallback(() => {
     if (!mountedRef.current) return;
     
-    console.log('[Header] Force syncing auth state...');
+
     
     // Clear any pending sync
     if (syncTimeoutRef.current) {
@@ -79,7 +74,7 @@ const Header = () => {
   useEffect(() => {
     mountedRef.current = true;
     
-    console.log('[Header] Initializing auth listener...');
+   
 
     // Ensure auth manager is initialized
     if (!authManager.isInitialized) {
@@ -91,11 +86,7 @@ const Header = () => {
       if (!mountedRef.current) return;
       
       const userAuthState = authData.user || authData; // Handle both formats
-      console.log('[Header] Auth state changed:', {
-        isAuthenticated: userAuthState?.isAuthenticated,
-        userId: userAuthState?.user?._id || userAuthState?.user?.id,
-        tabId: authData.tabId
-      });
+     
       
       setUser(userAuthState?.isAuthenticated ? userAuthState.user : null);
     });
@@ -129,7 +120,7 @@ const Header = () => {
       ];
       
       if (authKeys.includes(e.key)) {
-        console.log('[Header] Storage change detected:', e.key);
+       
         
         // Throttled sync to prevent excessive updates
         if (syncTimeoutRef.current) {
@@ -157,7 +148,7 @@ const Header = () => {
     const handleTabActive = () => {
       if (!mountedRef.current) return;
       
-      console.log('[Header] Tab became active, syncing auth...');
+     
       
       // Always force sync when tab becomes active
       setTimeout(() => {
@@ -180,7 +171,7 @@ const Header = () => {
     // Page show events (for back/forward navigation)
     window.addEventListener('pageshow', (event) => {
       if (event.persisted && mountedRef.current) {
-        console.log('[Header] Page restored from cache, syncing...');
+        
         handleTabActive();
       }
     });
@@ -195,7 +186,7 @@ const Header = () => {
   // Enhanced custom auth event handlers
   useEffect(() => {
     const handleUserLoggedIn = (e) => {
-      console.log('[Header] User logged in event received');
+      
       
       // Force immediate sync and update
       setTimeout(() => {
@@ -210,7 +201,7 @@ const Header = () => {
     };
 
     const handleUserLoggedOut = (e) => {
-      console.log('[Header] User logged out event received');
+     
       
       if (mountedRef.current) {
         setUser(null);
@@ -219,7 +210,7 @@ const Header = () => {
     };
 
     const handleAuthStateChanged = () => {
-      console.log('[Header] Auth state changed event received');
+      
       
       setTimeout(() => {
         forceSync();
@@ -247,7 +238,7 @@ const Header = () => {
   // Enhanced logout handler
   const handleLogout = async () => {
     try {
-      console.log('[Header] Logging out user...');
+     
       
       // Clear local state immediately
       setUser(null);
