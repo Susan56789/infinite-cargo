@@ -238,8 +238,8 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     { value: 'truck_large', label: 'Large Truck' },
     { value: 'container_truck', label: 'Container Truck' },
     { value: 'flatbed', label: 'Flatbed' },
-    { value: 'refrigerated', label: 'Refrigerated' },
-    { value: 'tanker', label: 'Tanker' },
+    { value: 'refrigerated_truck', label: 'Refrigerated' },
+    { value: 'trailer', label: 'Trailer' },
     { value: 'any', label: 'Any Vehicle Type' }
   ];
 
@@ -404,107 +404,123 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   //  Update load status function with better error handling
   const updateLoadStatus = async () => {
-    try {
-      setLoading(true);
-      setError('');
+  try {
+    setLoading(true);
+    setError('');
 
-      if (!statusUpdateData.loadId || !statusUpdateData.newStatus) {
-        throw new Error('Load ID and new status are required');
-      }
-
-      const currentLoad = loads.find(load => load._id === statusUpdateData.loadId);
-      if (!currentLoad) {
-        throw new Error('Load not found');
-      }
-
-      if (currentLoad.status === statusUpdateData.newStatus) {
-        throw new Error('Load is already in this status');
-      }
-
-      const authHeaders = getAuthHeaders();
-      if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
-        throw new Error('Authentication required. Please log in again.');
-      }
-
-      //  Enhanced request body to match backend expectations
-      const requestBody = {
-        status: statusUpdateData.newStatus,
-        reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
-      };
-
-      const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
-        method: 'PATCH',
-        headers: authHeaders,
-        credentials: 'include',
-        body: JSON.stringify(requestBody)
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to update load status';
-        
-        try {
-          const errorData = await response.json();
-          console.error('Status update error details:', errorData);
-          
-          if (response.status === 401) {
-            errorMessage = 'Session expired. Please refresh the page and log in again.';
-            logout();
-            return;
-          } else if (response.status === 403) {
-            errorMessage = 'You don\'t have permission to update this load status.';
-          } else if (response.status === 400) {
-            errorMessage = errorData.message || 'Invalid status update request';
-            // Log validation errors if present
-            if (errorData.errors) {
-              console.error('Validation errors:', errorData.errors);
-            }
-          } else if (response.status === 404) {
-            errorMessage = 'Load not found';
-          } else {
-            errorMessage = errorData.message || errorMessage;
-          }
-        } catch (parseError) {
-          console.error('Error parsing response:', parseError);
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-
-      if (data.status === 'success') {
-        setLoads(prevLoads => 
-          prevLoads.map(load => {
-            if (load._id === statusUpdateData.loadId) {
-              return { 
-                ...load, 
-                status: statusUpdateData.newStatus,
-                updatedAt: new Date().toISOString(),
-                isActive: ['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit'].includes(statusUpdateData.newStatus),
-                ...(data.data?.load && {
-                  statusHistory: data.data.load.statusHistory
-                })
-              };
-            }
-            return load;
-          })
-        );
-        
-        setShowStatusUpdateModal(false);
-        setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
-        
-      } else {
-        throw new Error(data.message || 'Failed to update load status');
-      }
-
-    } catch (err) {
-      console.error('Error updating load status:', err);
-      setError(err.message || 'Failed to update load status');
-    } finally {
-      setLoading(false);
+    if (!statusUpdateData.loadId || !statusUpdateData.newStatus) {
+      throw new Error('Load ID and new status are required');
     }
-  };
+
+    const currentLoad = loads.find(load => load._id === statusUpdateData.loadId);
+    if (!currentLoad) {
+      throw new Error('Load not found');
+    }
+
+    if (currentLoad.status === statusUpdateData.newStatus) {
+      throw new Error('Load is already in this status');
+    }
+
+    const authHeaders = getAuthHeaders();
+    if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+
+    const requestBody = {
+      status: statusUpdateData.newStatus,
+      reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
+    };
+
+    console.log('Updating status:', {
+      loadId: statusUpdateData.loadId,
+      currentStatus: currentLoad.status,
+      newStatus: statusUpdateData.newStatus,
+      reason: requestBody.reason
+    });
+
+    const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      credentials: 'include',
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      let errorMessage = 'Failed to update load status';
+      
+      try {
+        const errorData = await response.json();
+        console.error('Status update error details:', errorData);
+        
+        if (response.status === 401) {
+          errorMessage = 'Session expired. Please refresh the page and log in again.';
+          logout();
+          return;
+        } else if (response.status === 403) {
+          errorMessage = 'You don\'t have permission to update this load status.';
+        } else if (response.status === 400) {
+          errorMessage = errorData.message || 'Invalid status update request';
+          if (errorData.errors) {
+            console.error('Validation errors:', errorData.errors);
+          }
+        } else if (response.status === 404) {
+          errorMessage = 'Load not found';
+        } else {
+          errorMessage = errorData.message || errorMessage;
+        }
+      } catch (parseError) {
+        console.error('Error parsing response:', parseError);
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log('Status update response:', data);
+
+    if (data.status === 'success') {
+      // Update the loads state immediately
+      setLoads(prevLoads => 
+        prevLoads.map(load => {
+          if (load._id === statusUpdateData.loadId) {
+            const updatedLoad = { 
+              ...load, 
+              status: statusUpdateData.newStatus,
+              updatedAt: new Date().toISOString(),
+              isActive: ['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned', 'in_transit'].includes(statusUpdateData.newStatus)
+            };
+
+            // Include additional data from response if available
+            if (data.data?.load) {
+              Object.assign(updatedLoad, data.data.load);
+            }
+
+            console.log('Updated load in state:', updatedLoad);
+            return updatedLoad;
+          }
+          return load;
+        })
+      );
+      
+      // Close modal and reset state
+      setShowStatusUpdateModal(false);
+      setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
+      
+      console.log('Status update completed successfully');
+      
+    } else {
+      throw new Error(data.message || 'Failed to update load status');
+    }
+
+  } catch (err) {
+    console.error('Error updating load status:', err);
+    setError(err.message || 'Failed to update load status');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Delete load function
   const deleteLoad = async (loadId) => {
@@ -866,8 +882,9 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   };
 
   const getAvailableStatusTransitions = (currentStatus) => {
-    return statusConfig[currentStatus]?.nextStates || [];
-  };
+  const transitions = statusConfig[currentStatus]?.nextStates || [];
+  return transitions;
+};
 
   const formatCurrency = (amount) => {
     if (!amount) return 'KES 0';
@@ -1031,14 +1048,28 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   };
 
   const handleUpdateLoadStatus = (loadId, newStatus) => {
-    setStatusUpdateData({
-      loadId,
-      newStatus,
-      reason: ''
-    });
-    setShowStatusUpdateModal(true);
-    setActiveActionMenu(null);
-  };
+  console.log('Handling status update:', { loadId, newStatus });
+  
+  const load = loads.find(l => l._id === loadId);
+  if (!load) {
+    setError('Load not found');
+    return;
+  }
+
+  const availableTransitions = getAvailableStatusTransitions(load.status);
+  if (!availableTransitions.includes(newStatus)) {
+    setError(`Cannot change status from ${getStatusLabel(load.status)} to ${getStatusLabel(newStatus)}`);
+    return;
+  }
+
+  setStatusUpdateData({
+    loadId,
+    newStatus,
+    reason: ''
+  });
+  setShowStatusUpdateModal(true);
+  setActiveActionMenu(null);
+};
 
   const handleDeleteLoad = async (loadId) => {
     if (window.confirm('Are you sure you want to delete this load? This action cannot be undone.')) {
@@ -1535,34 +1566,38 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                                 <Settings className="h-4 w-4" />
                               </button>
 
-                              {activeActionMenu === load._id && (
-                                <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
-                                  {canChangeStatus(load) && getAvailableStatusTransitions(load.status).map((status) => (
-                                    <button
-                                      key={status}
-                                      onClick={() => handleUpdateLoadStatus(load._id, status)}
-                                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                                    >
-                                      {getStatusIcon(status)}
-                                      Change to {getStatusLabel(status)}
-                                    </button>
-                                  ))}
-                                  
-                                  {canChangeStatus(load) && canDeleteLoad(load) && (
-                                    <div className="border-t border-gray-100 my-1" />
-                                  )}
-                                  
-                                  {canDeleteLoad(load) && (
-                                    <button
-                                      onClick={() => handleDeleteLoad(load._id)}
-                                      className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                      Delete Load
-                                    </button>
-                                  )}
-                                </div>
-                              )}
+                             {activeActionMenu === load._id && (
+  <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
+    {canChangeStatus(load) && getAvailableStatusTransitions(load.status).length > 0 && (
+      <>
+        {getAvailableStatusTransitions(load.status).map((status) => (
+          <button
+            key={status}
+            onClick={() => {
+              console.log('Status transition clicked:', { from: load.status, to: status });
+              handleUpdateLoadStatus(load._id, status);
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+          >
+            {getStatusIcon(status)}
+            Change to {getStatusLabel(status)}
+          </button>
+        ))}
+        {canDeleteLoad(load) && <div className="border-t border-gray-100 my-1" />}
+      </>
+    )}
+    
+    {canDeleteLoad(load) && (
+      <button
+        onClick={() => handleDeleteLoad(load._id)}
+        className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+      >
+        <Trash2 className="h-4 w-4" />
+        Delete Load
+      </button>
+    )}
+  </div>
+)}
                             </div>
                           )}
                         </div>
@@ -1768,14 +1803,17 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
       {/* Status Update Modal */}
       <StatusUpdateModal
-        show={showStatusUpdateModal}
-        onClose={() => setShowStatusUpdateModal(false)}
-        onSubmit={updateLoadStatus}
-        statusUpdateData={statusUpdateData}
-        onStatusChange={(field, value) => setStatusUpdateData(prev => ({ ...prev, [field]: value }))}
-        statusConfig={statusConfig}
-        isSubmitting={loading}
-      />
+  isOpen={showStatusUpdateModal}
+  onClose={() => {
+    setShowStatusUpdateModal(false);
+    setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
+  }}
+  onConfirm={updateLoadStatus}
+  statusUpdateData={statusUpdateData}
+  setStatusUpdateData={setStatusUpdateData}
+  statusConfig={statusConfig}
+  loading={loading}
+/>
 
       {/* Edit Load Modal */}
       <EditLoadModal

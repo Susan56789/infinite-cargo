@@ -1755,7 +1755,7 @@ router.delete('/:id', auth, async (req, res) => {
     console.log('Delete load request for ID:', req.params.id);
 
     // Authentication check
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user.id || !req.user._id) {
       return res.status(401).json({
         status: 'error',
         message: 'Authentication required'
@@ -1779,7 +1779,7 @@ router.delete('/:id', auth, async (req, res) => {
       });
     }
 
-    // Find the load
+    // Find the load first to validate ownership and status
     const load = await Load.findById(req.params.id);
     if (!load) {
       return res.status(404).json({
@@ -1787,6 +1787,14 @@ router.delete('/:id', auth, async (req, res) => {
         message: 'Load not found'
       });
     }
+
+    console.log('Found load:', {
+      id: load._id,
+      title: load.title,
+      status: load.status,
+      postedBy: load.postedBy,
+      requestUserId: req.user.id
+    });
 
     // Check ownership
     if (load.postedBy.toString() !== req.user.id.toString()) {
@@ -1805,50 +1813,69 @@ router.delete('/:id', auth, async (req, res) => {
       });
     }
 
-    // Start a transaction to ensure data consistency
+    // Use session for transaction
     const session = await mongoose.startSession();
     
     try {
       await session.withTransaction(async () => {
-        // Delete associated bids first
-        const Bid = mongoose.model('Bid');
-        const deletedBids = await Bid.deleteMany({ load: req.params.id }).session(session);
-        console.log('Associated bids deleted for load:', req.params.id, 'Count:', deletedBids.deletedCount);
+        console.log('Starting transaction for load deletion:', req.params.id);
+
+        // Step 1: Delete associated bids
+        const bidDeleteResult = await Bid.deleteMany({ load: req.params.id }, { session });
+        console.log('Deleted bids:', bidDeleteResult.deletedCount);
         
-        // Delete any notifications related to this load
-        const Notification = mongoose.model('Notification');
+        // Step 2: Delete any notifications (if model exists)
         if (Notification) {
-          await Notification.deleteMany({ 
-            $or: [
-              { loadId: req.params.id },
-              { 'metadata.loadId': req.params.id }
-            ]
-          }).session(session);
+          try {
+            const notificationDeleteResult = await Notification.deleteMany({ 
+              $or: [
+                { loadId: req.params.id },
+                { 'metadata.loadId': req.params.id },
+                { 'data.loadId': req.params.id }
+              ]
+            }, { session });
+            console.log('Deleted notifications:', notificationDeleteResult.deletedCount);
+          } catch (notificationError) {
+            console.log('Error deleting notifications (continuing):', notificationError.message);
+          }
         }
         
-        // Delete the load
-        const deletedLoad = await Load.findByIdAndDelete(req.params.id).session(session);
+        // Step 3: Delete the load itself
+        const loadDeleteResult = await Load.deleteOne({ _id: req.params.id }, { session });
+        console.log('Load delete result:', loadDeleteResult);
         
-        if (!deletedLoad) {
-          throw new Error('Load not found during deletion');
+        if (loadDeleteResult.deletedCount === 0) {
+          throw new Error('Load was not deleted - it may have been deleted by another request');
         }
+      }, {
+        readPreference: 'primary',
+        readConcern: { level: 'local' },
+        writeConcern: { w: 'majority' }
       });
 
       console.log('Load deleted successfully:', req.params.id);
 
       res.json({
         status: 'success',
-        message: 'Load deleted successfully'
+        message: 'Load deleted successfully',
+        data: {
+          deletedLoadId: req.params.id,
+          deletedLoadTitle: load.title
+        }
       });
 
+    } catch (transactionError) {
+      console.error('Transaction error:', transactionError);
+      throw transactionError;
     } finally {
       await session.endSession();
     }
 
   } catch (error) {
     console.error('Delete load error:', error);
+    console.error('Error stack:', error.stack);
     
-    // Provide more specific error messages
+    // Provide more specific error messages based on error type
     if (error.name === 'CastError') {
       return res.status(400).json({
         status: 'error',
@@ -1864,10 +1891,33 @@ router.delete('/:id', auth, async (req, res) => {
       });
     }
 
+    // Handle MongoDB specific errors
+    if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Database error during deletion',
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Database operation failed'
+      });
+    }
+
+    // Handle transaction abortion
+    if (error.hasErrorLabel && error.hasErrorLabel('TransientTransactionError')) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Transaction failed, please try again',
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Transaction error'
+      });
+    }
+
+    // Generic server error
     res.status(500).json({
       status: 'error',
       message: 'Server error deleting load',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        name: error.name,
+        stack: error.stack
+      } : 'Internal server error'
     });
   }
 });
