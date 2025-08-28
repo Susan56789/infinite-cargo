@@ -522,87 +522,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 };
 
 
-  // Delete load function
-  const deleteLoad = async (loadId) => {
-    if (!loadId) {
-      setError('Load ID is required');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError('');
-      
-      const authHeaders = getAuthHeaders();
-      if (!authHeaders.Authorization && !authHeaders['x-auth-token']) {
-        throw new Error('Authentication required. Please log in again.');
-      }
-
-      const response = await fetch(`${API_BASE_URL}/loads/${loadId}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-        credentials: 'include'
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to delete load';
-        
-        try {
-          const errorData = await response.json();
-          if (response.status === 401) {
-            errorMessage = 'Session expired. Please log in again.';
-            logout();
-            return;
-          } else if (response.status === 403) {
-            errorMessage = 'You don\'t have permission to delete this load.';
-          } else if (response.status === 404) {
-            errorMessage = 'Load not found or already deleted.';
-          } else if (response.status === 400) {
-            errorMessage = errorData.message || 'Cannot delete load in current status.';
-          } else {
-            errorMessage = errorData.message || errorMessage;
-          }
-        } catch (parseError) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-      if (data.status === 'success') {
-        setLoads(prevLoads => prevLoads.filter(load => load._id !== loadId));
-        setSelectedLoads(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(loadId);
-          return newSet;
-        });
-        
-        const newTotal = Math.max(0, pagination.total - 1);
-        const newTotalPages = Math.ceil(newTotal / pagination.limit);
-        
-        if (pagination.page > 1 && pagination.page > newTotalPages) {
-          fetchLoads(Math.max(1, newTotalPages), null, true);
-        } else {
-          setPagination(prev => ({
-            ...prev,
-            total: newTotal,
-            totalPages: newTotalPages
-          }));
-        }
-        
-      } else {
-        throw new Error(data.message || 'Failed to delete load');
-      }
-      
-    } catch (err) {
-      console.error('Error deleting load:', err);
-      setError(err.message || 'Failed to delete load');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Update load function
   const updateLoad = async (loadId, updateData) => {
     if (!loadId) {
@@ -916,10 +835,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     return editableStatuses.includes(load.status);
   };
 
-  const canDeleteLoad = (load) => {
-    const deletableStatuses = ['posted', 'available', 'receiving_bids', 'not_available', 'cancelled', 'expired'];
-    return deletableStatuses.includes(load.status);
-  };
 
   const canChangeStatus = (load) => {
     const availableTransitions = getAvailableStatusTransitions(load.status);
@@ -1018,7 +933,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   const toggleLoadSelection = (loadId) => {
     const newSelected = new Set(selectedLoads);
     if (newSelected.has(loadId)) {
-      newSelected.delete(loadId);
     } else {
       newSelected.add(loadId);
     }
@@ -1071,12 +985,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   setActiveActionMenu(null);
 };
 
-  const handleDeleteLoad = async (loadId) => {
-    if (window.confirm('Are you sure you want to delete this load? This action cannot be undone.')) {
-      await deleteLoad(loadId);
-    }
-    setActiveActionMenu(null);
-  };
 
   const clearFilters = () => {
     setFilters({
@@ -1556,7 +1464,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                             </button>
                           )}
 
-                          {(canChangeStatus(load) || canDeleteLoad(load)) && (
+                          {(canChangeStatus(load)) && (
                             <div className="action-menu-container relative">
                               <button
                                 onClick={() => setActiveActionMenu(activeActionMenu === load._id ? null : load._id)}
@@ -1583,19 +1491,11 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
             Change to {getStatusLabel(status)}
           </button>
         ))}
-        {canDeleteLoad(load) && <div className="border-t border-gray-100 my-1" />}
+       
       </>
     )}
     
-    {canDeleteLoad(load) && (
-      <button
-        onClick={() => handleDeleteLoad(load._id)}
-        className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-      >
-        <Trash2 className="h-4 w-4" />
-        Delete Load
-      </button>
-    )}
+    
   </div>
 )}
                             </div>
@@ -1683,19 +1583,6 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
                               Change to {getStatusLabel(status)}
                             </button>
                           ))}
-                          
-                          {canDeleteLoad(load) && (
-                            <>
-                              <div className="border-t border-gray-100 my-1" />
-                              <button
-                                onClick={() => handleDeleteLoad(load._id)}
-                                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Delete Load
-                              </button>
-                            </>
-                          )}
                         </div>
                       )}
                     </div>
