@@ -1071,75 +1071,231 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   }
 };
 
-  const handleSubscribe = async (planId, paymentMethod) => {
-    const selectedPlan = subscriptionPlans?.[planId];
+  const handleSubscribe = async (planId, paymentMethod, paymentDetails = null) => {
+  const selectedPlan = subscriptionPlans?.[planId];
 
   if (!selectedPlan) {
     setError('Selected plan not found.');
     return;
   }
+  
+  try {
+    setLoading(true);
+    setError('');
+    
+    if (!planId) {
+      setError('Plan ID is required');
+      return;
+    }
+    
+    if (!paymentMethod) {
+      setError('Payment method is required');
+      return;
+    }
+
+    let finalPaymentDetails = {
+      timestamp: new Date().toISOString()
+    };
+
+    if (paymentMethod === 'mpesa') {
+      // If payment details were passed from modal, use them
+      if (paymentDetails && paymentDetails.paymentCode && paymentDetails.phoneNumber) {
+        // Validate the M-Pesa code format
+        if (!/^[A-Z0-9]{8,12}$/i.test(paymentDetails.paymentCode)) {
+          setError('Invalid M-Pesa transaction code format. Please check and try again.');
+          return;
+        }
+
+        // Validate phone number format
+        const phone = paymentDetails.phoneNumber.replace(/\s/g, '');
+        if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
+          setError('Invalid phone number format. Please use format: 254712345678 or 0712345678');
+          return;
+        }
+
+        finalPaymentDetails = {
+          ...finalPaymentDetails,
+          mpesaCode: paymentDetails.paymentCode.trim().toUpperCase(),
+          userPhone: paymentDetails.phoneNumber.trim(),
+          transactionDate: new Date().toISOString(),
+          paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
+        };
+      } else {
+        // Fallback to prompt (original behavior)
+        const mpesaCode = window.prompt(
+          `To complete your ${selectedPlan.name} subscription (${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}), please enter your M-Pesa transaction code:\n\n` +
+          `Steps to get your transaction code:\n` +
+          `1. Go to M-Pesa menu\n` +
+          `2. Select "Lipa na M-Pesa"\n` +
+          `3. Select "Pay Bill"\n` +
+          `4. Enter Business Number: 174379\n` +
+          `5. Account Number: ${user?.email || user?.phone || user?.id}\n` +
+          `6. Amount: ${selectedPlan.price}\n` +
+          `7. Enter your M-Pesa PIN\n` +
+          `8. Copy the transaction code from the confirmation SMS\n\n` +
+          `Enter M-Pesa Transaction Code (e.g. QA12B34567):`
+        );
+
+        if (!mpesaCode) {
+          setLoading(false);
+          return;
+        }
+
+        if (!/^[A-Z0-9]{8,12}$/i.test(mpesaCode.trim())) {
+          setError('Invalid M-Pesa transaction code format. Please check and try again.');
+          setLoading(false);
+          return;
+        }
+
+        const userPhone = user?.phone || window.prompt('Please enter your phone number (e.g. 254712345678):');
+        
+        if (!userPhone) {
+          setError('Phone number is required for M-Pesa payments');
+          setLoading(false);
+          return;
+        }
+
+        finalPaymentDetails = {
+          ...finalPaymentDetails,
+          mpesaCode: mpesaCode.trim().toUpperCase(),
+          userPhone: userPhone.trim(),
+          transactionDate: new Date().toISOString(),
+          paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
+        };
+      }
+    }
+
+    const requestPayload = {
+      planId: planId,
+      paymentMethod: paymentMethod,
+      paymentDetails: finalPaymentDetails,
+      billingCycle: 'monthly'
+    };
+
+
+    const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
+      method: 'POST',
+      headers: {
+        ...getAuthHeaders(),
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestPayload)
+    });
+
+    let data;
     try {
-      setLoading(true);
-      setError('');
+      const responseText = await response.text();
       
-      if (!planId) {
-        setError('Plan ID is required');
-        return;
+      if (responseText.trim()) {
+        data = JSON.parse(responseText);
+      } else {
+        data = {};
       }
-      
-      if (!paymentMethod) {
-        setError('Payment method is required');
-        return;
-      }
+    } catch (parseError) {
+      console.error('Failed to parse response:', parseError);
+      setError(`Server returned invalid response. Status: ${response.status}`);
+      return;
+    }
 
-      const requestPayload = {
+    if (response.ok) {
+      // Update subscription state optimistically
+      setSubscription({
         planId: planId,
+        planName: selectedPlan.name,
+        status: 'pending',
         paymentMethod: paymentMethod,
-        paymentDetails: {
-          timestamp: new Date().toISOString(),
-          ...(paymentMethod === 'mpesa' && user?.phone && { phoneNumber: user.phone })
-        },
-        billingCycle: 'monthly'
-      };
-
-      const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(requestPayload)
+        requestedAt: new Date().toISOString(),
+        hasPendingUpgrade: true,
+        pendingSubscription: {
+          planName: selectedPlan.name,
+          createdAt: new Date().toISOString()
+        }
       });
 
-      const data = await response.json();
-
-      if (response.ok) {
-  setSubscription({
-    planId: planId,
-    planName: selectedPlan.name,
-    status: 'pending'
-  })
-} else {
-        if (response.status === 400) {
-          setError(data.message || 'Invalid subscription request. Please check your details.');
-          if (data.errors) {
-            console.error('Validation errors:', data.errors);
-            const errorMessages = data.errors.map(err => err.msg).join(', ');
-            setError(`Validation failed: ${errorMessages}`);
-          }
-        } else if (response.status === 401) {
-          handleLogout();
-          return;
-        } else if (response.status === 403) {
-          setError('Access denied. Only cargo owners can subscribe to plans.');
-        } else {
-          setError(data.message || 'Failed to create subscription request');
-        }
+      const successMessage = data?.message || `${selectedPlan.name} subscription request submitted successfully!`;
+      setSuccess(`${successMessage}\n\nYour request will be reviewed within 24-48 hours. You'll receive a notification once approved.`);
+      
+      if (window.showToast) {
+        window.showToast(
+          `Subscription request submitted!\n\n` +
+          `Plan: ${selectedPlan.name}\n` +
+          `Amount: ${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}\n` +
+          `Payment: ${paymentMethod.toUpperCase()}\n\n` +
+          `You'll be notified within 24-48 hours once approved.`,
+          'success',
+          8000
+        );
       }
-    } catch (error) {
-      console.error('Error subscribing:', error);
-      setError(`Failed to subscribe: ${error.message || 'Network error occurred'}`);
-    } finally {
-      setLoading(false);
+
+      // Close modal and refresh data
+      setShowSubscriptionModal(false);
+      await fetchDashboardData();
+      
+    } else {
+      let errorMessage = 'Failed to submit subscription request';
+      
+      console.error('Subscription error response:', {
+        status: response.status,
+        statusText: response.statusText,
+        data: data
+      });
+
+      if (response.status === 400) {
+        if (data.errors && Array.isArray(data.errors)) {
+          const validationErrors = data.errors.map(err => err.msg || err.message).join(', ');
+          errorMessage = `Validation failed: ${validationErrors}`;
+        } else if (data.message) {
+          errorMessage = data.message;
+        } else {
+          errorMessage = 'Invalid subscription request. Please check all fields and try again.';
+        }
+      } else if (response.status === 401) {
+        errorMessage = 'Authentication failed. Please refresh the page and log in again.';
+        setTimeout(() => handleLogout(), 2000);
+        setError(errorMessage);
+        return;
+      } else if (response.status === 403) {
+        errorMessage = 'Access denied. Only cargo owners can subscribe to plans.';
+      } else if (response.status === 409) {
+        if (data.existingRequest) {
+          errorMessage = `You already have a pending ${data.existingRequest.planName} subscription request from ${formatDate ? formatDate(data.existingRequest.requestedAt) : 'recently'}. Please wait for approval or contact support.`;
+        } else {
+          errorMessage = data.message || 'A subscription request already exists. Please wait for approval.';
+        }
+      } else if (response.status >= 500) {
+        errorMessage = 'Server error occurred. Please try again later or contact support if the issue persists.';
+      } else {
+        errorMessage = data.message || `Subscription request failed (${response.status})`;
+      }
+      
+      setError(errorMessage);
     }
-  };
+
+  } catch (error) {
+    console.error('=== SUBSCRIPTION ERROR ===');
+    console.error('Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    });
+    
+    let userFriendlyMessage = error.message;
+    
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      userFriendlyMessage = 'Network error. Please check your internet connection and try again.';
+    } else if (error.name === 'AbortError') {
+      userFriendlyMessage = 'Request timed out. Please try again.';
+    } else if (error.message.includes('JSON')) {
+      userFriendlyMessage = 'Server communication error. Please try again or contact support.';
+    }
+    
+    setError(`Failed to submit subscription request: ${userFriendlyMessage}`);
+    
+  } finally {
+    setLoading(false);
+  }
+};
 
 const handleUpdateProfile = async (e) => {
   e.preventDefault();
