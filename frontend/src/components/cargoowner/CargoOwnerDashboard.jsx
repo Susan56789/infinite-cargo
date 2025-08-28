@@ -1204,7 +1204,6 @@ const handleUpdateProfile = async (e) => {
       }
     });
 
-    console.log('Profile update payload:', updatePayload);
 
     const response = await fetch(`${API_BASE_URL}/cargo-owners/profile`, {
       method: 'PUT',

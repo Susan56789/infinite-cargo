@@ -376,8 +376,8 @@ const SubscriptionModal = ({
                     <div className="bg-white rounded p-3 border border-purple-200">
                       <div className="flex items-center gap-2">
                         <Phone size={16} />
-                        <span className="font-semibold">+254 700 000 000</span>
-                        <button onClick={() => copyToClipboard('+254 700 000 000')} className="text-purple-600">
+                        <span className="font-semibold">+254723 139 610</span>
+                        <button onClick={() => copyToClipboard('+254723 139 610')} className="text-purple-600">
                           <Copy size={14} />
                         </button>
                       </div>
