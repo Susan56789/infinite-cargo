@@ -412,7 +412,7 @@ router.put('/profile',  auth, cargoOwnerLimiter, profileValidation, async (req, 
 });
 
 // @route   DELETE /api/cargo-owners/profile
-// @desc    Delete cargo owner profile and account
+// @desc    Delete cargo owner profile and ALL related data
 // @access  Private (Cargo owners only)
 router.delete('/profile', auth, cargoOwnerLimiter, async (req, res) => {
   try {
@@ -433,70 +433,20 @@ router.delete('/profile', auth, cargoOwnerLimiter, async (req, res) => {
 
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    // Check for active loads or subscriptions that prevent deletion
-    const activeLoads = await loadsCollection.countDocuments({
-      postedBy: userId,
-      status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] }
-    });
-
-    if (activeLoads > 0) {
-      return res.status(400).json({
-        status: 'error',
-        message: `Cannot delete account. You have ${activeLoads} active load(s). Please cancel or complete them first.`,
-        activeLoads
-      });
-    }
-
-    const activeSubscription = await subscriptionsCollection.findOne({
-      userId: userId,
-      status: 'active'
-    });
-
-    if (activeSubscription) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Cannot delete account with active subscription. Please cancel subscription first.',
-        subscription: {
-          planName: activeSubscription.planName,
-          status: activeSubscription.status
-        }
-      });
-    }
-
-    // Begin deletion process - use transactions for data integrity
+    // Begin deletion process with transaction
     const session = await mongoose.startSession();
-    
+
     try {
       await session.withTransaction(async () => {
-        // 1. Delete or anonymize completed loads
-        await loadsCollection.updateMany(
-          { 
-            postedBy: userId,
-            status: { $in: ['delivered', 'completed', 'cancelled'] }
-          },
-          { 
-            $set: { 
-              postedByName: 'Deleted User',
-              cargoOwnerName: 'Deleted User',
-              contactPerson: {
-                name: 'Deleted User',
-                phone: '',
-                email: ''
-              },
-              deletedAt: new Date()
-            },
-            $unset: { postedBy: 1 }
-          },
-          { session }
-        );
-
-        // 2. Delete associated bids for the user's loads
+        // 1. Get all load IDs for this cargo owner
         const userLoadIds = await loadsCollection.distinct('_id', { postedBy: userId }, { session });
+
+        // 2. Delete all loads (active, completed, cancelled, etc.)
         if (userLoadIds.length > 0) {
-          await bidsCollection.deleteMany(
-            { loadId: { $in: userLoadIds } },
-            { session }
-          );
+          await loadsCollection.deleteMany({ postedBy: userId }, { session });
+
+          // Delete all bids linked to those loads
+          await bidsCollection.deleteMany({ loadId: { $in: userLoadIds } }, { session });
         }
 
         // 3. Delete notifications related to the user
@@ -510,36 +460,30 @@ router.delete('/profile', auth, cargoOwnerLimiter, async (req, res) => {
           { session }
         );
 
-        // 4. Delete expired/inactive subscriptions
-        await subscriptionsCollection.deleteMany(
-          { 
-            userId: userId,
-            status: { $in: ['expired', 'cancelled', 'rejected'] }
-          },
-          { session }
-        );
+        // 4. Delete ALL subscriptions (active, cancelled, expired, etc.)
+        await subscriptionsCollection.deleteMany({ userId: userId }, { session });
 
         // 5. Finally delete the cargo owner profile
-        const deleteResult = await cargoOwnersCollection.deleteOne(
-          { _id: userId },
-          { session }
-        );
+        const deleteResult = await cargoOwnersCollection.deleteOne({ _id: userId }, { session });
 
         if (deleteResult.deletedCount === 0) {
           throw new Error('Cargo owner profile not found');
         }
       });
 
-      // Log the deletion for audit purposes
-      console.log(`Cargo owner profile deleted: ${req.user.id} at ${new Date().toISOString()}`);
+      // Log for auditing
+      console.log(`Cargo owner profile and all related data deleted: ${req.user.id} at ${new Date().toISOString()}`);
 
       res.json({
         status: 'success',
-        message: 'Profile and account deleted successfully',
+        message: 'Profile and all related data deleted successfully',
         data: {
           deletedAt: new Date().toISOString(),
-          completedLoadsAnonymized: true,
-          relatedDataCleaned: true
+          loadsDeleted: true,
+          bidsDeleted: true,
+          subscriptionsDeleted: true,
+          notificationsDeleted: true,
+          profileDeleted: true
         }
       });
 
@@ -563,6 +507,7 @@ router.delete('/profile', auth, cargoOwnerLimiter, async (req, res) => {
     });
   }
 });
+
 
 // @route   POST /api/cargo-owners/profile/deactivate
 // @desc    Deactivate cargo owner profile (soft delete alternative)
