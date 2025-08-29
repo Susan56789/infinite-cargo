@@ -13,7 +13,7 @@ import {
   MessageSquare,
   Star
 } from 'lucide-react';
-import { isAuthenticated, getUser, getAuthHeader } from '../../utils/auth';
+import { authManager, isAuthenticated, getUser, getAuthHeader } from '../../utils/auth';
 
 const DriverJobDetails = () => {
   const { id } = useParams();
@@ -24,21 +24,49 @@ const DriverJobDetails = () => {
   const [updating, setUpdating] = useState(false);
   const [notes, setNotes] = useState('');
   const [currentLocation, setCurrentLocation] = useState(null);
-  const [isUserAuthenticated, setIsUserAuthenticated] = useState(false);
+  const [authCheckComplete, setAuthCheckComplete] = useState(false);
 
   useEffect(() => {
-    if (!isUserAuthenticated()) {
-      navigate('/login');
-      return;
-    }
+    // Enhanced authentication check with proper initialization
+    const checkAuthAndInit = async () => {
+      try {
+        // Ensure auth manager is initialized
+        if (!authManager.isInitialized) {
+          authManager.initialize();
+          // Wait a bit for initialization to complete
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
 
-    const user = getUser();
-    if (user?.userType !== 'driver') {
-      navigate('/driver-dashboard');
-      return;
-    }
-setIsUserAuthenticated(true);
-    fetchJobDetails();
+        // Force a fresh auth check
+        const authenticated = isAuthenticated();
+        const user = getUser();
+
+
+        if (!authenticated) {
+        
+          navigate('/login');
+          return;
+        }
+
+        if (user?.userType !== 'driver') {
+          
+          navigate('/driver-dashboard');
+          return;
+        }
+
+        setAuthCheckComplete(true);
+        
+        // Only fetch job details if authentication passes
+        await fetchJobDetails();
+        
+      } catch (error) {
+        console.error('Auth check error:', error);
+        setError('Authentication error occurred');
+        navigate('/login');
+      }
+    };
+
+    checkAuthAndInit();
   }, [id, navigate]);
 
   const fetchJobDetails = async () => {
@@ -46,22 +74,45 @@ setIsUserAuthenticated(true);
       setLoading(true);
       setError('');
 
+      // Double-check auth before making request
+      if (!isAuthenticated()) {
+        navigate('/login');
+        return;
+      }
+
+      const authHeader = getAuthHeader();
+      if (!authHeader.Authorization) {
+        console.error('No authorization header available');
+        navigate('/login');
+        return;
+      }
+
+   
+
       const response = await fetch(`https://infinite-cargo-api.onrender.com/api/drivers/jobs/${id}/details`, {
+        method: 'GET',
         headers: {
-          'Authorization': getAuthHeader(),
+          ...authHeader,
           'Content-Type': 'application/json',
         },
       });
 
+     
+
       if (!response.ok) {
         if (response.status === 401) {
+        
+          authManager.clearAuth();
           navigate('/login');
           return;
         }
-        throw new Error(`HTTP ${response.status}: Failed to fetch job details`);
+        
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(errorData.message || `HTTP ${response.status}: Failed to fetch job details`);
       }
 
       const data = await response.json();
+    
 
       if (data.status === 'success' && data.data?.job) {
         setJob(data.data.job);
@@ -81,16 +132,24 @@ setIsUserAuthenticated(true);
     setError('');
     
     try {
+      // Check auth before making request
+      if (!isAuthenticated()) {
+        navigate('/login');
+        return;
+      }
+
       const requestBody = {
         status: newStatus,
         notes: notes || undefined,
         location: currentLocation || undefined
       };
 
+      
+
       const response = await fetch(`https://infinite-cargo-api.onrender.com/api/drivers/jobs/${id}/update-status`, {
         method: 'POST',
         headers: {
-          'Authorization': getAuthHeader(),
+          ...getAuthHeader(),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody)
@@ -98,10 +157,12 @@ setIsUserAuthenticated(true);
 
       if (!response.ok) {
         if (response.status === 401) {
+          authManager.clearAuth();
           navigate('/login');
           return;
         }
-        throw new Error(`Failed to update job status (${response.status})`);
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(errorData.message || `Failed to update job status (${response.status})`);
       }
 
       const data = await response.json();
@@ -151,10 +212,11 @@ setIsUserAuthenticated(true);
       'confirmed': 'bg-purple-100 text-purple-800',
       'in_progress': 'bg-yellow-100 text-yellow-800',
       'en_route_pickup': 'bg-orange-100 text-orange-800',
-      'at_pickup': 'bg-indigo-100 text-indigo-800',
+      'arrived_pickup': 'bg-indigo-100 text-indigo-800',
       'picked_up': 'bg-emerald-100 text-emerald-800',
       'in_transit': 'bg-cyan-100 text-cyan-800',
-      'at_delivery': 'bg-rose-100 text-rose-800',
+      'arrived_delivery': 'bg-rose-100 text-rose-800',
+      'delivered': 'bg-green-100 text-green-800',
       'completed': 'bg-green-100 text-green-800'
     };
     return statusClasses[status] || 'bg-gray-100 text-gray-800';
@@ -164,29 +226,33 @@ setIsUserAuthenticated(true);
     const statusActions = {
       'assigned': [
         { label: 'Confirm Job', status: 'confirmed', icon: CheckCircle },
-        { label: 'Start Journey', status: 'en_route_pickup', icon: Navigation }
+        { label: 'En Route to Pickup', status: 'en_route_pickup', icon: Navigation }
       ],
       'accepted': [
         { label: 'Confirm Job', status: 'confirmed', icon: CheckCircle },
-        { label: 'Start Journey', status: 'en_route_pickup', icon: Navigation }
+        { label: 'En Route to Pickup', status: 'en_route_pickup', icon: Navigation }
       ],
       'confirmed': [
-        { label: 'Start Journey', status: 'en_route_pickup', icon: Navigation }
+        { label: 'En Route to Pickup', status: 'en_route_pickup', icon: Navigation },
+        { label: 'Arrived at Pickup', status: 'arrived_pickup', icon: MapPin }
       ],
       'en_route_pickup': [
-        { label: 'Arrived at Pickup', status: 'at_pickup', icon: MapPin }
+        { label: 'Arrived at Pickup', status: 'arrived_pickup', icon: MapPin }
       ],
-      'at_pickup': [
+      'arrived_pickup': [
         { label: 'Cargo Picked Up', status: 'picked_up', icon: Package }
       ],
       'picked_up': [
         { label: 'Start Transit', status: 'in_transit', icon: Truck }
       ],
       'in_transit': [
-        { label: 'Arrived at Delivery', status: 'at_delivery', icon: MapPin }
+        { label: 'Arrived at Delivery', status: 'arrived_delivery', icon: MapPin }
       ],
-      'at_delivery': [
-        { label: 'Complete Delivery', status: 'completed', icon: CheckCircle }
+      'arrived_delivery': [
+        { label: 'Mark as Delivered', status: 'delivered', icon: CheckCircle }
+      ],
+      'delivered': [
+        { label: 'Complete Job', status: 'completed', icon: CheckCircle }
       ]
     };
     return statusActions[currentStatus] || [];
@@ -418,7 +484,8 @@ setIsUserAuthenticated(true);
     </div>
   );
 
-  if (loading) return <LoadingSpinner />;
+  // Show loading while auth is being checked
+  if (!authCheckComplete || loading) return <LoadingSpinner />;
   if (error) return <ErrorState message={error} onRetry={fetchJobDetails} />;
   if (!job) return <ErrorState message="Job not found" onRetry={fetchJobDetails} />;
 

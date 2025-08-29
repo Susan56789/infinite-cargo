@@ -342,7 +342,7 @@ function App() {
                 />
 
                 <Route
-                  path="/driver/job/:id"
+                  path="/driver/jobs/:id/details"
                   element={
                     <>
                       <SEOHelmet 
