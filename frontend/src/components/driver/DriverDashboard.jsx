@@ -783,7 +783,7 @@ setTimeout(() => {
   const placeBid = async (bidData) => {
   try {
     // Validate required fields before sending
-    if (!bidData.loadId) {
+    if (!bidData._id) {
       setError('Load ID is required');
       return false;
     }
@@ -795,7 +795,7 @@ setTimeout(() => {
 
     // Validate MongoDB ObjectId format (24 hex characters)
     const objectIdRegex = /^[0-9a-fA-F]{24}$/;
-    if (!objectIdRegex.test(bidData.loadId)) {
+    if (!objectIdRegex.test(bidData._id)) {
       setError('Invalid load ID format');
       return false;
     }
@@ -829,7 +829,7 @@ setTimeout(() => {
 
     // Clean the bid data - remove any undefined/null values
     const cleanBidData = {
-      loadId: bidData.loadId,
+      loadId: bidData._id,
       bidAmount: parseFloat(bidData.bidAmount),
       ...(bidData.proposedPickupDate && { proposedPickupDate: bidData.proposedPickupDate }),
       ...(bidData.proposedDeliveryDate && { proposedDeliveryDate: bidData.proposedDeliveryDate }),
@@ -923,7 +923,7 @@ setTimeout(() => {
 const validateBidData = (bidData) => {
   const errors = [];
 
-  if (!bidData.loadId) {
+  if (!bidData._id) {
     errors.push('Load ID is required');
   }
 
@@ -933,7 +933,7 @@ const validateBidData = (bidData) => {
 
   // Validate ObjectId format
   const objectIdRegex = /^[0-9a-fA-F]{24}$/;
-  if (bidData.loadId && !objectIdRegex.test(bidData.loadId)) {
+  if (bidData._id && !objectIdRegex.test(bidData._id)) {
     errors.push('Invalid load ID format');
   }
 
@@ -944,25 +944,6 @@ const validateBidData = (bidData) => {
   return errors;
 };
 
-// Usage example:
-const handlePlaceBid = async (loadId, bidAmount, message = '', proposedPickupDate = null, proposedDeliveryDate = null) => {
-  const bidData = {
-    loadId,
-    bidAmount,
-    message,
-    proposedPickupDate,
-    proposedDeliveryDate
-  };
-
-  // Validate before sending
-  const validationErrors = validateBidData(bidData);
-  if (validationErrors.length > 0) {
-    setError(`Validation failed: ${validationErrors.join(', ')}`);
-    return false;
-  }
-
-  return await placeBid(bidData);
-};
 
   // Update driver location
   const updateDriverLocation = async (latitude, longitude) => {
