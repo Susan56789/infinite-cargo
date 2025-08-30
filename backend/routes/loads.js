@@ -1083,7 +1083,8 @@ router.get('/', optionalAuth, [
   query('minWeight').optional().isFloat({ min: 0 }),
   query('maxWeight').optional().isFloat({ min: 0 }),
   query('urgentOnly').optional().isBoolean(),
-  query('sortBy').optional().isIn(['createdAt', 'budget', 'weight', 'pickupDate', 'boostLevel']),
+  query('sortBy').optional()
+    .isIn(['createdAt', 'budget', 'weight', 'pickupDate', 'boostLevel']),
   query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
   try {
@@ -1096,6 +1097,7 @@ router.get('/', optionalAuth, [
       });
     }
 
+    // Destructure and set defaults
     const {
       page = 1,
       limit = 12,
@@ -1113,53 +1115,77 @@ router.get('/', optionalAuth, [
       sortOrder = 'desc'
     } = req.query;
 
+    // Check database connection
     if (mongoose.connection.readyState !== 1) {
+      console.error('Database not connected, readyState:', mongoose.connection.readyState);
       return res.status(500).json({
         status: 'error',
         message: 'Database connection unavailable. Please try again later.'
       });
     }
 
-    // ---- TIME HANDLING (EAT = UTC+3) ----
+    // STEP 1: FIXED - Use EAT (East Africa Time) for proper date handling
+    // EAT is UTC+3
     const nowUTC = new Date();
-    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000));
+    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000)); // Add 3 hours for EAT
     const startOfTodayEAT = new Date(nowEAT.getFullYear(), nowEAT.getMonth(), nowEAT.getDate());
-    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000));
-
-    // ---- EXPIRE OLD LOADS ----
-    await Load.updateMany(
-      {
-        isActive: true,
-        status: { $in: ['posted', 'available', 'receiving_bids'] },
-        pickupDate: { $ne: null, $lt: startOfTodayUTC }
-      },
-      {
-        $set: {
-          status: 'expired',
-          isActive: false,
-          expiredAt: nowUTC,
-          updatedAt: nowUTC
+    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000)); // Convert back to UTC
+    
+    console.log('Current UTC time:', nowUTC.toISOString());
+    console.log('Current EAT time:', nowEAT.toISOString());
+    console.log('Start of today EAT in UTC:', startOfTodayUTC.toISOString());
+    
+    try {
+      // Expire loads with pickup dates before start of today (EAT)
+      const expireResult = await Load.updateMany(
+        {
+          isActive: true,
+          status: { $in: ['posted', 'available', 'receiving_bids'] },
+          pickupDate: { $exists: true, $ne: null, $lt: startOfTodayUTC }
+        },
+        {
+          $set: {
+            status: 'expired',
+            isActive: false,
+            expiredAt: nowUTC,
+            updatedAt: nowUTC
+          }
         }
-      }
-    );
+      );
 
-    // ---- BASE QUERY ----
+      if (expireResult.modifiedCount > 0) {
+        console.log(`Expired ${expireResult.modifiedCount} loads with pickup dates before today (EAT)`);
+      }
+    } catch (expireError) {
+      console.warn('Error expiring past due loads:', expireError);
+      // Continue even if expiration fails
+    }
+
+    // STEP 2: Build base query - Only show loads that are not expired
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
-      isActive: true,
-      $or: [
-        { pickupDate: { $exists: false } },
-        { pickupDate: null },
-        { pickupDate: { $gte: startOfTodayUTC } }
-      ]
+      isActive: true
     };
 
-    // ---- FILTERS ----
-    const filters = [];
+    // FIXED: Only show loads with pickup dates today or in the future (EAT)
+    baseQuery.$or = [
+      { pickupDate: { $exists: false } }, // No pickup date set
+      { pickupDate: null }, // Null pickup date
+      { pickupDate: { $gte: startOfTodayUTC } } // Pickup date is today or future (EAT)
+    ];
 
+    console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
+
+    // STEP 3: Apply filters only if they have values
+    const filterConditions = [];
+
+    // Text search
     if (search && search.trim()) {
-      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filters.push({
+      const searchTerm = search.trim();
+      const escapedSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escapedSearch, 'i');
+      
+      filterConditions.push({
         $or: [
           { title: regex },
           { description: regex },
@@ -1170,93 +1196,192 @@ router.get('/', optionalAuth, [
       });
     }
 
-    if (cargoType) filters.push({ cargoType: cargoType.trim() });
-    if (vehicleType) filters.push({ vehicleType: vehicleType.trim() });
-
-    if (pickupLocation) {
-      const regex = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filters.push({ pickupLocation: regex });
+    // Exact match filters
+    if (cargoType && cargoType.trim()) {
+      filterConditions.push({ cargoType: cargoType.trim() });
     }
-    if (deliveryLocation) {
-      const regex = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filters.push({ deliveryLocation: regex });
+    
+    if (vehicleType && vehicleType.trim()) {
+      filterConditions.push({ vehicleType: vehicleType.trim() });
     }
 
+    // Location filters
+    if (pickupLocation && pickupLocation.trim()) {
+      const locationRegex = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filterConditions.push({ pickupLocation: locationRegex });
+    }
+    
+    if (deliveryLocation && deliveryLocation.trim()) {
+      const locationRegex = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filterConditions.push({ deliveryLocation: locationRegex });
+    }
+
+    // Budget range
     if (minBudget || maxBudget) {
       const budgetFilter = {};
       if (minBudget) budgetFilter.$gte = parseFloat(minBudget);
       if (maxBudget) budgetFilter.$lte = parseFloat(maxBudget);
-      filters.push({ budget: budgetFilter });
+      filterConditions.push({ budget: budgetFilter });
     }
 
+    // Weight range
     if (minWeight || maxWeight) {
       const weightFilter = {};
       if (minWeight) weightFilter.$gte = parseFloat(minWeight);
       if (maxWeight) weightFilter.$lte = parseFloat(maxWeight);
-      filters.push({ weight: weightFilter });
+      filterConditions.push({ weight: weightFilter });
     }
 
+    // Urgent only
     if (urgentOnly === 'true' || urgentOnly === true) {
-      filters.push({ isUrgent: true });
+      filterConditions.push({ isUrgent: true });
     }
 
-    const finalQuery = filters.length > 0 ? { $and: [baseQuery, ...filters] } : baseQuery;
+    // Combine base query with filter conditions
+    const finalQuery = filterConditions.length > 0 
+      ? { $and: [baseQuery, ...filterConditions] }
+      : baseQuery;
 
-    // ---- PAGINATION ----
+    console.log('Final query:', JSON.stringify(finalQuery, null, 2));
+
+    // STEP 4: Calculate pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // ---- SORT ----
+    // STEP 5: Build sort options
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
-    const sortOptions = {
-      isBoosted: -1,
-      isPriorityListing: -1
-    };
+    const sortOptions = {};
+    
+    // Priority sorting - boosted loads first
+    sortOptions.isBoosted = -1;
+    sortOptions.isPriorityListing = -1;
+    
+    // Main sort field
     if (sortBy === 'boostLevel') {
       sortOptions.boostLevel = -1;
     } else {
       sortOptions[sortBy] = sortDirection;
     }
-    if (sortBy !== 'createdAt') sortOptions.createdAt = -1;
+    
+    // Always add createdAt as final sort
+    if (sortBy !== 'createdAt') {
+      sortOptions.createdAt = -1;
+    }
 
-    // ---- MAIN QUERY ----
-    let loads;
-    let totalLoads = 0;
+    console.log('Sort options:', sortOptions);
+
+    // STEP 6: Debug queries
     try {
-      totalLoads = await Load.countDocuments(finalQuery);
-      if (totalLoads === 0) {
-        // ---- SIMPLIFIED QUERY ----
-        const simpleQuery = baseQuery; // still enforces date rule
-        const simpleCount = await Load.countDocuments(simpleQuery);
+      // Test basic counts
+      const totalActiveLoads = await Load.countDocuments({ isActive: true });
+      const availableLoads = await Load.countDocuments({
+        status: { $in: ['available', 'posted', 'receiving_bids'] },
+        isActive: true
+      });
+      
+      console.log(`Debug - Total active loads: ${totalActiveLoads}`);
+      console.log(`Debug - Available loads: ${availableLoads}`);
+      
+      // Test the exact query
+      const queryResult = await Load.find(baseQuery).countDocuments();
+      console.log(`Debug - Base query matches: ${queryResult}`);
+      
+    } catch (debugError) {
+      console.error('Debug queries failed:', debugError);
+    }
 
-        if (simpleCount > 0) {
-          const debugLoads = await Load.find(simpleQuery)
-            .sort(sortOptions)
-            .skip(skip)
-            .limit(limitNum)
-            .populate('postedBy', 'name email companyName rating isVerified')
-            .lean();
+    // STEP 7: Get total count with final query
+    const totalLoads = await Load.countDocuments(finalQuery);
+    console.log(`Total matching loads with filters: ${totalLoads}`);
 
-          return res.json({
-            status: 'success',
-            data: {
-              loads: enhanceLoads(debugLoads),
-              pagination: paginate(pageNum, limitNum, simpleCount),
-              debug: { message: 'Using simplified query' }
-            }
-          });
-        }
+    // STEP 8: If no results, try progressively simpler queries
+    if (totalLoads === 0) {
+      console.log('No results found, trying simpler queries...');
+      
+      // Try without date filtering
+      const simpleQuery = {
+        status: { $in: ['available', 'posted', 'receiving_bids'] },
+        isActive: true
+      };
+      
+      const simpleCount = await Load.countDocuments(simpleQuery);
+      console.log(`Simple query (no date filter) matches: ${simpleCount}`);
+      
+      if (simpleCount > 0) {
+        // If simple query works, there's an issue with date filtering
+        console.log('Issue appears to be with date filtering logic');
+        
+        // Return loads without strict date filtering for debugging
+        const debugLoads = await Load.find(simpleQuery)
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limitNum)
+          .populate('postedBy', 'name email companyName rating isVerified')
+          .lean();
+
+        // Enhance loads
+        const enhancedLoads = debugLoads.map(load => ({
+          ...load,
+          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
+          bidCount: load.bidCount || 0,
+          viewCount: load.viewCount || 0,
+          postedBy: {
+            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false
+          }
+        }));
 
         return res.json({
           status: 'success',
           data: {
-            loads: [],
-            pagination: paginate(pageNum, limitNum, 0)
+            loads: enhancedLoads,
+            pagination: {
+              currentPage: pageNum,
+              totalPages: Math.ceil(simpleCount / limitNum),
+              totalLoads: simpleCount,
+              limit: limitNum,
+              hasNextPage: pageNum < Math.ceil(simpleCount / limitNum),
+              hasPrevPage: pageNum > 1
+            },
+            debug: {
+              message: 'Using simplified query due to date filtering issue',
+              originalQuery: finalQuery,
+              workingQuery: simpleQuery
+            }
           }
         });
       }
+      
+      // Return empty result if even simple query fails
+      return res.json({
+        status: 'success',
+        data: {
+          loads: [],
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 0,
+            totalLoads: 0,
+            limit: limitNum,
+            hasNextPage: false,
+            hasPrevPage: false
+          },
+          debug: {
+            message: "No loads found even with simplified query",
+            totalActiveLoads: totalActiveLoads,
+            availableLoads: availableLoads,
+            finalQuery: finalQuery
+          }
+        }
+      });
+    }
 
+    // STEP 9: Execute main query
+    let loads;
+    
+    try {
       loads = await Load.find(finalQuery)
         .sort(sortOptions)
         .skip(skip)
@@ -1264,87 +1389,150 @@ router.get('/', optionalAuth, [
         .populate('postedBy', 'name email companyName rating isVerified location')
         .lean();
 
-    } catch (err) {
-      // ---- FALLBACK QUERY ----
-      loads = await Load.find(baseQuery)
+      console.log(`Main query returned ${loads.length} loads`);
+
+      // Enhance loads with computed fields
+      loads = loads.map(load => ({
+        ...load,
+        // Ensure required fields exist
+        cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
+        
+        // Ensure postedBy structure
+        postedBy: {
+          _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false,
+          location: load.postedBy?.location || null
+        },
+        
+        // Ensure contactPerson exists
+        contactPerson: load.contactPerson || {
+          name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
+          phone: load.postedBy?.phone || '',
+          email: load.postedBy?.email || ''
+        }
+      }));
+
+    } catch (queryError) {
+      console.error('Main query execution failed:', queryError);
+      
+      // Fallback to absolute simplest query
+      try {
+        loads = await Load.find({
+          isActive: true,
+          status: { $in: ['available', 'posted', 'receiving_bids'] }
+        })
         .sort({ createdAt: -1 })
         .limit(limitNum)
         .populate('postedBy', 'name email rating isVerified')
         .lean();
+        
+        console.log(`Fallback query returned ${loads.length} loads`);
+        
+        // Basic enhancement
+        loads = loads.map(load => ({
+          ...load,
+          cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+          bidCount: load.bidCount || 0,
+          viewCount: load.viewCount || 0,
+          postedBy: {
+            _id: load.postedBy?._id || load.cargoOwnerId,
+            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false
+          }
+        }));
+        
+      } catch (fallbackError) {
+        console.error('Even fallback query failed:', fallbackError);
+        throw fallbackError;
+      }
     }
 
+    const totalPages = Math.ceil(totalLoads / limitNum);
+
+    // STEP 10: Return successful response
     return res.json({
       status: 'success',
       data: {
-        loads: enhanceLoads(loads),
-        pagination: paginate(pageNum, limitNum, totalLoads)
+        loads,
+        pagination: {
+          currentPage: pageNum,
+          totalPages,
+          totalLoads,
+          limit: limitNum,
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1
+        }
       }
     });
 
   } catch (err) {
-    // ---- EMERGENCY FALLBACK ----
+    console.error('Get loads error:', err);
+    
+    // EMERGENCY FALLBACK - Always try to return something
     try {
+      console.log('Attempting emergency fallback...');
+      
       const emergencyLoads = await Load.find({
-        isActive: true,
-        status: { $in: ['available', 'posted', 'receiving_bids'] },
-        $or: [
-          { pickupDate: { $exists: false } },
-          { pickupDate: null },
-          { pickupDate: { $gte: startOfTodayUTC } }
-        ]
+        isActive: true
       })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate('postedBy', 'name rating isVerified')
-        .lean();
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .populate('postedBy', 'name rating isVerified')
+      .lean();
+
+      console.log(`Emergency fallback found ${emergencyLoads.length} loads`);
+
+      const enhancedEmergencyLoads = emergencyLoads.map(load => ({
+        ...load,
+        cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
+        postedBy: {
+          _id: load.postedBy?._id || load.cargoOwnerId,
+          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false
+        }
+      }));
 
       return res.json({
         status: 'success',
         data: {
-          loads: enhanceLoads(emergencyLoads),
-          pagination: paginate(1, 10, emergencyLoads.length),
-          warning: 'Emergency fallback active'
+          loads: enhancedEmergencyLoads,
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+            totalLoads: enhancedEmergencyLoads.length,
+            limit: parseInt(limit),
+            hasNextPage: false,
+            hasPrevPage: false
+          },
+          warning: 'Emergency fallback active - some filters may not be applied',
+          debug: {
+            originalError: err.message,
+            fallbackQuery: { isActive: true }
+          }
         }
       });
-    } catch (e) {
+    } catch (emergencyError) {
+      console.error('Emergency fallback also failed:', emergencyError);
+      
       return res.status(500).json({
         status: 'error',
-        message: 'Server error while fetching loads'
+        message: 'Server error occurred while fetching loads. Please try again later.',
+        error: process.env.NODE_ENV === 'development' ? {
+          original: err.message,
+          fallback: emergencyError.message
+        } : 'Internal server error'
       });
     }
   }
 });
-
-
-// ---- HELPERS ----
-function enhanceLoads(loads) {
-  return loads.map(load => ({
-    ...load,
-    cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous Cargo Owner',
-    bidCount: load.bidCount || 0,
-    viewCount: load.viewCount || 0,
-    postedBy: {
-      _id: load.postedBy?._id || load.cargoOwnerId,
-      name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-      rating: load.postedBy?.rating || 4.5,
-      isVerified: load.postedBy?.isVerified || false,
-      location: load.postedBy?.location || null
-    }
-  }));
-}
-
-function paginate(currentPage, limit, total) {
-  const totalPages = Math.ceil(total / limit);
-  return {
-    currentPage,
-    totalPages,
-    totalLoads: total,
-    limit,
-    hasNextPage: currentPage < totalPages,
-    hasPrevPage: currentPage > 1
-  };
-}
-
 
 // @route   PUT /api/loads/:id
 // @desc    Update a load (cargo owners only)
