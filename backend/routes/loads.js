@@ -1124,11 +1124,11 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // STEP 1: Update expired loads (same as before)
+    // STEP 1: Update expired loads in database
     const nowUTC = new Date();
-    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000));
+    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000)); // Add 3 hours for EAT
     const startOfTodayEAT = new Date(nowEAT.getFullYear(), nowEAT.getMonth(), nowEAT.getDate());
-    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000));
+    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000)); // Convert back to UTC
     
     console.log('Current UTC time:', nowUTC.toISOString());
     console.log('Current EAT time:', nowEAT.toISOString());
@@ -1157,18 +1157,25 @@ router.get('/', optionalAuth, [
       }
     } catch (expireError) {
       console.warn('Error expiring past due loads:', expireError);
+      // Continue even if expiration fails
     }
 
-    // STEP 2: Build base query - FIXED TO INCLUDE EXPIRED LOADS
+    // STEP 2: Build base query - EXCLUDE EXPIRED LOADS FROM PUBLIC VIEW
     const baseQuery = {
-      // Include expired loads in the results so users can see them
-      status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] },
-      // Don't filter by isActive since expired loads have isActive: false
+      // Only show active, non-expired loads to public
+      status: { $in: ['available', 'posted', 'receiving_bids'] },
+      isActive: true,
+      // Additional safety check - exclude any loads with past pickup dates
+      $or: [
+        { pickupDate: { $exists: false } }, // No pickup date set
+        { pickupDate: null }, // Null pickup date
+        { pickupDate: { $gte: startOfTodayUTC } } // Pickup date is today or future (EAT)
+      ]
     };
 
-    console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
+    console.log('Base query (excluding expired):', JSON.stringify(baseQuery, null, 2));
 
-    // STEP 3: Apply filters only if they have values
+    // STEP 3: Apply additional filters
     const filterConditions = [];
 
     // Text search
@@ -1234,19 +1241,18 @@ router.get('/', optionalAuth, [
       ? { $and: [baseQuery, ...filterConditions] }
       : baseQuery;
 
-    console.log('Final query:', JSON.stringify(finalQuery, null, 2));
+    console.log('Final query (public, no expired):', JSON.stringify(finalQuery, null, 2));
 
     // STEP 4: Calculate pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // STEP 5: Build sort options - PRIORITIZE NON-EXPIRED LOADS
+    // STEP 5: Build sort options - prioritize boosted loads
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
     const sortOptions = {};
     
-    // FIXED: Priority sorting - active loads first, then expired
-    sortOptions.isActive = -1;  // Active loads (true) come before inactive (false)
+    // Priority sorting - boosted and priority listings first
     sortOptions.isBoosted = -1;
     sortOptions.isPriorityListing = -1;
     
@@ -1264,79 +1270,120 @@ router.get('/', optionalAuth, [
 
     console.log('Sort options:', sortOptions);
 
-    // STEP 6: Get total count with final query
-    const totalLoads = await Load.countDocuments(finalQuery);
-    console.log(`Total matching loads with filters: ${totalLoads}`);
-
-    // STEP 7: Execute main query
-    let loads;
-    
+    // STEP 6: Debug - count different types of loads
     try {
-      loads = await Load.find(finalQuery)
-        .sort(sortOptions)
-        .skip(skip)
-        .limit(limitNum)
-        .populate('postedBy', 'name email companyName rating isVerified location')
-        .lean();
-
-      console.log(`Main query returned ${loads.length} loads`);
-
-      // STEP 8: Enhance loads with computed fields - MARK EXPIRED STATUS
-      loads = loads.map(load => {
-        const now = new Date();
-        const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
-        
-        // Check if this load should be considered expired
-        const isExpiredDueToPickup = pickupDate && pickupDate < startOfTodayUTC;
-        const isAlreadyExpired = load.status === 'expired';
-        const shouldShowAsExpired = isExpiredDueToPickup || isAlreadyExpired;
-        
-        return {
-          ...load,
-          // FIXED: Show correct status including expired
-          status: shouldShowAsExpired ? 'expired' : load.status,
-          isActive: shouldShowAsExpired ? false : load.isActive,
-          
-          // Ensure required fields exist
-          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
-          bidCount: load.bidCount || 0,
-          viewCount: load.viewCount || 0,
-          
-          // Ensure postedBy structure
-          postedBy: {
-            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
-            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-            rating: load.postedBy?.rating || 4.5,
-            isVerified: load.postedBy?.isVerified || false,
-            location: load.postedBy?.location || null
-          },
-          
-          // Ensure contactPerson exists
-          contactPerson: load.contactPerson || {
-            name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
-            phone: load.postedBy?.phone || '',
-            email: load.postedBy?.email || ''
-          },
-          
-          // Add helpful fields for UI
-          isExpired: shouldShowAsExpired,
-          daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null,
-          expiredReason: isExpiredDueToPickup ? 'Pickup date has passed' : (isAlreadyExpired ? 'Expired' : null)
-        };
+      const debugCounts = await Promise.all([
+        Load.countDocuments({ isActive: true }),
+        Load.countDocuments({ status: 'expired' }),
+        Load.countDocuments(baseQuery),
+        Load.countDocuments(finalQuery)
+      ]);
+      
+      console.log('Debug counts:', {
+        totalActive: debugCounts[0],
+        totalExpired: debugCounts[1],
+        baseQueryMatches: debugCounts[2],
+        finalQueryMatches: debugCounts[3]
       });
-
-    } catch (queryError) {
-      console.error('Main query execution failed:', queryError);
-      throw queryError;
+    } catch (debugError) {
+      console.warn('Debug count queries failed:', debugError);
     }
+
+    // STEP 7: Get total count
+    const totalLoads = await Load.countDocuments(finalQuery);
+    console.log(`Total matching loads (excluding expired): ${totalLoads}`);
+
+    // If no loads found, provide helpful debug info
+    if (totalLoads === 0) {
+      console.log('No loads found with current filters');
+      
+      // Check if there are any active loads at all
+      const anyActiveLoads = await Load.countDocuments({
+        isActive: true,
+        status: { $in: ['available', 'posted', 'receiving_bids'] }
+      });
+      
+      console.log(`Total active loads in system: ${anyActiveLoads}`);
+      
+      return res.json({
+        status: 'success',
+        data: {
+          loads: [],
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 0,
+            totalLoads: 0,
+            limit: limitNum,
+            hasNextPage: false,
+            hasPrevPage: false
+          },
+          debug: {
+            totalActiveLoadsInSystem: anyActiveLoads,
+            message: anyActiveLoads === 0 ? 'No active loads in system' : 'No loads match current filters',
+            appliedFilters: req.query
+          }
+        }
+      });
+    }
+
+    // STEP 8: Execute main query
+    const loads = await Load.find(finalQuery)
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(limitNum)
+      .populate('postedBy', 'name email companyName rating isVerified location')
+      .lean();
+
+    console.log(`Query returned ${loads.length} loads`);
+
+    // STEP 9: Enhance loads with computed fields
+    const enhancedLoads = loads.map(load => {
+      // Since we're excluding expired loads, we don't need to check expiration here
+      // But we can add helpful computed fields
+      const now = new Date();
+      const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
+      
+      return {
+        ...load,
+        // Ensure required fields exist
+        cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
+        
+        // Ensure postedBy structure
+        postedBy: {
+          _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false,
+          location: load.postedBy?.location || null
+        },
+        
+        // Ensure contactPerson exists
+        contactPerson: load.contactPerson || {
+          name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
+          phone: load.postedBy?.phone || '',
+          email: load.postedBy?.email || ''
+        },
+        
+        // Add helpful computed fields for UI
+        daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null,
+        daysSincePosted: Math.floor((now - new Date(load.createdAt)) / (1000 * 60 * 60 * 24)),
+        isUrgent: load.isUrgent || false,
+        
+        // Status should always be active since we exclude expired
+        status: load.status,
+        isActive: true // These should all be active
+      };
+    });
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    // STEP 9: Return successful response
+    // STEP 10: Return successful response
     return res.json({
       status: 'success',
       data: {
-        loads,
+        loads: enhancedLoads,
         pagination: {
           currentPage: pageNum,
           totalPages,
@@ -1351,26 +1398,26 @@ router.get('/', optionalAuth, [
   } catch (err) {
     console.error('Get loads error:', err);
     
-    // Emergency fallback
+    // EMERGENCY FALLBACK - Only return active loads
     try {
       console.log('Attempting emergency fallback...');
       
       const emergencyLoads = await Load.find({
-        status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] }
+        isActive: true,
+        status: { $in: ['available', 'posted', 'receiving_bids'] }
       })
-      .sort({ isActive: -1, createdAt: -1 })
+      .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .populate('postedBy', 'name rating isVerified')
       .lean();
 
-      console.log(`Emergency fallback found ${emergencyLoads.length} loads`);
+      console.log(`Emergency fallback found ${emergencyLoads.length} active loads`);
 
       const enhancedEmergencyLoads = emergencyLoads.map(load => ({
         ...load,
         cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
         bidCount: load.bidCount || 0,
         viewCount: load.viewCount || 0,
-        isExpired: load.status === 'expired',
         postedBy: {
           _id: load.postedBy?._id || load.cargoOwnerId,
           name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
@@ -1391,7 +1438,7 @@ router.get('/', optionalAuth, [
             hasNextPage: false,
             hasPrevPage: false
           },
-          warning: 'Emergency fallback active - some filters may not be applied'
+          warning: 'Emergency fallback active - showing only active loads'
         }
       });
     } catch (emergencyError) {
