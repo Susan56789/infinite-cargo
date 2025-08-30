@@ -431,13 +431,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       reason: statusUpdateData.reason || `Status changed to ${statusUpdateData.newStatus}`
     };
 
-    console.log('Updating status:', {
-      loadId: statusUpdateData.loadId,
-      currentStatus: currentLoad.status,
-      newStatus: statusUpdateData.newStatus,
-      reason: requestBody.reason
-    });
-
+    
     const response = await fetch(`${API_BASE_URL}/loads/${statusUpdateData.loadId}/status`, {
       method: 'PATCH',
       headers: authHeaders,
@@ -477,7 +471,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
     }
 
     const data = await response.json();
-    console.log('Status update response:', data);
+
 
     if (data.status === 'success') {
       // Update the loads state immediately
@@ -496,7 +490,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
               Object.assign(updatedLoad, data.data.load);
             }
 
-            console.log('Updated load in state:', updatedLoad);
+          
             return updatedLoad;
           }
           return load;
@@ -507,7 +501,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
       setShowStatusUpdateModal(false);
       setStatusUpdateData({ loadId: '', newStatus: '', reason: '' });
       
-      console.log('Status update completed successfully');
+      
       
     } else {
       throw new Error(data.message || 'Failed to update load status');
@@ -962,7 +956,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
   };
 
   const handleUpdateLoadStatus = (loadId, newStatus) => {
-  console.log('Handling status update:', { loadId, newStatus });
+  
   
   const load = loads.find(l => l._id === loadId);
   if (!load) {
@@ -1482,7 +1476,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
           <button
             key={status}
             onClick={() => {
-              console.log('Status transition clicked:', { from: load.status, to: status });
+             
               handleUpdateLoadStatus(load._id, status);
             }}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"

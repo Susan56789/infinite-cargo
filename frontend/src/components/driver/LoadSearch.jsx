@@ -662,7 +662,7 @@ const LoadSearch = () => {
 
       const data = await response.json();
 
-      console.log('Raw loads data from server:', data);
+      
       
 
       if (data.status !== 'success') {
