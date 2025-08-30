@@ -35,7 +35,8 @@
     "build": "react-scripts build && npm run generate-sitemap",
     "generate-sitemap": "node scripts/generate-sitemap.js",
     "optimize-images": "node scripts/optimize-images.js",
-    "deploy": "npm run build"
+    "deploy": "npm run build",
+    "serve": "serve -s build -p $PORT"
   },
   "eslintConfig": {
     "extends": [
