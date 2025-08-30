@@ -781,51 +781,188 @@ setTimeout(() => {
 
   // Place a bid on a load
   const placeBid = async (bidData) => {
-    try {
-      const headers = {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...getAuthHeader()  
-      };
-
-      const response = await fetch(
-        'https://infinite-cargo-api.onrender.com/api/drivers/bid',
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(bidData)
-        }
-      );
-
-      if (response.status === 401 || response.status === 403) {
-        setError('Authentication failed. Please login again.');
-        handleLogout();
-        return false;
-      }
-
-      if (!response.ok) {
-        const resJSON = await response.json().catch(() => ({}));
-        const msg = resJSON.message || 'Failed to place bid';
-        setError(msg);
-        return false;
-      }
-
-      // Bid success - refresh data and show success message
-      await fetchDriverBids();
-      await fetchAvailableLoads();
-      
-      setSuccessMessage('Bid placed successfully!');
-      setTimeout(() => {
-        setSuccessMessage('');
-      }, 3000);
-
-      return true;
-    } catch (error) {
-      console.error('Error placing bid:', error);
-      setError('Network error. Please try again.');
+  try {
+    // Validate required fields before sending
+    if (!bidData.loadId) {
+      setError('Load ID is required');
       return false;
     }
+
+    if (!bidData.bidAmount || bidData.bidAmount < 1) {
+      setError('Bid amount must be at least 1');
+      return false;
+    }
+
+    // Validate MongoDB ObjectId format (24 hex characters)
+    const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+    if (!objectIdRegex.test(bidData.loadId)) {
+      setError('Invalid load ID format');
+      return false;
+    }
+
+    // Validate date formats if provided
+    if (bidData.proposedPickupDate) {
+      const pickupDate = new Date(bidData.proposedPickupDate);
+      if (isNaN(pickupDate.getTime())) {
+        setError('Invalid proposed pickup date');
+        return false;
+      }
+      // Ensure ISO8601 format
+      bidData.proposedPickupDate = pickupDate.toISOString();
+    }
+
+    if (bidData.proposedDeliveryDate) {
+      const deliveryDate = new Date(bidData.proposedDeliveryDate);
+      if (isNaN(deliveryDate.getTime())) {
+        setError('Invalid proposed delivery date');
+        return false;
+      }
+      // Ensure ISO8601 format
+      bidData.proposedDeliveryDate = deliveryDate.toISOString();
+    }
+
+    // Validate message length
+    if (bidData.message && bidData.message.length > 500) {
+      setError('Message cannot exceed 500 characters');
+      return false;
+    }
+
+    // Clean the bid data - remove any undefined/null values
+    const cleanBidData = {
+      loadId: bidData.loadId,
+      bidAmount: parseFloat(bidData.bidAmount),
+      ...(bidData.proposedPickupDate && { proposedPickupDate: bidData.proposedPickupDate }),
+      ...(bidData.proposedDeliveryDate && { proposedDeliveryDate: bidData.proposedDeliveryDate }),
+      ...(bidData.message && { message: bidData.message.trim() })
+    };
+
+    
+
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...getAuthHeader()
+    };
+
+  
+
+    const response = await fetch(
+      'https://infinite-cargo-api.onrender.com/api/drivers/bid',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(cleanBidData)
+      }
+    );
+
+   
+
+    // Handle authentication errors
+    if (response.status === 401 || response.status === 403) {
+      setError('Authentication failed. Please login again.');
+      handleLogout();
+      return false;
+    }
+
+    // Get response body for debugging
+    const responseText = await response.text();
+   
+
+    let responseData;
+    try {
+      responseData = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error('Failed to parse response:', parseError);
+      setError('Invalid server response');
+      return false;
+    }
+
+    if (!response.ok) {
+      // Enhanced error handling for 400 errors
+      if (response.status === 400) {
+        console.error('Validation errors:', responseData.errors);
+        
+        if (responseData.errors && Array.isArray(responseData.errors)) {
+          // Show specific validation errors
+          const errorMessages = responseData.errors.map(err => err.msg || err.message).join(', ');
+          setError(`Validation failed: ${errorMessages}`);
+        } else {
+          setError(responseData.message || 'Invalid request data');
+        }
+      } else {
+        const msg = responseData.message || `Failed to place bid (${response.status})`;
+        setError(msg);
+      }
+      return false;
+    }
+
+    
+    
+    // Refresh data and show success message
+    await fetchDriverBids();
+    await fetchAvailableLoads();
+    
+    setSuccessMessage('Bid placed successfully!');
+    setTimeout(() => {
+      setSuccessMessage('');
+    }, 3000);
+
+    // Clear any existing errors
+    setError('');
+
+    return true;
+
+  } catch (error) {
+    console.error('Network error placing bid:', error);
+    setError('Network error. Please check your connection and try again.');
+    return false;
+  }
+};
+
+// Helper function to validate bid data before calling placeBid
+const validateBidData = (bidData) => {
+  const errors = [];
+
+  if (!bidData.loadId) {
+    errors.push('Load ID is required');
+  }
+
+  if (!bidData.bidAmount || isNaN(bidData.bidAmount) || bidData.bidAmount < 1) {
+    errors.push('Bid amount must be a number greater than 0');
+  }
+
+  // Validate ObjectId format
+  const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+  if (bidData.loadId && !objectIdRegex.test(bidData.loadId)) {
+    errors.push('Invalid load ID format');
+  }
+
+  if (bidData.message && bidData.message.length > 500) {
+    errors.push('Message cannot exceed 500 characters');
+  }
+
+  return errors;
+};
+
+// Usage example:
+const handlePlaceBid = async (loadId, bidAmount, message = '', proposedPickupDate = null, proposedDeliveryDate = null) => {
+  const bidData = {
+    loadId,
+    bidAmount,
+    message,
+    proposedPickupDate,
+    proposedDeliveryDate
   };
+
+  // Validate before sending
+  const validationErrors = validateBidData(bidData);
+  if (validationErrors.length > 0) {
+    setError(`Validation failed: ${validationErrors.join(', ')}`);
+    return false;
+  }
+
+  return await placeBid(bidData);
+};
 
   // Update driver location
   const updateDriverLocation = async (latitude, longitude) => {
