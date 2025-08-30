@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UsersTable from './UsersTable';
 import DriversTable from './DriversTable';
@@ -9,72 +9,98 @@ import AdminNotifications from './AdminNotifications';
 import AdminHeader from './AdminHeader';
 import AddAdminModal from './AddAdminModal';
 import { 
-  Users, 
-  Package, 
-  Truck, 
-  DollarSign, 
-  RefreshCw, 
-  TrendingUp,
-  Clock,
-  CheckCircle,
-  AlertCircle,
-  Activity,
-  MapPin,
-  Shield,
-  Settings,
-  Bell,
-  Search,
-  Download,
-  BarChart3,
-  PieChart,
-  LineChart
+  Users, Package, Truck, DollarSign, RefreshCw, TrendingUp,
+  Clock, CheckCircle, AlertCircle, Activity, MapPin, Shield,
+  Settings, Bell, Search, Download, BarChart3, PieChart, LineChart
 } from 'lucide-react';
-import { authManager, isAuthenticated, getAuthHeader, getToken } from '../../utils/auth';
+import { authManager, isAuthenticated, getAuthHeader } from '../../utils/auth';
 
 const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
+const ITEMS_PER_PAGE = 10;
+
+// Utility functions
+const formatCurrency = (amount) => {
+  return new Intl.NumberFormat('en-KE', {
+    style: 'currency',
+    currency: 'KES'
+  }).format(amount || 0);
+};
+
+const formatNumber = (num) => {
+  return new Intl.NumberFormat('en-KE').format(num || 0);
+};
+
+const formatTimestamp = (timestamp) => {
+  if (!timestamp) return 'Unknown time';
+  
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now - date;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  
+  return date.toLocaleDateString();
+};
+
+const getStatusBadgeColor = (status) => {
+  const colors = {
+    active: 'bg-green-100 text-green-700 border-green-200',
+    pending: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+    suspended: 'bg-red-100 text-red-700 border-red-200',
+    inactive: 'bg-gray-100 text-gray-700 border-gray-200',
+    completed: 'bg-blue-100 text-blue-700 border-blue-200',
+    verified: 'bg-green-100 text-green-700 border-green-200',
+    rejected: 'bg-red-100 text-red-700 border-red-200',
+  };
+  return colors[status] || 'bg-gray-100 text-gray-700 border-gray-200';
+};
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
+  
+  // Core state
   const [activeTab, setActiveTab] = useState('overview');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(10);
-  
-  // Admin and dashboard state
   const [adminData, setAdminData] = useState(null);
   const [dashboardStats, setDashboardStats] = useState({});
-  const [activityLogs, setActivityLogs] = useState([]); 
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [activityPagination, setActivityPagination] = useState({ currentPage: 1, totalPages: 1, total: 0 });
+  
+  // Loading states
   const [loading, setLoading] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
+  
+  // Message states
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const [isFullyAuthenticated, setIsFullyAuthenticated] = useState(false);
   
-  // Add admin modal state
+  // Modal and form states
   const [showAddAdmin, setShowAddAdmin] = useState(false);
   const [newAdmin, setNewAdmin] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    password: '',
-    role: 'admin',
+    name: '', email: '', phone: '', password: '', role: 'admin',
   });
-
-  // Search and filter state
+  
+  // Search and filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [dateRange, setDateRange] = useState('today');
 
-  const apiCall = async (endpoint, options = {}) => {
+  // API call wrapper with auth handling
+  const apiCall = useCallback(async (endpoint, options = {}) => {
     try {
-      // Check if admin is authenticated before making API call
       if (!isAuthenticated(true)) {
-        console.error('Admin not authenticated, redirecting to login');
         navigate('/admin/login');
         throw new Error('Authentication required');
       }
 
       const authHeader = getAuthHeader(true);
-    
       const config = {
         headers: {
           'Content-Type': 'application/json',
@@ -86,16 +112,13 @@ const AdminDashboard = () => {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
       const data = await response.json();
 
-      // Handle unauthorized responses
       if (response.status === 401) {
-        console.error('API returned 401 Unauthorized, clearing auth and redirecting');
         authManager.clearAuth(true);
         navigate('/admin/login');
         throw new Error('Session expired. Please login again.');
       }
 
       if (!response.ok) {
-        console.error('API error:', response.status, data);
         throw new Error(data.message || `API error: ${response.status}`);
       }
 
@@ -104,37 +127,26 @@ const AdminDashboard = () => {
       console.error('API call failed:', error);
       throw error;
     }
-  };
-
-  // Check authentication on component mount
-  useEffect(() => {
-    const checkAuth = () => {
-      if (!isAuthenticated(true)) {
-        navigate('/admin/login');
-        return false;
-      }
-      setIsFullyAuthenticated(true);
-      return true;
-    };
-
-    if (!checkAuth()) {
-      return;
-    }
-
-    // If authenticated, fetch admin data
-    fetchAdmin();
-    fetchDashboardStats();
-    fetchActivityLogs();
   }, [navigate]);
 
-  // Fetch admin info
-  const fetchAdmin = async () => {
+  // Message handlers
+  const showError = useCallback((msg) => {
+    setError(msg);
+    setTimeout(() => setError(''), 5000);
+  }, []);
+
+  const showSuccess = useCallback((msg) => {
+    setSuccessMessage(msg);
+    setTimeout(() => setSuccessMessage(''), 5000);
+  }, []);
+
+  // Data fetching functions
+  const fetchAdmin = useCallback(async () => {
     try {
       const response = await apiCall('/admin/me');
       if (response.status === 'success' && response.admin) {
         setAdminData(response.admin);
       } else {
-        // Fallback with basic admin info
         const user = authManager.getUser(true);
         setAdminData({ 
           name: user?.name || 'Admin', 
@@ -144,7 +156,6 @@ const AdminDashboard = () => {
       }
     } catch (error) {
       console.error('Failed to fetch admin data:', error);
-      // Use stored user data as fallback
       const user = authManager.getUser(true);
       if (user) {
         setAdminData({ 
@@ -154,135 +165,67 @@ const AdminDashboard = () => {
         });
       }
     }
-  };
+  }, [apiCall]);
 
-  // Fetch dashboard stats
-  const fetchDashboardStats = async () => {
+  const fetchDashboardStats = useCallback(async () => {
     try {
-      setLoading(true);
+      setStatsLoading(true);
       const response = await apiCall('/admin/dashboard-stats');
       if (response.status === 'success' && response.stats) {
         setDashboardStats(response.stats);
-
-    
-      } else {
-        setDashboardStats({});
       }
     } catch (error) {
       console.error('Failed to fetch dashboard stats:', error);
-      setDashboardStats({});
       showError('Failed to load dashboard statistics');
     } finally {
-      setLoading(false);
+      setStatsLoading(false);
     }
-  };
+  }, [apiCall, showError]);
 
-  // Fetch activity logs
-  const fetchActivityLogs = async () => {
+  const fetchActivityLogs = useCallback(async (page = 1) => {
     try {
       setActivityLoading(true);
-      const response = await apiCall('/admin/audit-logs?limit=10');
-      if (response.data) {
-        setActivityLogs(response.data);
-      } else if (response.status === 'success' && response.logs) {
-        setActivityLogs(response.logs);
-      } else {
-        setActivityLogs([]);
+      const response = await apiCall(`/admin/audit-logs?page=${page}&limit=${ITEMS_PER_PAGE}`);
+      
+      if (response.status === 'success') {
+        if (response.data) {
+          setActivityLogs(response.data);
+          setActivityPagination({
+            currentPage: response.pagination?.currentPage || page,
+            totalPages: response.pagination?.totalPages || 1,
+            total: response.pagination?.total || response.data.length
+          });
+        } else if (response.logs) {
+          setActivityLogs(response.logs);
+          setActivityPagination({
+            currentPage: page,
+            totalPages: Math.ceil((response.logs.length || 0) / ITEMS_PER_PAGE),
+            total: response.logs.length || 0
+          });
+        }
       }
     } catch (error) {
       console.error('Failed to fetch activity logs:', error);
       setActivityLogs([]);
+      setActivityPagination({ currentPage: 1, totalPages: 1, total: 0 });
     } finally {
       setActivityLoading(false);
     }
-  };
+  }, [apiCall]);
 
-  // Function to refresh activity logs
-  const refreshLogs = () => {
-    fetchActivityLogs();
-  };
+  // Initial data load
+  useEffect(() => {
+    if (!isAuthenticated(true)) {
+      navigate('/admin/login');
+      return;
+    }
 
-  // Function to refresh dashboard stats
-  const refreshStats = () => {
+    fetchAdmin();
     fetchDashboardStats();
-  };
+    fetchActivityLogs();
+  }, [navigate, fetchAdmin, fetchDashboardStats, fetchActivityLogs]);
 
-  // Helper function to safely render data
-  const safeRender = (data) => {
-    if (data === null || data === undefined) return '';
-    if (typeof data === 'string' || typeof data === 'number') return data;
-    if (typeof data === 'object') {
-      if (data.planName) return data.planName;
-      if (data.name) return data.name;
-      if (data.title) return data.title;
-      return JSON.stringify(data);
-    }
-    return String(data);
-  };
-
-  // Helper function to get user name from various possible structures
-  const getUserName = (log) => {
-    if (log.user?.name) return log.user.name;
-    if (log.userName) return log.userName;
-    if (log.adminName) return log.adminName;
-    if (log.admin?.name) return log.admin.name;
-    if (typeof log.user === 'string') return log.user;
-    return 'Unknown User';
-  };
-
-  // Helper function to get activity action
-  const getActivity = (log) => {
-    if (log.action) return safeRender(log.action);
-    if (log.activity) return safeRender(log.activity);
-    if (log.message) return safeRender(log.message);
-    return 'Activity logged';
-  };
-
-  // Helper function to get activity details
-  const getActivityDetails = (log) => {
-    const details = log.details || log.description || log.resource || log.target;
-    if (!details) return null;
-    
-    if (typeof details === 'object') {
-      if (details.planName) return `Plan: ${details.planName}`;
-      if (details.amount) return `Amount: ${formatCurrency(details.amount)}`;
-      if (details.paymentMethod) return `Payment: ${details.paymentMethod}`;
-      return Object.entries(details)
-        .filter(([key, value]) => value !== null && value !== undefined)
-        .map(([key, value]) => `${key}: ${safeRender(value)}`)
-        .join(', ');
-    }
-    
-    return safeRender(details);
-  };
-
-  // Format timestamp to readable format
-  const formatTimestamp = (timestamp) => {
-    if (!timestamp) return 'Unknown time';
-    
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    
-    return date.toLocaleDateString();
-  };
-
-  // Get the full date and time for display
-  const getFullDateTime = (timestamp) => {
-    if (!timestamp) return 'Unknown time';
-    const date = new Date(timestamp);
-    return date.toLocaleString();
-  };
-
-  // Add admin submit
+  // Admin creation handler
   const handleAddAdminSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -294,14 +237,8 @@ const AdminDashboard = () => {
       if (response.status === 'success') {
         showSuccess('Admin created successfully');
         setShowAddAdmin(false);
-        setNewAdmin({
-          name: '',
-          email: '',
-          phone: '',
-          password: '',
-          role: 'admin',
-        });
-        fetchDashboardStats(); // Refresh stats
+        setNewAdmin({ name: '', email: '', phone: '', password: '', role: 'admin' });
+        fetchDashboardStats();
       }
     } catch (error) {
       showError(error.message);
@@ -310,89 +247,327 @@ const AdminDashboard = () => {
     }
   };
 
-  // Utility functions
-  const showError = (msg) => {
-    setError(msg);
-    setTimeout(() => setError(''), 5000);
-  };
-
-  const showSuccess = (msg) => {
-    setSuccessMessage(msg);
-    setTimeout(() => setSuccessMessage(''), 5000);
-  };
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-KE', {
-      style: 'currency',
-      currency: 'KES'
-    }).format(amount || 0);
-  };
-
-  const formatNumber = (num) => {
-    return new Intl.NumberFormat('en-KE').format(num || 0);
-  };
-
-  const getStatusBadgeColor = (status) => {
-    const colors = {
-      active: 'bg-green-100 text-green-700 border-green-200',
-      pending: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-      suspended: 'bg-red-100 text-red-700 border-red-200',
-      inactive: 'bg-gray-100 text-gray-700 border-gray-200',
-      completed: 'bg-blue-100 text-blue-700 border-blue-200',
-      verified: 'bg-green-100 text-green-700 border-green-200',
-      rejected: 'bg-red-100 text-red-700 border-red-200',
-    };
-    return colors[status] || 'bg-gray-100 text-gray-700 border-gray-200';
-  };
-
   const handleLogout = () => {
     authManager.clearAuth(true);
     navigate('/admin/login');
   };
 
-  // Export data functionality
+  // Helper functions for activity logs
+  const getUserName = (log) => {
+    return log.user?.name || log.userName || log.adminName || log.admin?.name || 
+           (typeof log.user === 'string' ? log.user : 'Unknown User');
+  };
+
+  const getActivity = (log) => {
+    return log.action || log.activity || log.message || 'Activity logged';
+  };
+
+  const getActivityDetails = (log) => {
+    const details = log.details || log.description || log.resource || log.target;
+    if (!details) return null;
+    
+    if (typeof details === 'object') {
+      if (details.planName) return `Plan: ${details.planName}`;
+      if (details.amount) return `Amount: ${formatCurrency(details.amount)}`;
+      if (details.paymentMethod) return `Payment: ${details.paymentMethod}`;
+      return Object.entries(details)
+        .filter(([key, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ');
+    }
+    
+    return String(details);
+  };
+
+  // Export data function
   const exportData = async (type) => {
     try {
+      setLoading(true);
       const response = await apiCall(`/admin/export/${type}`);
-      // Handle export logic here
       showSuccess(`${type} data exported successfully`);
     } catch (error) {
       showError(`Failed to export ${type} data`);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Quick actions
-  const quickActions = [
-    {
-      title: 'Add New Admin',
-      icon: Shield,
-      action: () => setShowAddAdmin(true),
-      color: 'bg-blue-500',
-      permission: 'super_admin'
-    },
-    {
-      title: 'View Reports',
-      icon: BarChart3,
-      action: () => setActiveTab('reports'),
-      color: 'bg-green-500'
-    },
-    {
-      title: 'Export Data',
-      icon: Download,
-      action: () => exportData('users'),
-      color: 'bg-purple-500'
-    },
-    {
-      title: 'System Settings',
-      icon: Settings,
-      action: () => setActiveTab('settings'),
-      color: 'bg-orange-500',
-      permission: 'systemSettings'
-    }
-  ];
+  // Stat Card Component
+  const StatCard = ({ icon: Icon, title, value, subtitle, extra, trend, percentage, actionButton, color }) => {
+    const colorClasses = {
+      yellow: 'bg-yellow-100 text-yellow-600',
+      blue: 'bg-blue-100 text-blue-600',
+      green: 'bg-green-100 text-green-600',
+      purple: 'bg-purple-100 text-purple-600',
+      orange: 'bg-orange-100 text-orange-600',
+      indigo: 'bg-indigo-100 text-indigo-600',
+    };
 
-  // Overview render with enhanced layout
-  const renderOverview = () => (
+    return (
+      <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+        <div className="flex items-center justify-between mb-4">
+          <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
+            <Icon className="w-6 h-6" />
+          </div>
+          <span className="text-sm text-gray-500 font-medium">{title}</span>
+        </div>
+        <div className="space-y-1">
+          <div className="text-2xl font-bold text-gray-900">{value}</div>
+          {trend && (
+            <div className="flex items-center gap-1 text-sm">
+              <TrendingUp className="w-3 h-3 text-green-500" />
+              <span className="text-green-600">{trend}</span>
+            </div>
+          )}
+          {subtitle && <div className="text-xs text-gray-500">{subtitle}</div>}
+          {extra && <div className="text-xs text-gray-500">{extra}</div>}
+          {percentage && (
+            <div className={`text-xs text-${color}-600`}>{percentage}% active rate</div>
+          )}
+          {actionButton && (
+            <button 
+              onClick={actionButton.onClick}
+              className="text-xs text-blue-600 hover:text-blue-800 underline"
+            >
+              {actionButton.text}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Quick Actions Component
+  const QuickActions = ({ adminData, onAddAdmin, onChangeTab }) => {
+    const actions = [
+      {
+        title: 'Add New Admin',
+        icon: Shield,
+        action: onAddAdmin,
+        color: 'bg-blue-500',
+        permission: 'super_admin'
+      },
+      {
+        title: 'View Reports',
+        icon: BarChart3,
+        action: () => onChangeTab('reports'),
+        color: 'bg-green-500'
+      },
+      {
+        title: 'Export Data',
+        icon: Download,
+        action: () => exportData('users'),
+        color: 'bg-purple-500'
+      },
+      {
+        title: 'System Settings',
+        icon: Settings,
+        action: () => onChangeTab('settings'),
+        color: 'bg-orange-500',
+        permission: 'systemSettings'
+      }
+    ];
+
+    return (
+      <div className="bg-white p-6 border border-gray-200 rounded-xl">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <Activity className="w-5 h-5" />
+          Quick Actions
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {actions.map((action, index) => {
+            if (action.permission === 'super_admin' && adminData?.role !== 'super_admin') return null;
+            if (action.permission && !adminData?.permissions?.[action.permission]) return null;
+
+            return (
+              <button
+                key={index}
+                onClick={action.action}
+                className={`${action.color} text-white p-4 rounded-lg hover:opacity-90 transition-opacity flex items-center gap-3`}
+              >
+                <action.icon className="w-5 h-5" />
+                <span className="font-medium">{action.title}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Performance Summary Component
+  const PerformanceSummary = ({ stats }) => (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-xl border border-blue-200">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-blue-500 rounded-lg">
+            <TrendingUp className="w-5 h-5 text-white" />
+          </div>
+          <h3 className="text-lg font-semibold text-blue-900">User Growth</h3>
+        </div>
+        <div className="space-y-2">
+          <div className="text-2xl font-bold text-blue-900">
+            {stats.userGrowthRate || '0.0'}%
+          </div>
+          <div className="text-sm text-blue-700">
+            {stats.newUsersThisMonth || 0} new users this month
+          </div>
+          <div className="text-xs text-blue-600">
+            Total: {formatNumber(stats.totalUsers || 0)} users
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl border border-green-200">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-green-500 rounded-lg">
+            <Package className="w-5 h-5 text-white" />
+          </div>
+          <h3 className="text-lg font-semibold text-green-900">Load Activity</h3>
+        </div>
+        <div className="space-y-2">
+          <div className="text-2xl font-bold text-green-900">
+            {stats.activeLoads || 0}
+          </div>
+          <div className="text-sm text-green-700">Active loads in system</div>
+          <div className="text-xs text-green-600">
+            {stats.loadCompletionRate || '0.0'}% completion rate
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-6 rounded-xl border border-purple-200">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-purple-500 rounded-lg">
+            <DollarSign className="w-5 h-5 text-white" />
+          </div>
+          <h3 className="text-lg font-semibold text-purple-900">Revenue</h3>
+        </div>
+        <div className="space-y-2">
+          <div className="text-2xl font-bold text-purple-900">
+            {formatCurrency(stats.monthlyRevenue || 0)}
+          </div>
+          <div className="text-sm text-purple-700">
+            From {stats.newSubscriptionsThisMonth || 0} subscriptions
+          </div>
+          <div className="text-xs text-purple-600">
+            {stats.subscriptionRate || '0.0'}% subscription rate
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Loading Spinner Component
+  const LoadingSpinner = ({ message = "Loading..." }) => (
+    <div className="flex justify-center items-center py-12">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      <span className="ml-3 text-gray-600">{message}</span>
+    </div>
+  );
+
+  // Empty State Component
+  const EmptyState = ({ icon: Icon, message, submessage }) => (
+    <div className="text-center py-12 text-gray-500">
+      <Icon className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+      <p>{message}</p>
+      {submessage && <p className="text-sm">{submessage}</p>}
+    </div>
+  );
+
+  // Activity Log Item Component
+  const ActivityLogItem = ({ log, getUserName, getActivity, getActivityDetails, formatTimestamp }) => (
+    <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg border">
+      <div className="p-2 bg-white rounded-full border">
+        <Activity className="w-4 h-4 text-gray-600" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="font-medium text-gray-900">{getUserName(log)}</span>
+          <span className="text-gray-400">•</span>
+          <span className="text-sm text-gray-600">{getActivity(log)}</span>
+        </div>
+        {getActivityDetails(log) && (
+          <p className="text-sm text-gray-500 mb-2">{getActivityDetails(log)}</p>
+        )}
+        <div className="flex items-center gap-4 text-xs text-gray-400">
+          <span className="flex items-center gap-1">
+            <Clock className="w-3 h-3" />
+            {formatTimestamp(log.timestamp || log.createdAt || log.date)}
+          </span>
+          {log.ipAddress && (
+            <span className="flex items-center gap-1">
+              <MapPin className="w-3 h-3" />
+              {log.ipAddress}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Recent Activity Component
+  const RecentActivity = ({ logs, loading, onRefresh, onViewAll }) => (
+    <div className="bg-white p-6 border border-gray-200 rounded-xl">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <Activity className="w-5 h-5" />
+          Recent Activity
+        </h3>
+        <div className="flex items-center gap-3">
+          <select
+            value={dateRange}
+            onChange={(e) => setDateRange(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-3 py-1"
+          >
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+          </select>
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className="flex items-center gap-2 text-blue-600 hover:text-blue-800 disabled:text-gray-400 bg-blue-50 px-3 py-1 rounded-lg text-sm"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      
+      {loading ? (
+        <LoadingSpinner message="Loading activities..." />
+      ) : logs.length === 0 ? (
+        <EmptyState icon={Activity} message="No recent activity found." submessage="Activities will appear here as they occur." />
+      ) : (
+        <div className="space-y-4">
+          {logs.slice(0, 5).map((log, index) => (
+            <ActivityLogItem 
+              key={log.id || log._id || index}
+              log={log}
+              getUserName={getUserName}
+              getActivity={getActivity}
+              getActivityDetails={getActivityDetails}
+              formatTimestamp={formatTimestamp}
+            />
+          ))}
+          {logs.length > 0 && (
+            <div className="mt-6 text-center">
+              <button
+                onClick={onViewAll}
+                className="text-blue-600 hover:text-blue-800 text-sm font-medium bg-blue-50 px-4 py-2 rounded-lg hover:bg-blue-100 transition-colors"
+              >
+                View all activity →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // Overview section component
+  const OverviewSection = () => (
     <div className="space-y-6">
       {/* Error and Success Messages */}
       {error && (
@@ -408,7 +583,7 @@ const AdminDashboard = () => {
         </div>
       )}
 
-      {/* Quick Stats Header */}
+      {/* Welcome Header */}
       <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl p-6 text-white">
         <div className="flex items-center justify-between">
           <div>
@@ -417,349 +592,105 @@ const AdminDashboard = () => {
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={refreshStats}
-              disabled={loading}
+              onClick={fetchDashboardStats}
+              disabled={statsLoading}
               className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${statsLoading ? 'animate-spin' : ''}`} />
               Refresh
             </button>
             <div className="text-right">
               <div className="text-sm text-blue-100">Total Revenue</div>
-              <div className="text-xl font-bold">{formatCurrency(dashboardStats.monthlyRevenue || 0)}</div>
+              <div className="text-xl font-bold">{formatCurrency(dashboardStats.totalRevenue || 0)}</div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Primary Stats Cards */}
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {/* Total Loads */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-yellow-100 rounded-lg">
-              <Package className="w-6 h-6 text-yellow-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">Total Loads</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.totalLoads || 0)}
-            </div>
-            {dashboardStats.newLoadsThisMonth > 0 && (
-              <div className="flex items-center gap-1 text-sm">
-                <TrendingUp className="w-3 h-3 text-green-500" />
-                <span className="text-green-600">+{dashboardStats.newLoadsThisMonth} this month</span>
-              </div>
-            )}
-            <div className="text-xs text-gray-500">
-              {dashboardStats.activeLoads || 0} active
-            </div>
-          </div>
-        </div>
-
-        {/* New Users Today */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Users className="w-6 h-6 text-blue-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">New Users Today</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.newUsersToday || 0)}
-            </div>
-            <div className="text-xs text-gray-500">
-              {dashboardStats.newUsersThisWeek || 0} this week
-            </div>
-            <div className="text-xs text-gray-500">
-              {dashboardStats.newUsersThisMonth || 0} this month
-            </div>
-          </div>
-        </div>
-
-        {/* Total Drivers */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-green-100 rounded-lg">
-              <Truck className="w-6 h-6 text-green-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">Total Drivers</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.totalDrivers || 0)}
-            </div>
-            <div className="text-xs text-gray-500">
-              {dashboardStats.activeDrivers || 0} active
-            </div>
-            <div className="text-xs text-green-600">
-              {dashboardStats.totalDrivers > 0 ? 
-                ((dashboardStats.activeDrivers / dashboardStats.totalDrivers) * 100).toFixed(1) : 0}% active rate
-            </div>
-          </div>
-        </div>
-
-        {/* Total Cargo Owners */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-purple-100 rounded-lg">
-              <Package className="w-6 h-6 text-purple-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">Cargo Owners</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.totalCargoOwners || 0)}
-            </div>
-            <div className="text-xs text-gray-500">
-              {dashboardStats.activeCargoOwners || 0} active
-            </div>
-            <div className="text-xs text-purple-600">
-              {dashboardStats.totalCargoOwners > 0 ? 
-                ((dashboardStats.activeCargoOwners / dashboardStats.totalCargoOwners) * 100).toFixed(1) : 0}% active rate
-            </div>
-          </div>
-        </div>
-
-        {/* Pending Subscriptions */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-orange-100 rounded-lg">
-              <Clock className="w-6 h-6 text-orange-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">Pending Subs</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.pendingSubscriptions || 0)}
-            </div>
-            <div className="text-xs text-orange-600">
-              Need approval
-            </div>
-            {dashboardStats.pendingSubscriptions > 0 && (
-              <button 
-                onClick={() => setActiveTab('subscriptions')}
-                className="text-xs text-blue-600 hover:text-blue-800 underline"
-              >
-                Review now →
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Subscriptions This Month */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-2 bg-indigo-100 rounded-lg">
-              <DollarSign className="w-6 h-6 text-indigo-600" />
-            </div>
-            <span className="text-sm text-gray-500 font-medium">Subs This Month</span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-gray-900">
-              {formatNumber(dashboardStats.newSubscriptionsThisMonth || 0)}
-            </div>
-            <div className="text-xs text-green-600 font-medium">
-              {formatCurrency(dashboardStats.monthlyRevenue || 0)}
-            </div>
-            <div className="text-xs text-gray-500">
-              Revenue generated
-            </div>
-          </div>
-        </div>
+        <StatCard
+          icon={Package}
+          title="Total Loads"
+          value={formatNumber(dashboardStats.totalLoads || 0)}
+          subtitle={`${dashboardStats.activeLoads || 0} active`}
+          trend={dashboardStats.newLoadsThisMonth > 0 ? `+${dashboardStats.newLoadsThisMonth} this month` : null}
+          color="yellow"
+        />
+        
+        <StatCard
+          icon={Users}
+          title="New Users Today"
+          value={formatNumber(dashboardStats.newUsersToday || 0)}
+          subtitle={`${dashboardStats.newUsersThisWeek || 0} this week`}
+          extra={`${dashboardStats.newUsersThisMonth || 0} this month`}
+          color="blue"
+        />
+        
+        <StatCard
+          icon={Truck}
+          title="Total Drivers"
+          value={formatNumber(dashboardStats.totalDrivers || 0)}
+          subtitle={`${dashboardStats.activeDrivers || 0} active`}
+          percentage={dashboardStats.totalDrivers > 0 ? 
+            ((dashboardStats.activeDrivers / dashboardStats.totalDrivers) * 100).toFixed(1) : 0}
+          color="green"
+        />
+        
+        <StatCard
+          icon={Package}
+          title="Cargo Owners"
+          value={formatNumber(dashboardStats.totalCargoOwners || 0)}
+          subtitle={`${dashboardStats.activeCargoOwners || 0} active`}
+          percentage={dashboardStats.totalCargoOwners > 0 ? 
+            ((dashboardStats.activeCargoOwners / dashboardStats.totalCargoOwners) * 100).toFixed(1) : 0}
+          color="purple"
+        />
+        
+        <StatCard
+          icon={Clock}
+          title="Pending Subs"
+          value={formatNumber(dashboardStats.pendingSubscriptions || 0)}
+          subtitle="Need approval"
+          actionButton={dashboardStats.pendingSubscriptions > 0 ? {
+            text: "Review now →",
+            onClick: () => setActiveTab('subscriptions')
+          } : null}
+          color="orange"
+        />
+        
+        <StatCard
+          icon={DollarSign}
+          title="Subs This Month"
+          value={formatNumber(dashboardStats.newSubscriptionsThisMonth || 0)}
+          subtitle={formatCurrency(dashboardStats.monthlyRevenue || 0)}
+          extra="Revenue generated"
+          color="indigo"
+        />
       </div>
 
       {/* Quick Actions */}
-      {adminData && (
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5" />
-            Quick Actions
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {quickActions.map((action, index) => {
-              // Check permissions
-              if (action.permission === 'super_admin' && adminData.role !== 'super_admin') return null;
-              if (action.permission && !adminData.permissions?.[action.permission]) return null;
-
-              return (
-                <button
-                  key={index}
-                  onClick={action.action}
-                  className={`${action.color} text-white p-4 rounded-lg hover:opacity-90 transition-opacity flex items-center gap-3`}
-                >
-                  <action.icon className="w-5 h-5" />
-                  <span className="font-medium">{action.title}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <QuickActions 
+        adminData={adminData}
+        onAddAdmin={() => setShowAddAdmin(true)}
+        onChangeTab={setActiveTab}
+      />
 
       {/* Performance Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* User Growth */}
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-xl border border-blue-200">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-blue-500 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-white" />
-            </div>
-            <h3 className="text-lg font-semibold text-blue-900">User Growth</h3>
-          </div>
-          <div className="space-y-2">
-            <div className="text-2xl font-bold text-blue-900">
-              {dashboardStats.userGrowthRate || '0.0'}%
-            </div>
-            <div className="text-sm text-blue-700">
-              {dashboardStats.newUsersThisMonth || 0} new users this month
-            </div>
-            <div className="text-xs text-blue-600">
-              Total: {formatNumber(dashboardStats.totalUsers || 0)} users
-            </div>
-          </div>
-        </div>
+      <PerformanceSummary stats={dashboardStats} />
 
-        {/* Load Activity */}
-        <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl border border-green-200">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-green-500 rounded-lg">
-              <Package className="w-5 h-5 text-white" />
-            </div>
-            <h3 className="text-lg font-semibold text-green-900">Load Activity</h3>
-          </div>
-          <div className="space-y-2">
-            <div className="text-2xl font-bold text-green-900">
-              {dashboardStats.activeLoads || 0}
-            </div>
-            <div className="text-sm text-green-700">
-              Active loads in system
-            </div>
-            <div className="text-xs text-green-600">
-              {dashboardStats.loadCompletionRate || '0.0'}% completion rate
-            </div>
-          </div>
-        </div>
-
-        {/* Subscription Revenue */}
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-6 rounded-xl border border-purple-200">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-purple-500 rounded-lg">
-              <DollarSign className="w-5 h-5 text-white" />
-            </div>
-            <h3 className="text-lg font-semibold text-purple-900">Revenue</h3>
-          </div>
-          <div className="space-y-2">
-            <div className="text-2xl font-bold text-purple-900">
-              {formatCurrency(dashboardStats.monthlyRevenue || 0)}
-            </div>
-            <div className="text-sm text-purple-700">
-              From {dashboardStats.newSubscriptionsThisMonth || 0} subscriptions
-            </div>
-            <div className="text-xs text-purple-600">
-              {dashboardStats.subscriptionRate || '0.0'}% subscription rate
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Activity Section */}
-      <div className="bg-white p-6 border border-gray-200 rounded-xl">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <Activity className="w-5 h-5" />
-            Recent Activity
-          </h3>
-          <div className="flex items-center gap-3">
-            <select
-              value={dateRange}
-              onChange={(e) => setDateRange(e.target.value)}
-              className="text-sm border border-gray-300 rounded-lg px-3 py-1"
-            >
-              <option value="today">Today</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-            </select>
-            <button
-              onClick={refreshLogs}
-              disabled={activityLoading}
-              className="flex items-center gap-2 text-blue-600 hover:text-blue-800 disabled:text-gray-400 bg-blue-50 px-3 py-1 rounded-lg text-sm"
-            >
-              <RefreshCw className={`w-4 h-4 ${activityLoading ? 'animate-spin' : ''}`} />
-              {activityLoading ? 'Loading...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-        
-        {activityLoading ? (
-          <div className="flex justify-center items-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-            <span className="ml-3 text-gray-600">Loading activities...</span>
-          </div>
-        ) : activityLogs.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <Activity className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-            <p>No recent activity found.</p>
-            <p className="text-sm">Activities will appear here as they occur.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {activityLogs.map((log, index) => (
-              <div key={log.id || log._id || index} className="flex items-start gap-4 p-4 bg-gray-50 rounded-lg border">
-                <div className="p-2 bg-white rounded-full border">
-                  <Activity className="w-4 h-4 text-gray-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-gray-900">
-                      {getUserName(log)}
-                    </span>
-                    <span className="text-gray-400">•</span>
-                    <span className="text-sm text-gray-600">
-                      {getActivity(log)}
-                    </span>
-                  </div>
-                  {getActivityDetails(log) && (
-                    <p className="text-sm text-gray-500 mb-2">
-                      {getActivityDetails(log)}
-                    </p>
-                  )}
-                  <div className="flex items-center gap-4 text-xs text-gray-400">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {formatTimestamp(log.timestamp || log.createdAt || log.date)}
-                    </span>
-                    {log.ipAddress && (
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {log.ipAddress}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        
-        {activityLogs.length > 0 && (
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => setActiveTab('activity')}
-              className="text-blue-600 hover:text-blue-800 text-sm font-medium bg-blue-50 px-4 py-2 rounded-lg hover:bg-blue-100 transition-colors"
-            >
-              View all activity →
-            </button>
-          </div>
-        )}
-      </div>
+      {/* Recent Activity */}
+      <RecentActivity 
+        logs={activityLogs}
+        loading={activityLoading}
+        onRefresh={() => fetchActivityLogs(1)}
+        onViewAll={() => setActiveTab('activity')}
+      />
     </div>
   );
 
-  // Enhanced Activity Tab
-  const renderActivityTab = () => (
+  // Activity Tab with Pagination
+  const ActivityTab = () => (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -789,7 +720,7 @@ const AdminDashboard = () => {
             <option value="subscription_approve">Subscription Events</option>
           </select>
           <button
-            onClick={refreshLogs}
+            onClick={() => fetchActivityLogs(activityPagination.currentPage)}
             disabled={activityLoading}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
@@ -800,64 +731,136 @@ const AdminDashboard = () => {
       </div>
 
       {activityLoading ? (
-        <div className="flex justify-center items-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-          <span className="ml-3 text-gray-600">Loading activities...</span>
-        </div>
+        <LoadingSpinner />
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           {activityLogs.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <Activity className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>No activity logs found.</p>
-            </div>
+            <EmptyState icon={Activity} message="No activity logs found." />
           ) : (
-            <div className="divide-y divide-gray-200">
-              {activityLogs.map((log, index) => (
-                <div key={log.id || log._id || index} className="p-6 hover:bg-gray-50 transition-colors">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-4">
-                      <div className="p-2 bg-blue-100 rounded-full">
-                        <Activity className="w-4 h-4 text-blue-600" />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900">
-                            {getUserName(log)}
-                          </span>
-                          <span className={`px-2 py-1 text-xs rounded-full border ${getStatusBadgeColor(log.action || 'default')}`}>
-                            {getActivity(log)}
-                          </span>
+            <>
+              <div className="divide-y divide-gray-200">
+                {activityLogs.map((log, index) => (
+                  <div key={log.id || log._id || index} className="p-6 hover:bg-gray-50 transition-colors">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-4">
+                        <div className="p-2 bg-blue-100 rounded-full">
+                          <Activity className="w-4 h-4 text-blue-600" />
                         </div>
-                        {getActivityDetails(log) && (
-                          <p className="text-gray-600">{getActivityDetails(log)}</p>
-                        )}
-                        <div className="flex items-center gap-4 text-sm text-gray-500">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-4 h-4" />
-                            {getFullDateTime(log.timestamp || log.createdAt || log.date)}
-                          </span>
-                          {log.ipAddress && (
-                            <span className="flex items-center gap-1">
-                              <MapPin className="w-4 h-4" />
-                              {log.ipAddress}
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-gray-900">
+                              {getUserName(log)}
                             </span>
+                            <span className={`px-2 py-1 text-xs rounded-full border ${getStatusBadgeColor(log.action || 'default')}`}>
+                              {getActivity(log)}
+                            </span>
+                          </div>
+                          {getActivityDetails(log) && (
+                            <p className="text-gray-600">{getActivityDetails(log)}</p>
                           )}
+                          <div className="flex items-center gap-4 text-sm text-gray-500">
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-4 h-4" />
+                              {new Date(log.timestamp || log.createdAt || log.date).toLocaleString()}
+                            </span>
+                            {log.ipAddress && (
+                              <span className="flex items-center gap-1">
+                                <MapPin className="w-4 h-4" />
+                                {log.ipAddress}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
+                ))}
+              </div>
+              
+              {/* Pagination for Activity Logs */}
+              {activityPagination.totalPages > 1 && (
+                <div className="flex items-center justify-between p-4 bg-gray-50 border-t">
+                  <span className="text-sm text-gray-700">
+                    Page {activityPagination.currentPage} of {activityPagination.totalPages} ({activityPagination.total} total)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => fetchActivityLogs(Math.max(1, activityPagination.currentPage - 1))}
+                      disabled={activityPagination.currentPage === 1}
+                      className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      Previous
+                    </button>
+                    <span className="px-3 py-1 text-sm">
+                      Page {activityPagination.currentPage} of {activityPagination.totalPages}
+                    </span>
+                    <button
+                      onClick={() => fetchActivityLogs(Math.min(activityPagination.totalPages, activityPagination.currentPage + 1))}
+                      disabled={activityPagination.currentPage === activityPagination.totalPages}
+                      className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       )}
     </div>
   );
 
-  // Analytics/Reports Tab
-  const renderReportsTab = () => (
+  // Analytics Card Component
+  const AnalyticsCard = ({ title, icon: Icon, color, data }) => {
+    const colorClasses = {
+      blue: 'bg-blue-100 text-blue-600',
+      green: 'bg-green-100 text-green-600',
+      purple: 'bg-purple-100 text-purple-600',
+      orange: 'bg-orange-100 text-orange-600',
+    };
+
+    return (
+      <div className="bg-white p-6 border border-gray-200 rounded-xl">
+        <div className="flex items-center gap-3 mb-4">
+          <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
+            <Icon className="w-5 h-5" />
+          </div>
+          <h3 className="font-semibold">{title}</h3>
+        </div>
+        <div className="space-y-3">
+          {data.map((item, index) => (
+            <div key={index} className="flex justify-between">
+              <span className="text-sm text-gray-600">{item.label}</span>
+              <span className={`font-medium ${item.highlight ? `text-${item.highlight}-600` : ''}`}>
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Chart Placeholder Component
+  const ChartPlaceholder = ({ title, icon: Icon, description }) => (
+    <div className="bg-white p-6 border border-gray-200 rounded-xl">
+      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <Icon className="w-5 h-5" />
+        {title}
+      </h3>
+      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
+        <div className="text-center text-gray-500">
+          <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+          <p>Chart integration coming soon</p>
+          <p className="text-sm">{description}</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Reports/Analytics Tab Component
+  const ReportsTab = () => (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -880,136 +883,131 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      {/* Analytics Cards */}
+      {/* Analytics Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Users className="w-5 h-5 text-blue-600" />
-            </div>
-            <h3 className="font-semibold">User Analytics</h3>
-          </div>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Active Users</span>
-              <span className="font-medium">{dashboardStats.activeUsers || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">New This Month</span>
-              <span className="font-medium text-green-600">+{dashboardStats.newUsersThisMonth || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Growth Rate</span>
-              <span className="font-medium">{dashboardStats.userGrowthRate || '0.0'}%</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-green-100 rounded-lg">
-              <Package className="w-5 h-5 text-green-600" />
-            </div>
-            <h3 className="font-semibold">Load Analytics</h3>
-          </div>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Total Loads</span>
-              <span className="font-medium">{dashboardStats.totalLoads || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Active</span>
-              <span className="font-medium text-blue-600">{dashboardStats.activeLoads || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Completion Rate</span>
-              <span className="font-medium">{dashboardStats.loadCompletionRate || '0.0'}%</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-purple-100 rounded-lg">
-              <DollarSign className="w-5 h-5 text-purple-600" />
-            </div>
-            <h3 className="font-semibold">Revenue Analytics</h3>
-          </div>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Monthly Revenue</span>
-              <span className="font-medium">{formatCurrency(dashboardStats.monthlyRevenue || 0)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">New Subscriptions</span>
-              <span className="font-medium text-green-600">+{dashboardStats.newSubscriptionsThisMonth || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Subscription Rate</span>
-              <span className="font-medium">{dashboardStats.subscriptionRate || '0.0'}%</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-orange-100 rounded-lg">
-              <Clock className="w-5 h-5 text-orange-600" />
-            </div>
-            <h3 className="font-semibold">Pending Items</h3>
-          </div>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Pending Subscriptions</span>
-              <span className="font-medium text-orange-600">{dashboardStats.pendingSubscriptions || 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Pending Verifications</span>
-              <span className="font-medium text-yellow-600">-</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Review Queue</span>
-              <span className="font-medium">-</span>
-            </div>
-          </div>
-        </div>
+        <AnalyticsCard
+          title="User Analytics"
+          icon={Users}
+          color="blue"
+          data={[
+            { label: 'Active Users', value: dashboardStats.activeUsers || 0 },
+            { label: 'New This Month', value: `+${dashboardStats.newUsersThisMonth || 0}`, highlight: 'green' },
+            { label: 'Growth Rate', value: `${dashboardStats.userGrowthRate || '0.0'}%` }
+          ]}
+        />
+        
+        <AnalyticsCard
+          title="Load Analytics"
+          icon={Package}
+          color="green"
+          data={[
+            { label: 'Total Loads', value: dashboardStats.totalLoads || 0 },
+            { label: 'Active', value: dashboardStats.activeLoads || 0, highlight: 'blue' },
+            { label: 'Completion Rate', value: `${dashboardStats.loadCompletionRate || '0.0'}%` }
+          ]}
+        />
+        
+        <AnalyticsCard
+          title="Revenue Analytics"
+          icon={DollarSign}
+          color="purple"
+          data={[
+            { label: 'Monthly Revenue', value: formatCurrency(dashboardStats.monthlyRevenue || 0) },
+            { label: 'New Subscriptions', value: `+${dashboardStats.newSubscriptionsThisMonth || 0}`, highlight: 'green' },
+            { label: 'Subscription Rate', value: `${dashboardStats.subscriptionRate || '0.0'}%` }
+          ]}
+        />
+        
+        <AnalyticsCard
+          title="Pending Items"
+          icon={Clock}
+          color="orange"
+          data={[
+            { label: 'Pending Subscriptions', value: dashboardStats.pendingSubscriptions || 0, highlight: 'orange' },
+            { label: 'Pending Verifications', value: '-' },
+            { label: 'Review Queue', value: '-' }
+          ]}
+        />
       </div>
 
-      {/* Charts Placeholder */}
+      {/* Chart Placeholders */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <LineChart className="w-5 h-5" />
-            User Growth Trend
-          </h3>
-          <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
-            <div className="text-center text-gray-500">
-              <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-              <p>Chart integration coming soon</p>
-              <p className="text-sm">User registration trends over time</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <PieChart className="w-5 h-5" />
-            Revenue Distribution
-          </h3>
-          <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
-            <div className="text-center text-gray-500">
-              <PieChart className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-              <p>Chart integration coming soon</p>
-              <p className="text-sm">Revenue breakdown by subscription type</p>
-            </div>
-          </div>
-        </div>
+        <ChartPlaceholder
+          title="User Growth Trend"
+          icon={LineChart}
+          description="User registration trends over time"
+        />
+        <ChartPlaceholder
+          title="Revenue Distribution"
+          icon={PieChart}
+          description="Revenue breakdown by subscription type"
+        />
       </div>
     </div>
   );
 
-  // System Settings Tab
-  const renderSettingsTab = () => (
+  // Settings Card Component
+  const SettingsCard = ({ title, icon: Icon, fields = [], toggles = [], actions = [] }) => (
+    <div className="bg-white p-6 border border-gray-200 rounded-xl">
+      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        {Icon && <Icon className="w-5 h-5" />}
+        {title}
+      </h3>
+      
+      {/* Input Fields */}
+      {fields.length > 0 && (
+        <div className="space-y-4">
+          {fields.map((field, index) => (
+            <div key={index}>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                {field.label}
+              </label>
+              <input
+                type={field.type}
+                defaultValue={field.defaultValue}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {/* Toggle Switches */}
+      {toggles.length > 0 && (
+        <div className="space-y-4">
+          {toggles.map((toggle, index) => (
+            <div key={index} className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium text-gray-700">{toggle.label}</label>
+                <p className="text-xs text-gray-500">{toggle.description}</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" className="sr-only peer" defaultChecked={toggle.defaultChecked} />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {/* Action Buttons */}
+      {actions.length > 0 && (
+        <div className="space-y-4">
+          {actions.map((action, index) => (
+            <button
+              key={index}
+              className={`w-full bg-${action.color}-600 text-white py-2 px-4 rounded-lg hover:bg-${action.color}-700 transition-colors`}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // Settings Tab Component
+  const SettingsTab = () => (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -1020,143 +1018,76 @@ const AdminDashboard = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* General Settings */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4">General Settings</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Platform Name
-              </label>
-              <input
-                type="text"
-                defaultValue="Infinite Cargo"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Contact Email
-              </label>
-              <input
-                type="email"
-                defaultValue="admin@infinitecargo.com"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Support Phone
-              </label>
-              <input
-                type="tel"
-                defaultValue="+254700000000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-        </div>
+        <SettingsCard
+          title="General Settings"
+          fields={[
+            { label: 'Platform Name', type: 'text', defaultValue: 'Infinite Cargo' },
+            { label: 'Contact Email', type: 'email', defaultValue: 'admin@infinitecargo.com' },
+            { label: 'Support Phone', type: 'tel', defaultValue: '+254700000000' }
+          ]}
+        />
 
         {/* Security Settings */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Shield className="w-5 h-5" />
-            Security Settings
-          </h3>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Two-Factor Authentication</label>
-                <p className="text-xs text-gray-500">Require 2FA for all admin accounts</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Login Notifications</label>
-                <p className="text-xs text-gray-500">Email alerts for admin logins</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Auto-lock Sessions</label>
-                <p className="text-xs text-gray-500">Lock inactive admin sessions</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-          </div>
-        </div>
+        <SettingsCard
+          title="Security Settings"
+          icon={Shield}
+          toggles={[
+            { label: 'Two-Factor Authentication', description: 'Require 2FA for all admin accounts', defaultChecked: false },
+            { label: 'Login Notifications', description: 'Email alerts for admin logins', defaultChecked: true },
+            { label: 'Auto-lock Sessions', description: 'Lock inactive admin sessions', defaultChecked: true }
+          ]}
+        />
 
         {/* Notification Settings */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Bell className="w-5 h-5" />
-            Notification Settings
-          </h3>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">New User Registrations</label>
-                <p className="text-xs text-gray-500">Notify when users register</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Subscription Requests</label>
-                <p className="text-xs text-gray-500">Notify of pending subscriptions</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium text-gray-700">System Alerts</label>
-                <p className="text-xs text-gray-500">Critical system notifications</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-          </div>
-        </div>
+        <SettingsCard
+          title="Notification Settings"
+          icon={Bell}
+          toggles={[
+            { label: 'New User Registrations', description: 'Notify when users register', defaultChecked: true },
+            { label: 'Subscription Requests', description: 'Notify of pending subscriptions', defaultChecked: true },
+            { label: 'System Alerts', description: 'Critical system notifications', defaultChecked: true }
+          ]}
+        />
 
         {/* System Maintenance */}
-        <div className="bg-white p-6 border border-gray-200 rounded-xl">
-          <h3 className="text-lg font-semibold mb-4">System Maintenance</h3>
-          <div className="space-y-4">
-            <button className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors">
-              Clear System Cache
-            </button>
-            <button className="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors">
-              Backup Database
-            </button>
-            <button className="w-full bg-orange-600 text-white py-2 px-4 rounded-lg hover:bg-orange-700 transition-colors">
-              Generate System Report
-            </button>
-            <button className="w-full bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 transition-colors">
-              Emergency Maintenance Mode
-            </button>
-          </div>
-        </div>
+        <SettingsCard
+          title="System Maintenance"
+          actions={[
+            { label: 'Clear System Cache', color: 'blue' },
+            { label: 'Backup Database', color: 'green' },
+            { label: 'Generate System Report', color: 'orange' },
+            { label: 'Emergency Maintenance Mode', color: 'red' }
+          ]}
+        />
       </div>
     </div>
   );
+
+  // Navigation tabs configuration
+  const navigationTabs = [
+    { key: 'overview', label: 'Overview', icon: BarChart3 },
+    { key: 'users', label: 'Users', icon: Users },
+    { key: 'drivers', label: 'Drivers', icon: Truck },
+    { key: 'cargo-owners', label: 'Cargo Owners', icon: Package },
+    { key: 'loads', label: 'Loads', icon: Package },
+    { key: 'subscriptions', label: 'Subscriptions', icon: DollarSign },
+    { key: 'notifications', label: 'Notifications', icon: Bell },
+    { key: 'activity', label: 'Activity', icon: Activity },
+    { key: 'reports', label: 'Reports', icon: BarChart3 },
+    ...(adminData?.role === 'super_admin' || adminData?.permissions?.systemSettings ? 
+      [{ key: 'settings', label: 'Settings', icon: Settings }] : [])
+  ];
+
+  // Table component props
+  const tableProps = {
+    apiCall,
+    showError,
+    showSuccess,
+    getStatusBadgeColor,
+    currentPage,
+    setCurrentPage,
+    itemsPerPage: ITEMS_PER_PAGE
+  };
 
   // Don't render if not authenticated
   if (!isAuthenticated(true)) {
@@ -1166,18 +1097,19 @@ const AdminDashboard = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6 max-w-7xl mx-auto">
-       {adminData && (
-  <AdminHeader
-    name={adminData.name}
-    role={adminData.role}
-    onLogout={handleLogout}
-    apiCall={apiCall}
-    onNotificationClick={() => setActiveTab('notifications')}
-    isAuthenticated={isAuthenticated(true)}
-  />
-)}
+        {/* Admin Header */}
+        {adminData && (
+          <AdminHeader
+            name={adminData.name}
+            role={adminData.role}
+            onLogout={handleLogout}
+            apiCall={apiCall}
+            onNotificationClick={() => setActiveTab('notifications')}
+            isAuthenticated={isAuthenticated(true)}
+          />
+        )}
 
-        {/* Super Admin Actions */}
+        {/* Super Admin Controls */}
         {adminData?.role === 'super_admin' && (
           <div className="mb-6 bg-white p-4 border border-gray-200 rounded-xl">
             <div className="flex items-center justify-between">
@@ -1215,22 +1147,11 @@ const AdminDashboard = () => {
           </div>
         )}
 
-        {/* Enhanced Navigation Tabs */}
+        {/* Navigation Tabs */}
         <div className="mb-8">
           <div className="border-b border-gray-200 bg-white rounded-t-xl">
             <nav className="flex overflow-x-auto">
-              {[
-                { key: 'overview', label: 'Overview', icon: BarChart3 },
-                { key: 'users', label: 'Users', icon: Users },
-                { key: 'drivers', label: 'Drivers', icon: Truck },
-                { key: 'cargo-owners', label: 'Cargo Owners', icon: Package },
-                { key: 'loads', label: 'Loads', icon: Package },
-                { key: 'subscriptions', label: 'Subscriptions', icon: DollarSign },
-                { key: 'notifications', label: 'Notifications', icon: Bell },
-                { key: 'activity', label: 'Activity', icon: Activity },
-                { key: 'reports', label: 'Reports', icon: BarChart3 },
-                ...(adminData?.permissions?.systemSettings ? [{ key: 'settings', label: 'Settings', icon: Settings }] : [])
-              ].map((tab) => {
+              {navigationTabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
                   <button
@@ -1256,96 +1177,57 @@ const AdminDashboard = () => {
 
         {/* Tab Content */}
         <div className="bg-white rounded-b-xl min-h-[600px]">
-          {activeTab === 'overview' && renderOverview()}
-          
-          {activeTab === 'activity' && renderActivityTab()}
-          
-          {activeTab === 'reports' && renderReportsTab()}
-          
-          {activeTab === 'settings' && renderSettingsTab()}
+          {activeTab === 'overview' && <OverviewSection />}
+          {activeTab === 'activity' && <ActivityTab />}
+          {activeTab === 'reports' && <ReportsTab />}
+          {activeTab === 'settings' && <SettingsTab />}
 
+          {/* Table Components */}
           {activeTab === 'users' && (
             <div className="p-6">
-              <UsersTable
-                apiCall={apiCall}
-                showError={showError}
-                showSuccess={showSuccess}
-                getStatusBadgeColor={getStatusBadgeColor}
-                currentPage={currentPage}
-                setCurrentPage={setCurrentPage}
-                itemsPerPage={itemsPerPage}
-              />
+              <UsersTable {...tableProps} />
             </div>
           )}
 
           {activeTab === 'drivers' && (
             <div className="p-6">
-              <DriversTable
-                apiCall={apiCall}
-                showError={showError}
-                showSuccess={showSuccess}
-                getStatusBadgeColor={getStatusBadgeColor}
-                currentPage={currentPage}
-                setCurrentPage={setCurrentPage}
-                itemsPerPage={itemsPerPage}
-              />
+              <DriversTable {...tableProps} />
             </div>
           )}
 
           {activeTab === 'cargo-owners' && (
             <div className="p-6">
-              <CargoOwnersTable
-                apiCall={apiCall}
-                showError={showError}
-                showSuccess={showSuccess}
-                getStatusBadgeColor={getStatusBadgeColor}
-                currentPage={currentPage}
-                setCurrentPage={setCurrentPage}
-                itemsPerPage={itemsPerPage}
-              />
+              <CargoOwnersTable {...tableProps} />
             </div>
           )}
 
           {activeTab === 'loads' && (
             <div className="p-6">
-              <LoadsTable
-                apiCall={apiCall}
-                showError={showError}
-                showSuccess={showSuccess}
-                getStatusBadgeColor={getStatusBadgeColor}
-                currentPage={currentPage}
-                setCurrentPage={setCurrentPage}
-                itemsPerPage={itemsPerPage}
+              <LoadsTable {...tableProps} />
+            </div>
+          )}
+
+          {activeTab === 'subscriptions' && (
+            <div className="p-6">
+              <SubscriptionsTable
+                {...tableProps}
+                formatCurrency={formatCurrency}
               />
             </div>
           )}
 
           {activeTab === 'notifications' && (
-  <div className="p-6">
-    <AdminNotifications
-      apiCall={apiCall}
-      showError={showError}
-      showSuccess={showSuccess}
-    />
-  </div>
-)}
-
-          {activeTab === 'subscriptions' && (
             <div className="p-6">
-              <SubscriptionsTable
+              <AdminNotifications
                 apiCall={apiCall}
                 showError={showError}
                 showSuccess={showSuccess}
-                formatCurrency={formatCurrency}
-                currentPage={currentPage}
-                setCurrentPage={setCurrentPage}
-                itemsPerPage={itemsPerPage}
               />
             </div>
           )}
         </div>
         
-        {/* ADD ADMIN MODAL */}
+        {/* Add Admin Modal */}
         {showAddAdmin && (
           <AddAdminModal
             newAdmin={newAdmin}
