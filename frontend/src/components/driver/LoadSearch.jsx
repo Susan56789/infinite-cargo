@@ -28,7 +28,7 @@ import {
   logout 
 } from '../../utils/auth';
 
-// BidForm Component - FIXED
+// BidForm Component - 
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   const [bidData, setBidData] = useState({
     bidAmount: '',
@@ -437,6 +437,7 @@ const LoadSearch = () => {
   const [bidStates, setBidStates] = useState({}); 
   const [successMessage, setSuccessMessage] = useState('');
   const [userBids, setUserBids] = useState(new Set()); 
+  const [bidsLoading, setBidsLoading] = useState(false); // Track bid fetch status
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -524,25 +525,11 @@ const LoadSearch = () => {
     }
   };
 
-  useEffect(() => {
-    checkAuthStatus();
-    fetchLoads();
-    fetchUserBids(); // Fetch user's existing bids
-  }, []);
-
-  // Auto-dismiss success message
-  useEffect(() => {
-    if (successMessage) {
-      const timer = setTimeout(() => {
-        setSuccessMessage('');
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [successMessage]);
-
-  // Fetch user's existing bids to track which loads they've already bid on
+  //  Fetch user's existing bids to track which loads they've already bid on
   const fetchUserBids = async () => {
     try {
+      setBidsLoading(true);
+      
       if (!isUserAuthenticated || user?.userType !== 'driver') {
         setUserBids(new Set());
         return;
@@ -570,8 +557,8 @@ const LoadSearch = () => {
               .map(bid => typeof bid.load === 'object' ? bid.load._id : bid.load)
           );
           
-          
           setUserBids(bidLoadIds);
+         
         } else {
           setUserBids(new Set());
         }
@@ -582,8 +569,42 @@ const LoadSearch = () => {
     } catch (error) {
       console.warn('Error fetching user bids:', error);
       setUserBids(new Set());
+    } finally {
+      setBidsLoading(false);
     }
   };
+
+  //  Ensure user bids are fetched whenever auth status changes
+  useEffect(() => {
+    const initializeData = async () => {
+      const authenticated = checkAuthStatus();
+      if (authenticated) {
+        await fetchUserBids();
+      }
+      fetchLoads();
+    };
+    
+    initializeData();
+  }, []);
+
+  //  Separate effect to fetch user bids when authentication status changes
+  useEffect(() => {
+    if (isUserAuthenticated && user?.userType === 'driver') {
+      fetchUserBids();
+    } else {
+      setUserBids(new Set());
+    }
+  }, [isUserAuthenticated, user?.userType]);
+
+  // Auto-dismiss success message
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => {
+        setSuccessMessage('');
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
 
   const fetchLoads = async (page = 1) => {
     try {
@@ -640,16 +661,12 @@ const LoadSearch = () => {
         credentials: 'include'
       });
 
-
       if (!response.ok) {
         let serverError = 'Failed to fetch loads.';
         
         try {
           const resData = await response.json();
           serverError = resData.message || serverError;
-          
-          
-          // Log detailed error for debugging
           console.error('Server error details:', resData);
         } catch (parseError) {
           console.error('Could not parse error response:', parseError);
@@ -661,9 +678,6 @@ const LoadSearch = () => {
       }
 
       const data = await response.json();
-
-      
-      
 
       if (data.status !== 'success') {
         throw new Error(data.message || 'Unexpected server response format.');
@@ -681,8 +695,28 @@ const LoadSearch = () => {
         throw new Error('Invalid loads data format received from server.');
       }
 
+      // FILTER OUT EXPIRED LOADS - this is the key fix
+      const now = new Date();
+      const activeLoads = loadsArray.filter(load => {
+        // Filter out expired loads
+        if (load.status === 'expired') {
+          return false;
+        }
+        
+        // Filter out loads with past pickup dates
+        if (load.pickupDate) {
+          const pickupDate = new Date(load.pickupDate);
+          if (pickupDate < now) {
+            return false;
+          }
+        }
+        
+        // Only show loads that are actually available for bidding
+        return ['available', 'posted', 'receiving_bids'].includes(load.status);
+      });
+
       // Process loads to ensure consistent data structure
-      const processedLoads = loadsArray.map(load => ({
+      const processedLoads = activeLoads.map(load => ({
         ...load,
         // Ensure these fields exist with fallbacks
         _id: load._id || load.id,
@@ -710,23 +744,20 @@ const LoadSearch = () => {
         }
       }));
 
-      
-
       // Update state
       setLoads(processedLoads);
       
-      // Update pagination
+      // Update pagination (adjust for filtered results)
       if (pagination) {
         setCurrentPage(pagination.currentPage || page);
-        setTotalPages(pagination.totalPages || 1);
-        setTotalLoads(pagination.totalLoads || processedLoads.length);
+        setTotalPages(Math.ceil(processedLoads.length / limit) || 1);
+        setTotalLoads(processedLoads.length);
       } else {
         // Fallback when pagination not present
         setCurrentPage(page);
         setTotalPages(1);
         setTotalLoads(processedLoads.length);
       }
-
 
     } catch (err) {
       console.error('Error loading loads:', err);
@@ -760,7 +791,7 @@ const LoadSearch = () => {
     }
   };
 
-  // FIXED Place bid function - matches backend API expectations
+  //  Place bid function - matches backend API expectations
   const handleBidSubmit = async (bidData) => {
     try {
       // Check auth
@@ -805,8 +836,6 @@ const LoadSearch = () => {
         }
       };
 
-      
-
       const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
         method: 'POST',
         headers,
@@ -849,13 +878,16 @@ const LoadSearch = () => {
       }
 
       const result = await response.json();
-     
 
       if (result.status === 'success') {
         setSuccessMessage('Bid placed successfully! The cargo owner will be notified.');
         
-        // Add this load to user's bid list
-        setUserBids(prev => new Set([...prev, payload.load]));
+       
+        setUserBids(prev => {
+          const newBids = new Set([...prev, payload.load]);
+         
+          return newBids;
+        });
         
         // Close bid form
         setBidStates(prev => ({
@@ -865,6 +897,10 @@ const LoadSearch = () => {
         
         // Refresh loads to update bid count
         await fetchLoads(currentPage);
+        
+        //  Re-fetch user bids to ensure consistency
+        await fetchUserBids();
+        
         return { success: true };
       } else {
         const errorMsg = result.message || 'Unexpected response from server';
@@ -961,10 +997,18 @@ const LoadSearch = () => {
     return vehicleType ? vehicleType.label : type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
-  const handleRefresh = () => {
+  //  Handle refresh to ensure user bids are also refreshed
+  const handleRefresh = async () => {
     checkAuthStatus();
-    fetchLoads(currentPage);
-    fetchUserBids(); // Also refresh user bids
+    
+    // Run both fetches in parallel for better performance
+    const promises = [fetchLoads(currentPage)];
+    
+    if (isUserAuthenticated && user?.userType === 'driver') {
+      promises.push(fetchUserBids());
+    }
+    
+    await Promise.all(promises);
   };
 
   const handleViewDetails = async (load) => {
@@ -1083,6 +1127,9 @@ const LoadSearch = () => {
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading available loads...</p>
           <p className="text-sm text-gray-500 mt-2">This may take a few moments</p>
+          {bidsLoading && (
+            <p className="text-xs text-blue-600 mt-1">Checking your bid history...</p>
+          )}
         </div>
       </div>
     );
@@ -1117,6 +1164,7 @@ const LoadSearch = () => {
                       onClick={() => {
                         logout();
                         checkAuthStatus();
+                        setUserBids(new Set()); // Clear user bids on logout
                       }}
                       className="text-sm text-gray-600 hover:text-gray-800"
                     >
@@ -1134,9 +1182,9 @@ const LoadSearch = () => {
                 <button
                   onClick={handleRefresh}
                   className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                  disabled={loading}
+                  disabled={loading || bidsLoading}
                 >
-                  <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+                  <RefreshCw size={16} className={`mr-2 ${(loading || bidsLoading) ? 'animate-spin' : ''}`} />
                   Refresh
                 </button>
               </div>
@@ -1224,6 +1272,16 @@ const LoadSearch = () => {
                   Please contact support to upgrade your account to a driver account.
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/*  Show loading indicator for bids */}
+        {bidsLoading && isUserAuthenticated && user?.userType === 'driver' && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <div className="flex items-center">
+              <Loader className="h-4 w-4 text-blue-600 mr-3 animate-spin" />
+              <p className="text-sm text-blue-800">Loading your bid history...</p>
             </div>
           </div>
         )}
@@ -1357,6 +1415,12 @@ const LoadSearch = () => {
               <p className="text-gray-600">
                 Found {totalLoads} load{totalLoads !== 1 ? 's' : ''}
                 {searchQuery && ` matching "${searchQuery}"`}
+                {bidsLoading && isUserAuthenticated && user?.userType === 'driver' && (
+                  <span className="text-blue-600 ml-2">
+                    <Loader className="w-3 h-3 inline animate-spin mr-1" />
+                    Loading bid status...
+                  </span>
+                )}
               </p>
             </div>
 
@@ -1523,7 +1587,7 @@ const LoadSearch = () => {
 
       {/* Login Prompt Modal */}
       {showLoginPrompt && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className=" inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
             <div className="flex items-center mb-4">
               <User className="w-6 h-6 text-blue-600 mr-3" />
@@ -1552,7 +1616,7 @@ const LoadSearch = () => {
 
       {/* Load Details Modal */}
       {showLoadModal && selectedLoad && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className=" inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Load Details</h3>
@@ -1582,6 +1646,12 @@ const LoadSearch = () => {
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
                     <TrendingUp className="w-4 h-4 mr-1" />
                     Featured
+                  </span>
+                )}
+                {userBids.has(selectedLoad._id) && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                    <CheckCircle className="w-4 h-4 mr-1" />
+                    You've Bid on This
                   </span>
                 )}
                 <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
