@@ -1124,55 +1124,54 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // STEP 1: FIXED - More lenient expiration logic
-    const now = new Date();
-    const gracePeriod = 24 * 60 * 60 * 1000; // Extended to 24 hours grace period
-    const expireThreshold = new Date(now.getTime() - gracePeriod);
+    // STEP 1: FIXED - Use EAT (East Africa Time) for proper date handling
+    // EAT is UTC+3
+    const nowUTC = new Date();
+    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000)); // Add 3 hours for EAT
+    const startOfTodayEAT = new Date(nowEAT.getFullYear(), nowEAT.getMonth(), nowEAT.getDate());
+    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000)); // Convert back to UTC
     
-    console.log('Current time:', now.toISOString());
-    console.log('Expire threshold:', expireThreshold.toISOString());
+    console.log('Current UTC time:', nowUTC.toISOString());
+    console.log('Current EAT time:', nowEAT.toISOString());
+    console.log('Start of today EAT in UTC:', startOfTodayUTC.toISOString());
     
     try {
-      // Only expire loads that are significantly past due (24+ hours)
+      // Expire loads with pickup dates before start of today (EAT)
       const expireResult = await Load.updateMany(
         {
           isActive: true,
           status: { $in: ['posted', 'available', 'receiving_bids'] },
-          pickupDate: { $exists: true, $ne: null, $lt: expireThreshold }
+          pickupDate: { $exists: true, $ne: null, $lt: startOfTodayUTC }
         },
         {
           $set: {
             status: 'expired',
             isActive: false,
-            expiredAt: now,
-            updatedAt: now
+            expiredAt: nowUTC,
+            updatedAt: nowUTC
           }
         }
       );
 
       if (expireResult.modifiedCount > 0) {
-        console.log(`Expired ${expireResult.modifiedCount} loads with past pickup dates`);
+        console.log(`Expired ${expireResult.modifiedCount} loads with pickup dates before today (EAT)`);
       }
     } catch (expireError) {
       console.warn('Error expiring past due loads:', expireError);
       // Continue even if expiration fails
     }
 
-    // STEP 2: Build base query - SIMPLIFIED
+    // STEP 2: Build base query - Only show loads that are not expired
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
       isActive: true
     };
 
-    // FIXED: More permissive pickup date handling
-    // Only exclude loads that are significantly overdue
-    const currentDate = new Date();
-    const cutoffDate = new Date(currentDate.getTime() - (24 * 60 * 60 * 1000)); // 24 hours ago
-    
+    // FIXED: Only show loads with pickup dates today or in the future (EAT)
     baseQuery.$or = [
       { pickupDate: { $exists: false } }, // No pickup date set
       { pickupDate: null }, // Null pickup date
-      { pickupDate: { $gte: cutoffDate } } // Pickup date is today or future (with 24h buffer)
+      { pickupDate: { $gte: startOfTodayUTC } } // Pickup date is today or future (EAT)
     ];
 
     console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
