@@ -66,7 +66,6 @@ const checkAndUpdateExpiredLoads = async () => {
     return 0;
   }
 };
-
 // Rate limiting
 const jobsLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -1097,7 +1096,18 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // Destructure and set defaults
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Database connection unavailable. Please try again later.'
+      });
+    }
+
+    // Update expired loads first
+    await checkAndUpdateExpiredLoads();
+
+    // Extract and set defaults for query parameters
     const {
       page = 1,
       limit = 12,
@@ -1115,228 +1125,119 @@ router.get('/', optionalAuth, [
       sortOrder = 'desc'
     } = req.query;
 
-    // Check database connection
-    if (mongoose.connection.readyState !== 1) {
-      console.error('Database not connected, readyState:', mongoose.connection.readyState);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Database connection unavailable. Please try again later.'
-      });
-    }
-
-    // STEP 1: Update expired loads (same as before)
-    const nowUTC = new Date();
-    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000));
-    const startOfTodayEAT = new Date(nowEAT.getFullYear(), nowEAT.getMonth(), nowEAT.getDate());
-    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000));
-    
-    console.log('Current UTC time:', nowUTC.toISOString());
-    console.log('Current EAT time:', nowEAT.toISOString());
-    console.log('Start of today EAT in UTC:', startOfTodayUTC.toISOString());
-    
-    try {
-      // Expire loads with pickup dates before start of today (EAT)
-      const expireResult = await Load.updateMany(
-        {
-          isActive: true,
-          status: { $in: ['posted', 'available', 'receiving_bids'] },
-          pickupDate: { $exists: true, $ne: null, $lt: startOfTodayUTC }
-        },
-        {
-          $set: {
-            status: 'expired',
-            isActive: false,
-            expiredAt: nowUTC,
-            updatedAt: nowUTC
-          }
-        }
-      );
-
-      if (expireResult.modifiedCount > 0) {
-        console.log(`Expired ${expireResult.modifiedCount} loads with pickup dates before today (EAT)`);
-      }
-    } catch (expireError) {
-      console.warn('Error expiring past due loads:', expireError);
-    }
-
-    // STEP 2: Build base query - FIXED TO INCLUDE EXPIRED LOADS
-    const baseQuery = {
-      // Include expired loads in the results so users can see them
-      status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] },
-      // Don't filter by isActive since expired loads have isActive: false
+    // Build query filters
+    const query = {
+      status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] }
     };
 
-    console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
-
-    // STEP 3: Apply filters only if they have values
-    const filterConditions = [];
-
-    // Text search
-    if (search && search.trim()) {
-      const searchTerm = search.trim();
-      const escapedSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(escapedSearch, 'i');
-      
-      filterConditions.push({
-        $or: [
-          { title: regex },
-          { description: regex },
-          { pickupLocation: regex },
-          { deliveryLocation: regex },
-          { cargoOwnerName: regex }
-        ]
-      });
+    // Apply filters
+    if (search?.trim()) {
+      const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { title: searchRegex },
+        { description: searchRegex },
+        { pickupLocation: searchRegex },
+        { deliveryLocation: searchRegex },
+        { cargoOwnerName: searchRegex }
+      ];
     }
 
-    // Exact match filters
-    if (cargoType && cargoType.trim()) {
-      filterConditions.push({ cargoType: cargoType.trim() });
+    if (cargoType?.trim()) query.cargoType = cargoType.trim();
+    if (vehicleType?.trim()) query.vehicleType = vehicleType.trim();
+    
+    if (pickupLocation?.trim()) {
+      query.pickupLocation = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     }
     
-    if (vehicleType && vehicleType.trim()) {
-      filterConditions.push({ vehicleType: vehicleType.trim() });
+    if (deliveryLocation?.trim()) {
+      query.deliveryLocation = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     }
 
-    // Location filters
-    if (pickupLocation && pickupLocation.trim()) {
-      const locationRegex = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filterConditions.push({ pickupLocation: locationRegex });
-    }
-    
-    if (deliveryLocation && deliveryLocation.trim()) {
-      const locationRegex = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filterConditions.push({ deliveryLocation: locationRegex });
-    }
-
-    // Budget range
     if (minBudget || maxBudget) {
-      const budgetFilter = {};
-      if (minBudget) budgetFilter.$gte = parseFloat(minBudget);
-      if (maxBudget) budgetFilter.$lte = parseFloat(maxBudget);
-      filterConditions.push({ budget: budgetFilter });
+      query.budget = {};
+      if (minBudget) query.budget.$gte = parseFloat(minBudget);
+      if (maxBudget) query.budget.$lte = parseFloat(maxBudget);
     }
 
-    // Weight range
     if (minWeight || maxWeight) {
-      const weightFilter = {};
-      if (minWeight) weightFilter.$gte = parseFloat(minWeight);
-      if (maxWeight) weightFilter.$lte = parseFloat(maxWeight);
-      filterConditions.push({ weight: weightFilter });
+      query.weight = {};
+      if (minWeight) query.weight.$gte = parseFloat(minWeight);
+      if (maxWeight) query.weight.$lte = parseFloat(maxWeight);
     }
 
-    // Urgent only
     if (urgentOnly === 'true' || urgentOnly === true) {
-      filterConditions.push({ isUrgent: true });
+      query.isUrgent = true;
     }
 
-    // Combine base query with filter conditions
-    const finalQuery = filterConditions.length > 0 
-      ? { $and: [baseQuery, ...filterConditions] }
-      : baseQuery;
+    // Build sort options
+    const sortOptions = {
+      isActive: -1,  // Active loads first
+      isBoosted: -1,
+      isPriorityListing: -1
+    };
 
-    console.log('Final query:', JSON.stringify(finalQuery, null, 2));
-
-    // STEP 4: Calculate pagination
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const skip = (pageNum - 1) * limitNum;
-
-    // STEP 5: Build sort options - PRIORITIZE NON-EXPIRED LOADS
-    const sortDirection = sortOrder === 'desc' ? -1 : 1;
-    const sortOptions = {};
-    
-    // FIXED: Priority sorting - active loads first, then expired
-    sortOptions.isActive = -1;  // Active loads (true) come before inactive (false)
-    sortOptions.isBoosted = -1;
-    sortOptions.isPriorityListing = -1;
-    
-    // Main sort field
     if (sortBy === 'boostLevel') {
       sortOptions.boostLevel = -1;
     } else {
-      sortOptions[sortBy] = sortDirection;
+      sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
     }
-    
-    // Always add createdAt as final sort
+
     if (sortBy !== 'createdAt') {
       sortOptions.createdAt = -1;
     }
 
-    console.log('Sort options:', sortOptions);
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
 
-    // STEP 6: Get total count with final query
-    const totalLoads = await Load.countDocuments(finalQuery);
-    console.log(`Total matching loads with filters: ${totalLoads}`);
-
-    // STEP 7: Execute main query
-    let loads;
-    
-    try {
-      loads = await Load.find(finalQuery)
+    // Get total count and loads
+    const [totalLoads, loads] = await Promise.all([
+      Load.countDocuments(query),
+      Load.find(query)
         .sort(sortOptions)
         .skip(skip)
         .limit(limitNum)
         .populate('postedBy', 'name email companyName rating isVerified location')
-        .lean();
+        .lean()
+    ]);
 
-      console.log(`Main query returned ${loads.length} loads`);
-
-      // STEP 8: Enhance loads with computed fields - MARK EXPIRED STATUS
-      loads = loads.map(load => {
-        const now = new Date();
-        const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
+    // Enhance loads with computed fields
+    const enhancedLoads = loads.map(load => {
+      const now = new Date();
+      const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
+      
+      return {
+        ...load,
+        cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous Cargo Owner',
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
         
-        // Check if this load should be considered expired
-        const isExpiredDueToPickup = pickupDate && pickupDate < startOfTodayUTC;
-        const isAlreadyExpired = load.status === 'expired';
-        const shouldShowAsExpired = isExpiredDueToPickup || isAlreadyExpired;
+        postedBy: {
+          _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false,
+          location: load.postedBy?.location || null
+        },
         
-        return {
-          ...load,
-          // FIXED: Show correct status including expired
-          status: shouldShowAsExpired ? 'expired' : load.status,
-          isActive: shouldShowAsExpired ? false : load.isActive,
-          
-          // Ensure required fields exist
-          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
-          bidCount: load.bidCount || 0,
-          viewCount: load.viewCount || 0,
-          
-          // Ensure postedBy structure
-          postedBy: {
-            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
-            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-            rating: load.postedBy?.rating || 4.5,
-            isVerified: load.postedBy?.isVerified || false,
-            location: load.postedBy?.location || null
-          },
-          
-          // Ensure contactPerson exists
-          contactPerson: load.contactPerson || {
-            name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
-            phone: load.postedBy?.phone || '',
-            email: load.postedBy?.email || ''
-          },
-          
-          // Add helpful fields for UI
-          isExpired: shouldShowAsExpired,
-          daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null,
-          expiredReason: isExpiredDueToPickup ? 'Pickup date has passed' : (isAlreadyExpired ? 'Expired' : null)
-        };
-      });
-
-    } catch (queryError) {
-      console.error('Main query execution failed:', queryError);
-      throw queryError;
-    }
+        contactPerson: load.contactPerson || {
+          name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
+          phone: load.postedBy?.phone || '',
+          email: load.postedBy?.email || ''
+        },
+        
+        isExpired: load.status === 'expired',
+        daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null
+      };
+    });
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    // STEP 9: Return successful response
     return res.json({
       status: 'success',
       data: {
-        loads,
+        loads: enhancedLoads,
         pagination: {
           currentPage: pageNum,
           totalPages,
@@ -1348,64 +1249,14 @@ router.get('/', optionalAuth, [
       }
     });
 
-  } catch (err) {
-    console.error('Get loads error:', err);
+  } catch (error) {
+    console.error('Get loads error:', error);
     
-    // Emergency fallback
-    try {
-      console.log('Attempting emergency fallback...');
-      
-      const emergencyLoads = await Load.find({
-        status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] }
-      })
-      .sort({ isActive: -1, createdAt: -1 })
-      .limit(parseInt(limit))
-      .populate('postedBy', 'name rating isVerified')
-      .lean();
-
-      console.log(`Emergency fallback found ${emergencyLoads.length} loads`);
-
-      const enhancedEmergencyLoads = emergencyLoads.map(load => ({
-        ...load,
-        cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
-        bidCount: load.bidCount || 0,
-        viewCount: load.viewCount || 0,
-        isExpired: load.status === 'expired',
-        postedBy: {
-          _id: load.postedBy?._id || load.cargoOwnerId,
-          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-          rating: load.postedBy?.rating || 4.5,
-          isVerified: load.postedBy?.isVerified || false
-        }
-      }));
-
-      return res.json({
-        status: 'success',
-        data: {
-          loads: enhancedEmergencyLoads,
-          pagination: {
-            currentPage: 1,
-            totalPages: 1,
-            totalLoads: enhancedEmergencyLoads.length,
-            limit: parseInt(limit),
-            hasNextPage: false,
-            hasPrevPage: false
-          },
-          warning: 'Emergency fallback active - some filters may not be applied'
-        }
-      });
-    } catch (emergencyError) {
-      console.error('Emergency fallback also failed:', emergencyError);
-      
-      return res.status(500).json({
-        status: 'error',
-        message: 'Server error occurred while fetching loads. Please try again later.',
-        error: process.env.NODE_ENV === 'development' ? {
-          original: err.message,
-          fallback: emergencyError.message
-        } : 'Internal server error'
-      });
-    }
+    return res.status(500).json({
+      status: 'error',
+      message: 'Server error occurred while fetching loads. Please try again later.',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
   }
 });
 
