@@ -825,7 +825,7 @@ const LoadsTab = ({ onNavigateToLoadDetail, onEditLoad, onPostLoad }) => {
 
   // Permission functions
   const canEditLoad = (load) => {
-    const editableStatuses = ['posted', 'available', 'receiving_bids', 'assigned', 'driver_assigned'];
+    const editableStatuses = ['posted','expired', 'available', 'receiving_bids', 'assigned', 'driver_assigned'];
     return editableStatuses.includes(load.status);
   };
 
