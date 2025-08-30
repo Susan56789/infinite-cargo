@@ -1124,12 +1124,11 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // STEP 1: FIXED - Use EAT (East Africa Time) for proper date handling
-    // EAT is UTC+3
+    // STEP 1: Update expired loads (same as before)
     const nowUTC = new Date();
-    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000)); // Add 3 hours for EAT
+    const nowEAT = new Date(nowUTC.getTime() + (3 * 60 * 60 * 1000));
     const startOfTodayEAT = new Date(nowEAT.getFullYear(), nowEAT.getMonth(), nowEAT.getDate());
-    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000)); // Convert back to UTC
+    const startOfTodayUTC = new Date(startOfTodayEAT.getTime() - (3 * 60 * 60 * 1000));
     
     console.log('Current UTC time:', nowUTC.toISOString());
     console.log('Current EAT time:', nowEAT.toISOString());
@@ -1158,21 +1157,14 @@ router.get('/', optionalAuth, [
       }
     } catch (expireError) {
       console.warn('Error expiring past due loads:', expireError);
-      // Continue even if expiration fails
     }
 
-    // STEP 2: Build base query - Only show loads that are not expired
+    // STEP 2: Build base query - FIXED TO INCLUDE EXPIRED LOADS
     const baseQuery = {
-      status: { $in: ['available', 'posted', 'receiving_bids'] },
-      isActive: true
+      // Include expired loads in the results so users can see them
+      status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] },
+      // Don't filter by isActive since expired loads have isActive: false
     };
-
-    // FIXED: Only show loads with pickup dates today or in the future (EAT)
-    baseQuery.$or = [
-      { pickupDate: { $exists: false } }, // No pickup date set
-      { pickupDate: null }, // Null pickup date
-      { pickupDate: { $gte: startOfTodayUTC } } // Pickup date is today or future (EAT)
-    ];
 
     console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
 
@@ -1249,11 +1241,12 @@ router.get('/', optionalAuth, [
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // STEP 5: Build sort options
+    // STEP 5: Build sort options - PRIORITIZE NON-EXPIRED LOADS
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
     const sortOptions = {};
     
-    // Priority sorting - boosted loads first
+    // FIXED: Priority sorting - active loads first, then expired
+    sortOptions.isActive = -1;  // Active loads (true) come before inactive (false)
     sortOptions.isBoosted = -1;
     sortOptions.isPriorityListing = -1;
     
@@ -1271,114 +1264,11 @@ router.get('/', optionalAuth, [
 
     console.log('Sort options:', sortOptions);
 
-    // STEP 6: Debug queries
-    try {
-      // Test basic counts
-      const totalActiveLoads = await Load.countDocuments({ isActive: true });
-      const availableLoads = await Load.countDocuments({
-        status: { $in: ['available', 'posted', 'receiving_bids'] },
-        isActive: true
-      });
-      
-      console.log(`Debug - Total active loads: ${totalActiveLoads}`);
-      console.log(`Debug - Available loads: ${availableLoads}`);
-      
-      // Test the exact query
-      const queryResult = await Load.find(baseQuery).countDocuments();
-      console.log(`Debug - Base query matches: ${queryResult}`);
-      
-    } catch (debugError) {
-      console.error('Debug queries failed:', debugError);
-    }
-
-    // STEP 7: Get total count with final query
+    // STEP 6: Get total count with final query
     const totalLoads = await Load.countDocuments(finalQuery);
     console.log(`Total matching loads with filters: ${totalLoads}`);
 
-    // STEP 8: If no results, try progressively simpler queries
-    if (totalLoads === 0) {
-      console.log('No results found, trying simpler queries...');
-      
-      // Try without date filtering
-      const simpleQuery = {
-        status: { $in: ['available', 'posted', 'receiving_bids'] },
-        isActive: true
-      };
-      
-      const simpleCount = await Load.countDocuments(simpleQuery);
-      console.log(`Simple query (no date filter) matches: ${simpleCount}`);
-      
-      if (simpleCount > 0) {
-        // If simple query works, there's an issue with date filtering
-        console.log('Issue appears to be with date filtering logic');
-        
-        // Return loads without strict date filtering for debugging
-        const debugLoads = await Load.find(simpleQuery)
-          .sort(sortOptions)
-          .skip(skip)
-          .limit(limitNum)
-          .populate('postedBy', 'name email companyName rating isVerified')
-          .lean();
-
-        // Enhance loads
-        const enhancedLoads = debugLoads.map(load => ({
-          ...load,
-          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
-          bidCount: load.bidCount || 0,
-          viewCount: load.viewCount || 0,
-          postedBy: {
-            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
-            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-            rating: load.postedBy?.rating || 4.5,
-            isVerified: load.postedBy?.isVerified || false
-          }
-        }));
-
-        return res.json({
-          status: 'success',
-          data: {
-            loads: enhancedLoads,
-            pagination: {
-              currentPage: pageNum,
-              totalPages: Math.ceil(simpleCount / limitNum),
-              totalLoads: simpleCount,
-              limit: limitNum,
-              hasNextPage: pageNum < Math.ceil(simpleCount / limitNum),
-              hasPrevPage: pageNum > 1
-            },
-            debug: {
-              message: 'Using simplified query due to date filtering issue',
-              originalQuery: finalQuery,
-              workingQuery: simpleQuery
-            }
-          }
-        });
-      }
-      
-      // Return empty result if even simple query fails
-      return res.json({
-        status: 'success',
-        data: {
-          loads: [],
-          pagination: {
-            currentPage: pageNum,
-            totalPages: 0,
-            totalLoads: 0,
-            limit: limitNum,
-            hasNextPage: false,
-            hasPrevPage: false
-          },
-          debug: {
-            message: "No loads found even with simplified query",
-            totalActiveLoads: totalActiveLoads,
-            availableLoads: availableLoads,
-            finalQuery: finalQuery
-          }
-        }
-      });
-    }
-
-    // STEP 9: Execute main query
+    // STEP 7: Execute main query
     let loads;
     
     try {
@@ -1391,70 +1281,58 @@ router.get('/', optionalAuth, [
 
       console.log(`Main query returned ${loads.length} loads`);
 
-      // Enhance loads with computed fields
-      loads = loads.map(load => ({
-        ...load,
-        // Ensure required fields exist
-        cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
-        bidCount: load.bidCount || 0,
-        viewCount: load.viewCount || 0,
+      // STEP 8: Enhance loads with computed fields - MARK EXPIRED STATUS
+      loads = loads.map(load => {
+        const now = new Date();
+        const pickupDate = load.pickupDate ? new Date(load.pickupDate) : null;
         
-        // Ensure postedBy structure
-        postedBy: {
-          _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
-          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-          rating: load.postedBy?.rating || 4.5,
-          isVerified: load.postedBy?.isVerified || false,
-          location: load.postedBy?.location || null
-        },
+        // Check if this load should be considered expired
+        const isExpiredDueToPickup = pickupDate && pickupDate < startOfTodayUTC;
+        const isAlreadyExpired = load.status === 'expired';
+        const shouldShowAsExpired = isExpiredDueToPickup || isAlreadyExpired;
         
-        // Ensure contactPerson exists
-        contactPerson: load.contactPerson || {
-          name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
-          phone: load.postedBy?.phone || '',
-          email: load.postedBy?.email || ''
-        }
-      }));
+        return {
+          ...load,
+          // FIXED: Show correct status including expired
+          status: shouldShowAsExpired ? 'expired' : load.status,
+          isActive: shouldShowAsExpired ? false : load.isActive,
+          
+          // Ensure required fields exist
+          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
+          bidCount: load.bidCount || 0,
+          viewCount: load.viewCount || 0,
+          
+          // Ensure postedBy structure
+          postedBy: {
+            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false,
+            location: load.postedBy?.location || null
+          },
+          
+          // Ensure contactPerson exists
+          contactPerson: load.contactPerson || {
+            name: load.cargoOwnerName || load.postedBy?.name || 'Contact Person',
+            phone: load.postedBy?.phone || '',
+            email: load.postedBy?.email || ''
+          },
+          
+          // Add helpful fields for UI
+          isExpired: shouldShowAsExpired,
+          daysUntilPickup: pickupDate ? Math.ceil((pickupDate - now) / (1000 * 60 * 60 * 24)) : null,
+          expiredReason: isExpiredDueToPickup ? 'Pickup date has passed' : (isAlreadyExpired ? 'Expired' : null)
+        };
+      });
 
     } catch (queryError) {
       console.error('Main query execution failed:', queryError);
-      
-      // Fallback to absolute simplest query
-      try {
-        loads = await Load.find({
-          isActive: true,
-          status: { $in: ['available', 'posted', 'receiving_bids'] }
-        })
-        .sort({ createdAt: -1 })
-        .limit(limitNum)
-        .populate('postedBy', 'name email rating isVerified')
-        .lean();
-        
-        console.log(`Fallback query returned ${loads.length} loads`);
-        
-        // Basic enhancement
-        loads = loads.map(load => ({
-          ...load,
-          cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
-          bidCount: load.bidCount || 0,
-          viewCount: load.viewCount || 0,
-          postedBy: {
-            _id: load.postedBy?._id || load.cargoOwnerId,
-            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
-            rating: load.postedBy?.rating || 4.5,
-            isVerified: load.postedBy?.isVerified || false
-          }
-        }));
-        
-      } catch (fallbackError) {
-        console.error('Even fallback query failed:', fallbackError);
-        throw fallbackError;
-      }
+      throw queryError;
     }
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    // STEP 10: Return successful response
+    // STEP 9: Return successful response
     return res.json({
       status: 'success',
       data: {
@@ -1473,14 +1351,14 @@ router.get('/', optionalAuth, [
   } catch (err) {
     console.error('Get loads error:', err);
     
-    // EMERGENCY FALLBACK - Always try to return something
+    // Emergency fallback
     try {
       console.log('Attempting emergency fallback...');
       
       const emergencyLoads = await Load.find({
-        isActive: true
+        status: { $in: ['available', 'posted', 'receiving_bids', 'expired'] }
       })
-      .sort({ createdAt: -1 })
+      .sort({ isActive: -1, createdAt: -1 })
       .limit(parseInt(limit))
       .populate('postedBy', 'name rating isVerified')
       .lean();
@@ -1492,6 +1370,7 @@ router.get('/', optionalAuth, [
         cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
         bidCount: load.bidCount || 0,
         viewCount: load.viewCount || 0,
+        isExpired: load.status === 'expired',
         postedBy: {
           _id: load.postedBy?._id || load.cargoOwnerId,
           name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
@@ -1512,11 +1391,7 @@ router.get('/', optionalAuth, [
             hasNextPage: false,
             hasPrevPage: false
           },
-          warning: 'Emergency fallback active - some filters may not be applied',
-          debug: {
-            originalError: err.message,
-            fallbackQuery: { isActive: true }
-          }
+          warning: 'Emergency fallback active - some filters may not be applied'
         }
       });
     } catch (emergencyError) {
