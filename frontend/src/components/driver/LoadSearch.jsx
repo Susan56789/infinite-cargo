@@ -643,12 +643,11 @@ const LoadSearch = () => {
 
       if (!response.ok) {
         let serverError = 'Failed to fetch loads.';
-        let errorDetails = '';
         
         try {
           const resData = await response.json();
           serverError = resData.message || serverError;
-          errorDetails = resData.error || '';
+          
           
           // Log detailed error for debugging
           console.error('Server error details:', resData);
@@ -662,6 +661,8 @@ const LoadSearch = () => {
       }
 
       const data = await response.json();
+
+      console.log('Raw loads data from server:', data);
       
 
       if (data.status !== 'success') {

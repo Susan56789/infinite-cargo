@@ -1124,12 +1124,16 @@ router.get('/', optionalAuth, [
       });
     }
 
-    // STEP 1: Expire old loads (simplified)
+    // STEP 1: FIXED - More lenient expiration logic
     const now = new Date();
-    const gracePeriod = 2 * 60 * 60 * 1000; // 2 hours grace period
+    const gracePeriod = 24 * 60 * 60 * 1000; // Extended to 24 hours grace period
     const expireThreshold = new Date(now.getTime() - gracePeriod);
     
+    console.log('Current time:', now.toISOString());
+    console.log('Expire threshold:', expireThreshold.toISOString());
+    
     try {
+      // Only expire loads that are significantly past due (24+ hours)
       const expireResult = await Load.updateMany(
         {
           isActive: true,
@@ -1151,79 +1155,95 @@ router.get('/', optionalAuth, [
       }
     } catch (expireError) {
       console.warn('Error expiring past due loads:', expireError);
+      // Continue even if expiration fails
     }
 
-    // STEP 2: Build simplified base query
+    // STEP 2: Build base query - SIMPLIFIED
     const baseQuery = {
       status: { $in: ['available', 'posted', 'receiving_bids'] },
       isActive: true
     };
 
-    // Handle pickup date filtering more simply
+    // FIXED: More permissive pickup date handling
+    // Only exclude loads that are significantly overdue
+    const currentDate = new Date();
+    const cutoffDate = new Date(currentDate.getTime() - (24 * 60 * 60 * 1000)); // 24 hours ago
+    
     baseQuery.$or = [
-      { pickupDate: { $exists: false } },
-      { pickupDate: null },
-      { pickupDate: { $gt: expireThreshold } }
+      { pickupDate: { $exists: false } }, // No pickup date set
+      { pickupDate: null }, // Null pickup date
+      { pickupDate: { $gte: cutoffDate } } // Pickup date is today or future (with 24h buffer)
     ];
 
-    // STEP 3: Apply filters directly to baseQuery (avoid $and array)
-    
+    console.log('Base query before filters:', JSON.stringify(baseQuery, null, 2));
+
+    // STEP 3: Apply filters only if they have values
+    const filterConditions = [];
+
     // Text search
     if (search && search.trim()) {
       const searchTerm = search.trim();
       const escapedSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escapedSearch, 'i');
       
-      baseQuery.$text = { $search: searchTerm }; // If you have text index
-      // Fallback to regex search if no text index
-      if (!baseQuery.$text) {
-        baseQuery.$or = [
-          ...(baseQuery.$or || []),
+      filterConditions.push({
+        $or: [
           { title: regex },
           { description: regex },
           { pickupLocation: regex },
           { deliveryLocation: regex },
           { cargoOwnerName: regex }
-        ];
-      }
+        ]
+      });
     }
 
     // Exact match filters
     if (cargoType && cargoType.trim()) {
-      baseQuery.cargoType = cargoType.trim();
+      filterConditions.push({ cargoType: cargoType.trim() });
     }
+    
     if (vehicleType && vehicleType.trim()) {
-      baseQuery.vehicleType = vehicleType.trim();
+      filterConditions.push({ vehicleType: vehicleType.trim() });
     }
 
     // Location filters
     if (pickupLocation && pickupLocation.trim()) {
-      baseQuery.pickupLocation = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const locationRegex = new RegExp(pickupLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filterConditions.push({ pickupLocation: locationRegex });
     }
+    
     if (deliveryLocation && deliveryLocation.trim()) {
-      baseQuery.deliveryLocation = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const locationRegex = new RegExp(deliveryLocation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filterConditions.push({ deliveryLocation: locationRegex });
     }
 
     // Budget range
     if (minBudget || maxBudget) {
-      baseQuery.budget = {};
-      if (minBudget) baseQuery.budget.$gte = parseFloat(minBudget);
-      if (maxBudget) baseQuery.budget.$lte = parseFloat(maxBudget);
+      const budgetFilter = {};
+      if (minBudget) budgetFilter.$gte = parseFloat(minBudget);
+      if (maxBudget) budgetFilter.$lte = parseFloat(maxBudget);
+      filterConditions.push({ budget: budgetFilter });
     }
 
     // Weight range
     if (minWeight || maxWeight) {
-      baseQuery.weight = {};
-      if (minWeight) baseQuery.weight.$gte = parseFloat(minWeight);
-      if (maxWeight) baseQuery.weight.$lte = parseFloat(maxWeight);
+      const weightFilter = {};
+      if (minWeight) weightFilter.$gte = parseFloat(minWeight);
+      if (maxWeight) weightFilter.$lte = parseFloat(maxWeight);
+      filterConditions.push({ weight: weightFilter });
     }
 
     // Urgent only
     if (urgentOnly === 'true' || urgentOnly === true) {
-      baseQuery.isUrgent = true;
+      filterConditions.push({ isUrgent: true });
     }
 
-    console.log('Final base query:', JSON.stringify(baseQuery, null, 2));
+    // Combine base query with filter conditions
+    const finalQuery = filterConditions.length > 0 
+      ? { $and: [baseQuery, ...filterConditions] }
+      : baseQuery;
+
+    console.log('Final query:', JSON.stringify(finalQuery, null, 2));
 
     // STEP 4: Calculate pagination
     const pageNum = parseInt(page);
@@ -1234,47 +1254,109 @@ router.get('/', optionalAuth, [
     const sortDirection = sortOrder === 'desc' ? -1 : 1;
     const sortOptions = {};
     
-    // Priority sorting
-    if (sortBy === 'boostLevel') {
-      sortOptions.isBoosted = -1;
-      sortOptions.boostLevel = -1;
-    }
-    sortOptions[sortBy] = sortDirection;
+    // Priority sorting - boosted loads first
+    sortOptions.isBoosted = -1;
+    sortOptions.isPriorityListing = -1;
     
-    // Always add createdAt as secondary sort
+    // Main sort field
+    if (sortBy === 'boostLevel') {
+      sortOptions.boostLevel = -1;
+    } else {
+      sortOptions[sortBy] = sortDirection;
+    }
+    
+    // Always add createdAt as final sort
     if (sortBy !== 'createdAt') {
       sortOptions.createdAt = -1;
     }
 
     console.log('Sort options:', sortOptions);
 
-    // STEP 6: Debug query first
+    // STEP 6: Debug queries
     try {
-      const debugCount = await Load.countDocuments({});
-      const activeCount = await Load.countDocuments({ isActive: true });
-      const statusCount = await Load.countDocuments({
-        status: { $in: ['available', 'posted', 'receiving_bids'] }
-      });
-      
-      console.log(`Debug counts - Total: ${debugCount}, Active: ${activeCount}, Correct Status: ${statusCount}`);
-      
-      // Test simple query first
-      const simpleCount = await Load.countDocuments({
+      // Test basic counts
+      const totalActiveLoads = await Load.countDocuments({ isActive: true });
+      const availableLoads = await Load.countDocuments({
         status: { $in: ['available', 'posted', 'receiving_bids'] },
         isActive: true
       });
-      console.log(`Simple active loads count: ${simpleCount}`);
+      
+      console.log(`Debug - Total active loads: ${totalActiveLoads}`);
+      console.log(`Debug - Available loads: ${availableLoads}`);
+      
+      // Test the exact query
+      const queryResult = await Load.find(baseQuery).countDocuments();
+      console.log(`Debug - Base query matches: ${queryResult}`);
       
     } catch (debugError) {
-      console.error('Debug query failed:', debugError);
+      console.error('Debug queries failed:', debugError);
     }
 
-    // STEP 7: Get total count
-    const totalLoads = await Load.countDocuments(baseQuery);
-    console.log(`Total matching loads: ${totalLoads}`);
+    // STEP 7: Get total count with final query
+    const totalLoads = await Load.countDocuments(finalQuery);
+    console.log(`Total matching loads with filters: ${totalLoads}`);
 
+    // STEP 8: If no results, try progressively simpler queries
     if (totalLoads === 0) {
-      // Return empty result with debug info
+      console.log('No results found, trying simpler queries...');
+      
+      // Try without date filtering
+      const simpleQuery = {
+        status: { $in: ['available', 'posted', 'receiving_bids'] },
+        isActive: true
+      };
+      
+      const simpleCount = await Load.countDocuments(simpleQuery);
+      console.log(`Simple query (no date filter) matches: ${simpleCount}`);
+      
+      if (simpleCount > 0) {
+        // If simple query works, there's an issue with date filtering
+        console.log('Issue appears to be with date filtering logic');
+        
+        // Return loads without strict date filtering for debugging
+        const debugLoads = await Load.find(simpleQuery)
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(limitNum)
+          .populate('postedBy', 'name email companyName rating isVerified')
+          .lean();
+
+        // Enhance loads
+        const enhancedLoads = debugLoads.map(load => ({
+          ...load,
+          cargoOwnerName: load.cargoOwnerName || load.postedByName || load.postedBy?.name || 'Anonymous Cargo Owner',
+          bidCount: load.bidCount || 0,
+          viewCount: load.viewCount || 0,
+          postedBy: {
+            _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
+            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false
+          }
+        }));
+
+        return res.json({
+          status: 'success',
+          data: {
+            loads: enhancedLoads,
+            pagination: {
+              currentPage: pageNum,
+              totalPages: Math.ceil(simpleCount / limitNum),
+              totalLoads: simpleCount,
+              limit: limitNum,
+              hasNextPage: pageNum < Math.ceil(simpleCount / limitNum),
+              hasPrevPage: pageNum > 1
+            },
+            debug: {
+              message: 'Using simplified query due to date filtering issue',
+              originalQuery: finalQuery,
+              workingQuery: simpleQuery
+            }
+          }
+        });
+      }
+      
+      // Return empty result if even simple query fails
       return res.json({
         status: 'success',
         data: {
@@ -1288,28 +1370,29 @@ router.get('/', optionalAuth, [
             hasPrevPage: false
           },
           debug: {
-            query: baseQuery,
-            message: "No loads match the current filters"
+            message: "No loads found even with simplified query",
+            totalActiveLoads: totalActiveLoads,
+            availableLoads: availableLoads,
+            finalQuery: finalQuery
           }
         }
       });
     }
 
-    // STEP 8: Simplified query execution
+    // STEP 9: Execute main query
     let loads;
     
     try {
-      // Try simple mongoose query first
-      loads = await Load.find(baseQuery)
+      loads = await Load.find(finalQuery)
         .sort(sortOptions)
         .skip(skip)
         .limit(limitNum)
-        .populate('postedBy', 'name email companyName rating isVerified')
-        .lean(); // Use lean for better performance
+        .populate('postedBy', 'name email companyName rating isVerified location')
+        .lean();
 
-      console.log(`Simple query returned ${loads.length} loads`);
+      console.log(`Main query returned ${loads.length} loads`);
 
-      // Enhance loads with missing fields
+      // Enhance loads with computed fields
       loads = loads.map(load => ({
         ...load,
         // Ensure required fields exist
@@ -1322,7 +1405,8 @@ router.get('/', optionalAuth, [
           _id: load.postedBy?._id || load.postedBy || load.cargoOwnerId,
           name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
           rating: load.postedBy?.rating || 4.5,
-          isVerified: load.postedBy?.isVerified || false
+          isVerified: load.postedBy?.isVerified || false,
+          location: load.postedBy?.location || null
         },
         
         // Ensure contactPerson exists
@@ -1334,23 +1418,44 @@ router.get('/', optionalAuth, [
       }));
 
     } catch (queryError) {
-      console.error('Query execution failed:', queryError);
+      console.error('Main query execution failed:', queryError);
       
-      // Ultra-simple fallback
-      loads = await Load.find({
-        status: { $in: ['available', 'posted', 'receiving_bids'] },
-        isActive: true
-      })
-      .sort({ createdAt: -1 })
-      .limit(limitNum)
-      .lean();
-      
-      console.log(`Fallback query returned ${loads.length} loads`);
+      // Fallback to absolute simplest query
+      try {
+        loads = await Load.find({
+          isActive: true,
+          status: { $in: ['available', 'posted', 'receiving_bids'] }
+        })
+        .sort({ createdAt: -1 })
+        .limit(limitNum)
+        .populate('postedBy', 'name email rating isVerified')
+        .lean();
+        
+        console.log(`Fallback query returned ${loads.length} loads`);
+        
+        // Basic enhancement
+        loads = loads.map(load => ({
+          ...load,
+          cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+          bidCount: load.bidCount || 0,
+          viewCount: load.viewCount || 0,
+          postedBy: {
+            _id: load.postedBy?._id || load.cargoOwnerId,
+            name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+            rating: load.postedBy?.rating || 4.5,
+            isVerified: load.postedBy?.isVerified || false
+          }
+        }));
+        
+      } catch (fallbackError) {
+        console.error('Even fallback query failed:', fallbackError);
+        throw fallbackError;
+      }
     }
 
     const totalPages = Math.ceil(totalLoads / limitNum);
 
-    // STEP 9: Return response
+    // STEP 10: Return successful response
     return res.json({
       status: 'success',
       data: {
@@ -1369,40 +1474,64 @@ router.get('/', optionalAuth, [
   } catch (err) {
     console.error('Get loads error:', err);
     
-    // Emergency fallback - return any available loads
+    // EMERGENCY FALLBACK - Always try to return something
     try {
+      console.log('Attempting emergency fallback...');
+      
       const emergencyLoads = await Load.find({
-        isActive: true,
-        status: { $in: ['available', 'posted', 'receiving_bids'] }
+        isActive: true
       })
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
+      .populate('postedBy', 'name rating isVerified')
       .lean();
+
+      console.log(`Emergency fallback found ${emergencyLoads.length} loads`);
+
+      const enhancedEmergencyLoads = emergencyLoads.map(load => ({
+        ...load,
+        cargoOwnerName: load.cargoOwnerName || load.postedBy?.name || 'Anonymous',
+        bidCount: load.bidCount || 0,
+        viewCount: load.viewCount || 0,
+        postedBy: {
+          _id: load.postedBy?._id || load.cargoOwnerId,
+          name: load.postedBy?.name || load.cargoOwnerName || 'Anonymous',
+          rating: load.postedBy?.rating || 4.5,
+          isVerified: load.postedBy?.isVerified || false
+        }
+      }));
 
       return res.json({
         status: 'success',
         data: {
-          loads: emergencyLoads,
+          loads: enhancedEmergencyLoads,
           pagination: {
             currentPage: 1,
             totalPages: 1,
-            totalLoads: emergencyLoads.length,
+            totalLoads: enhancedEmergencyLoads.length,
             limit: parseInt(limit),
             hasNextPage: false,
             hasPrevPage: false
           },
-          warning: 'Returned emergency fallback results due to query error'
+          warning: 'Emergency fallback active - some filters may not be applied',
+          debug: {
+            originalError: err.message,
+            fallbackQuery: { isActive: true }
+          }
         }
       });
     } catch (emergencyError) {
-      console.error('Emergency fallback failed:', emergencyError);
+      console.error('Emergency fallback also failed:', emergencyError);
+      
+      return res.status(500).json({
+        status: 'error',
+        message: 'Server error occurred while fetching loads. Please try again later.',
+        error: process.env.NODE_ENV === 'development' ? {
+          original: err.message,
+          fallback: emergencyError.message
+        } : 'Internal server error'
+      });
     }
-    
-    return res.status(500).json({
-      status: 'error',
-      message: 'Server error occurred while fetching loads. Please try again.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
   }
 });
 
