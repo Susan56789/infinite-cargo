@@ -59,7 +59,7 @@ const LoadTracking = () => {
         }
 
         if (user?.userType !== 'cargo_owner') {
-          navigate('/cargo-owner-dashboard');
+          navigate('/cargo-dashboard');
           return;
         }
 
@@ -146,16 +146,11 @@ const LoadTracking = () => {
       return;
     }
 
-    // More robust way to get driverId - updated for your data structure
-    const driverId = trackingData?.job?.driverId; // Your DB has driverId in job object
+    
+    const driverId = trackingData?.job?.driverId; 
     const jobId = trackingData?.job?._id;
 
-    console.log('Debug - Rating submission:', {
-      driverId,
-      jobId,
-      trackingData: trackingData?.job,
-      driver: trackingData?.driver
-    });
+   
 
     if (!driverId) {
       setRatingError('Driver information not available');
@@ -300,18 +295,7 @@ const LoadTracking = () => {
     const hasDriverInfo = !!trackingData?.job?.driverId;
     const hasJobId = !!trackingData?.job?._id;
     
-    // Debug logging
-    console.log('Rating eligibility check:', {
-      hasCompletedJob,
-      notYetRated,
-      hasDriverInfo,
-      hasJobId,
-      jobStatus: trackingData?.job?.status,
-      jobRating: trackingData?.job?.rating,
-      driverId: trackingData?.job?.driverId,
-      jobId: trackingData?.job?._id,
-      canRate: hasCompletedJob && notYetRated && hasDriverInfo && hasJobId
-    });
+    
     
     return hasCompletedJob && notYetRated && hasDriverInfo && hasJobId;
   };
@@ -394,7 +378,7 @@ const LoadTracking = () => {
           <div className="flex justify-between items-center py-6">
             <div className="flex items-center space-x-4">
               <button 
-                onClick={() => navigate('/cargo-owner-dashboard')}
+                onClick={() => navigate('/cargo-dashboard')}
                 className="text-blue-600 hover:text-blue-800 flex items-center space-x-2"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -430,19 +414,6 @@ const LoadTracking = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Debug Panel - Remove this in production */}
-        {process.env.NODE_ENV === 'development' && trackingData && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-            <h4 className="font-medium text-yellow-800 mb-2">Debug Info</h4>
-            <div className="text-sm text-yellow-700 space-y-1">
-              <div>Job Status: {trackingData?.job?.status}</div>
-              <div>Job Rating: {trackingData?.job?.rating || 'None'}</div>
-              <div>Driver ID: {trackingData?.driver?._id || trackingData?.job?.driverId || 'None'}</div>
-              <div>Job ID: {trackingData?.job?._id || 'None'}</div>
-              <div>Can Rate: {canRateDriver() ? 'Yes' : 'No'}</div>
-            </div>
-          </div>
-        )}
 
         {/* Current Status Card */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
@@ -778,7 +749,7 @@ const LoadTracking = () => {
                 </p>
                 <div className="space-y-2">
                   <a 
-                    href={`tel:${trackingData?.supportContact?.phone || '+254700000000'}`}
+                    href={`tel:${trackingData?.supportContact?.phone || '+254723139610'}`}
                     className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"
                   >
                     <Phone className="w-4 h-4" />

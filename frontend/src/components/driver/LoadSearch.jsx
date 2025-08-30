@@ -628,7 +628,6 @@ const LoadSearch = () => {
 
       const url = `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`;
       
-
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
