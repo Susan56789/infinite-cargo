@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   RefreshCw, Users, User, DollarSign, Truck, Star, 
   Phone, MapPin, CheckCircle2, XCircle, Loader2, Clock,
-  AlertCircle, MessageSquare, Calendar
+  AlertCircle, MessageSquare, Calendar, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 const BidsTab = ({
@@ -16,6 +16,15 @@ const BidsTab = ({
   API_BASE_URL, 
   getAuthHeaders 
 }) => {
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const BIDS_PER_PAGE = 10;
+  
+  // Reset to first page when bids change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [bids]);
   
   const handleAcceptBid = async (bid) => {
     const confirmMessage = `Are you sure you want to accept this bid?\n\nDriver: ${bid.driverInfo?.name}\nAmount: ${formatCurrency(bid.bidAmount)}\n\nThis will:\n• Assign the load to this driver\n• Create an active job\n• Reject all other bids\n• Notify the driver`;
@@ -308,8 +317,70 @@ const BidsTab = ({
     return 'normal';
   };
 
-  // Validate bids array
-  const validBids = Array.isArray(bids) ? bids.filter(bid => bid && bid._id) : [];
+  // Validate and sort bids (latest first)
+  const validBids = Array.isArray(bids) ? 
+    bids.filter(bid => bid && bid._id)
+        .sort((a, b) => {
+          // Pending bids first
+          if (a.status === 'pending' && b.status !== 'pending') return -1;
+          if (a.status !== 'pending' && b.status === 'pending') return 1;
+          
+          // Then by creation date (newest first)
+          try {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+          } catch (error) {
+            console.warn('Error sorting bids by date:', error);
+            return 0;
+          }
+        }) : [];
+
+  // Calculate pagination
+  const totalBids = validBids.length;
+  const totalPages = Math.ceil(totalBids / BIDS_PER_PAGE);
+  const startIndex = (currentPage - 1) * BIDS_PER_PAGE;
+  const endIndex = startIndex + BIDS_PER_PAGE;
+  const currentBids = validBids.slice(startIndex, endIndex);
+
+  // Pagination handlers
+  const goToPage = (page) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  };
+
+  const goToPrevious = () => goToPage(currentPage - 1);
+  const goToNext = () => goToPage(currentPage + 1);
+
+  // Generate page numbers for pagination
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisiblePages = 5;
+    
+    if (totalPages <= maxVisiblePages) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      const start = Math.max(1, currentPage - 2);
+      const end = Math.min(totalPages, start + maxVisiblePages - 1);
+      
+      if (start > 1) {
+        pages.push(1);
+        if (start > 2) pages.push('...');
+      }
+      
+      for (let i = start; i <= end; i++) {
+        pages.push(i);
+      }
+      
+      if (end < totalPages) {
+        if (end < totalPages - 1) pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
 
   return (
     <div className="space-y-6">
@@ -317,7 +388,16 @@ const BidsTab = ({
         <div>
           <h3 className="text-lg font-semibold text-gray-900">Received Bids</h3>
           <p className="text-sm text-gray-600 mt-1">
-            {validBids.length > 0 ? `${validBids.length} bid${validBids.length !== 1 ? 's' : ''} received` : 'No bids received yet'}
+            {totalBids > 0 ? (
+              <>
+                {totalBids} bid{totalBids !== 1 ? 's' : ''} received
+                {totalPages > 1 && (
+                  <span className="text-gray-500">
+                    {' • '}Showing {startIndex + 1}-{Math.min(endIndex, totalBids)} of {totalBids}
+                  </span>
+                )}
+              </>
+            ) : 'No bids received yet'}
           </p>
         </div>
         <button
@@ -369,7 +449,7 @@ const BidsTab = ({
             <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-600" />
             <p className="mt-2 text-gray-500">Loading bids...</p>
           </div>
-        ) : validBids.length === 0 ? (
+        ) : totalBids === 0 ? (
           <div className="text-center py-12">
             <Users className="mx-auto h-12 w-12 text-gray-400" />
             <h3 className="mt-2 text-sm font-medium text-gray-900">No bids yet</h3>
@@ -377,22 +457,9 @@ const BidsTab = ({
             <p className="mt-2 text-xs text-gray-400">Make sure your load is posted and visible to drivers.</p>
           </div>
         ) : (
-          // Sort bids by priority and status
-          [...validBids]
-            .sort((a, b) => {
-              // Pending bids first
-              if (a.status === 'pending' && b.status !== 'pending') return -1;
-              if (a.status !== 'pending' && b.status === 'pending') return 1;
-              
-              // Then by creation date (newest first)
-              try {
-                return new Date(b.createdAt) - new Date(a.createdAt);
-              } catch (error) {
-                console.warn('Error sorting bids by date:', error);
-                return 0;
-              }
-            })
-            .map(bid => {
+          <>
+            {/* Bid Cards */}
+            {currentBids.map(bid => {
               const priority = getBidPriority(bid);
               const timeSince = getTimeSinceBid(bid.createdAt);
               
@@ -653,7 +720,65 @@ const BidsTab = ({
                   </div>
                 </div>
               );
-            })
+            })}
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t pt-6">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700">
+                    Showing <span className="font-medium">{startIndex + 1}</span> to{' '}
+                    <span className="font-medium">{Math.min(endIndex, totalBids)}</span> of{' '}
+                    <span className="font-medium">{totalBids}</span> bids
+                  </span>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={goToPrevious}
+                    disabled={currentPage === 1}
+                    className="relative inline-flex items-center px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </button>
+
+                  {/* Page Numbers */}
+                  <div className="flex items-center space-x-1">
+                    {getPageNumbers().map((page, index) => (
+                      <React.Fragment key={index}>
+                        {page === '...' ? (
+                          <span className="px-3 py-2 text-sm text-gray-500">...</span>
+                        ) : (
+                          <button
+                            onClick={() => goToPage(page)}
+                            className={`relative inline-flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                              currentPage === page
+                                ? 'z-10 bg-blue-600 text-white border-blue-600'
+                                : 'text-gray-500 bg-white border border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={goToNext}
+                    disabled={currentPage === totalPages}
+                    className="relative inline-flex items-center px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
