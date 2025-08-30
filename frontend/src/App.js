@@ -42,6 +42,7 @@ const DriverVehiclesPage = lazy(() => import('./components/driver/DriverVehicles
 const DriverBidsPage = lazy(() => import('./components/driver/DriverBidsPage'));
 const BidDetails = lazy(() => import('./components/driver/BidDetails'));
 const LoadTracking = lazy (()=> import('./components/cargoowner/LoadTracking'));
+const LoadBidsPage = lazy(() => import('./components/cargoowner/LoadBidsPage'));
 
 // Core Functionality Pages
 const LoadSearch = lazy(() => import('./components/driver/LoadSearch'));
@@ -299,6 +300,21 @@ function App() {
                     </>
                   }
                 />
+<Route
+path="/loads/:id/bids"
+element={
+  <>
+    <SEOHelmet 
+      title="Load Bids"
+      description="View and manage bids placed on your cargo load. Compare offers from drivers, communicate, and select the best bid for your transport needs."
+      keywords="load bids, manage bids, cargo offers, driver bids"
+      canonicalUrl="https://infinitecargo.co.ke/loads/:id/bids"
+    />
+    <LoadBidsPage />
+  </>
+} 
+/> 
+
                  <Route 
                   path="/driver/earnings"
                   element={
