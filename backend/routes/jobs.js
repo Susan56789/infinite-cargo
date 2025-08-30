@@ -179,6 +179,133 @@ router.get('/driver/completed', auth, jobsLimiter, [
     });
   }
 });
+// @route   GET /api/jobs/driver/earnings
+// @desc    Get driver earnings summary
+// @access  Private (Driver only)
+router.get('/driver/earnings', auth, jobsLimiter, [
+  query('period').optional().isIn(['week', 'month', 'quarter', 'year']),
+  query('year').optional().isInt({ min: 2020, max: 2030 }),
+  query('month').optional().isInt({ min: 1, max: 12 })
+], async (req, res) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only drivers can view earnings'
+      });
+    }
+
+    const { period = 'month', year, month } = req.query;
+    const driverId = new mongoose.Types.ObjectId(req.user.id);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const bookingsCollection = db.collection('bookings');
+
+    const now = new Date();
+    let startDate, endDate;
+
+    // Set date ranges
+    switch (period) {
+      case 'week':
+        startDate = new Date(now);
+        startDate.setDate(now.getDate() - 7);
+        endDate = now;
+        break;
+      case 'month':
+        if (year && month) {
+          startDate = new Date(year, month - 1, 1);
+          endDate = new Date(year, month, 0);
+        } else {
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        }
+        break;
+      case 'quarter':
+        const quarter = Math.floor(now.getMonth() / 3);
+        startDate = new Date(now.getFullYear(), quarter * 3, 1);
+        endDate = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
+        break;
+      case 'year':
+        const targetYear = year || now.getFullYear();
+        startDate = new Date(targetYear, 0, 1);
+        endDate = new Date(targetYear, 11, 31);
+        break;
+    }
+
+    // Get earnings data
+    const earnings = await bookingsCollection.aggregate([
+      {
+        $match: {
+          driverId,
+          status: 'completed',
+          completedAt: { $gte: startDate, $lte: endDate },
+          totalAmount: { $exists: true, $ne: null, $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$completedAt' },
+            month: { $month: '$completedAt' },
+            day: { $dayOfMonth: '$completedAt' }
+          },
+          dailyEarnings: { $sum: '$totalAmount' },
+          jobCount: { $sum: 1 },
+          jobs: { $push: {
+            _id: '$_id',
+            title: '$title',
+            amount: '$totalAmount',
+            completedAt: '$completedAt'
+          }}
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ]).toArray();
+
+    // Calculate summary
+    const totalEarnings = earnings.reduce((sum, day) => sum + day.dailyEarnings, 0);
+    const totalJobs = earnings.reduce((sum, day) => sum + day.jobCount, 0);
+
+    res.json({
+      status: 'success',
+      data: {
+        period,
+        dateRange: { startDate, endDate },
+        summary: {
+          totalEarnings: Math.round(totalEarnings * 100) / 100,
+          totalJobs,
+          avgEarningsPerJob: totalJobs > 0 ? Math.round((totalEarnings / totalJobs) * 100) / 100 : 0,
+          avgEarningsPerDay: earnings.length > 0 ? Math.round((totalEarnings / earnings.length) * 100) / 100 : 0
+        },
+        dailyBreakdown: earnings.map(day => ({
+          date: `${day._id.year}-${String(day._id.month).padStart(2, '0')}-${String(day._id.day).padStart(2, '0')}`,
+          earnings: Math.round(day.dailyEarnings * 100) / 100,
+          jobCount: day.jobCount,
+          jobs: day.jobs
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Get driver earnings error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching earnings',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // @route   GET /api/jobs/driver/all
 // @desc    Get all jobs for current driver (active, completed, cancelled)
@@ -579,6 +706,294 @@ router.put('/:id/status', auth, jobsLimiter, [
   }
 });
 
+// @route   GET /api/loads/:id/tracking
+// @desc    Get load tracking details for cargo owner
+// @access  Private (Cargo Owner only)
+router.get('/loads/:id/tracking', auth, jobsLimiter, async (req, res) => {
+  try {
+    const { id: loadId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(loadId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid load ID'
+      });
+    }
+
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Cargo owner account required.'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
+    const bookingsCollection = db.collection('bookings');
+    const driversCollection = db.collection('drivers');
+
+    // First, find the load and verify ownership
+    const load = await loadsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(loadId),
+      cargoOwnerId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found or not authorized'
+      });
+    }
+
+    // Find the associated booking/job
+    const job = await bookingsCollection.findOne({
+      loadId: new mongoose.Types.ObjectId(loadId)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'No active job found for this load'
+      });
+    }
+
+    // Get driver details
+    const driver = job.driverId ? await driversCollection.findOne(
+      { _id: job.driverId },
+      { 
+        projection: { 
+          name: 1, 
+          phone: 1, 
+          vehicleType: 1, 
+          vehicleNumber: 1,
+          'driverProfile.rating': 1,
+          'driverProfile.totalJobs': 1
+        } 
+      }
+    ) : null;
+
+    // Calculate estimated progress based on status
+    const getProgressPercentage = (status) => {
+      const statusProgress = {
+        'assigned': 5,
+        'accepted': 10,
+        'confirmed': 15,
+        'in_progress': 25,
+        'en_route_pickup': 35,
+        'arrived_pickup': 45,
+        'picked_up': 55,
+        'in_transit': 75,
+        'arrived_delivery': 90,
+        'delivered': 95,
+        'completed': 100
+      };
+      return statusProgress[status] || 0;
+    };
+
+    // Format tracking data
+    const trackingData = {
+      // Load information
+      load: {
+        _id: load._id,
+        title: load.title,
+        description: load.description,
+        cargoType: load.cargoType,
+        weight: load.weight,
+        dimensions: load.dimensions,
+        pickupLocation: load.origin,
+        deliveryLocation: load.destination,
+        pickupDate: load.pickupDate,
+        deliveryDate: load.deliveryDate,
+        specialRequirements: load.specialRequirements,
+        value: load.value,
+        currency: load.currency || 'KES'
+      },
+
+      // Job/booking information
+      job: {
+        _id: job._id,
+        status: job.status,
+        statusDisplay: job.status?.replace(/_/g, ' ').toUpperCase(),
+        assignedAt: job.assignedAt || job.acceptedAt,
+        startedAt: job.startedAt,
+        actualPickupDate: job.actualPickupDate,
+        actualDeliveryDate: job.actualDeliveryDate,
+        completedAt: job.completedAt,
+        totalAmount: job.totalAmount || job.agreedAmount,
+        currency: job.currency || 'KES',
+        estimatedDistance: job.estimatedDistance,
+        estimatedDuration: job.estimatedDuration,
+        actualDistance: job.actualDistance,
+        actualDuration: job.actualDuration
+      },
+
+      // Driver information
+      driver: driver ? {
+        name: driver.name,
+        phone: driver.phone,
+        vehicleType: driver.vehicleType,
+        vehicleNumber: driver.vehicleNumber,
+        rating: driver.driverProfile?.rating || 0,
+        totalJobs: driver.driverProfile?.totalJobs || 0
+      } : null,
+
+      // Progress tracking
+      progress: {
+        percentage: getProgressPercentage(job.status),
+        currentStatus: job.status,
+        statusDisplay: job.status?.replace(/_/g, ' ').toUpperCase(),
+        isCompleted: job.status === 'completed',
+        isInTransit: ['picked_up', 'in_transit', 'arrived_delivery'].includes(job.status)
+      },
+
+      // Timeline with driver notes
+      timeline: (job.trackingUpdates || []).map(update => ({
+        _id: update._id,
+        status: update.status,
+        message: update.message || update.notes,
+        location: update.location,
+        timestamp: update.timestamp,
+        isStatusUpdate: !!update.status,
+        isDriverNote: !!update.message || !!update.notes
+      })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+
+      // Status history
+      statusHistory: (job.statusHistory || []).map(history => ({
+        status: history.status,
+        timestamp: history.timestamp,
+        statusDisplay: history.status?.replace(/_/g, ' ').toUpperCase()
+      })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+
+      // Latest location if available
+      currentLocation: job.trackingUpdates?.length > 0 ? 
+        job.trackingUpdates
+          .filter(update => update.location)
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0]?.location
+        : null,
+
+      // Estimated arrival
+      estimatedArrival: job.deliveryDate || load.deliveryDate,
+      
+      // Contact information
+      supportContact: {
+        phone: process.env.SUPPORT_PHONE || '+254700000000',
+        email: process.env.SUPPORT_EMAIL || 'support@infinitecargo.com'
+      }
+    };
+
+    res.json({
+      status: 'success',
+      data: trackingData
+    });
+
+  } catch (error) {
+    console.error('Get load tracking error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching tracking information',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/loads/:id/tracking/live
+// @desc    Get real-time tracking updates (for polling/websocket)
+// @access  Private (Cargo Owner only)
+router.get('/loads/:id/tracking/live', auth, jobsLimiter, async (req, res) => {
+  try {
+    const { id: loadId } = req.params;
+    const { lastUpdate } = req.query; // Timestamp of last received update
+
+    if (!mongoose.Types.ObjectId.isValid(loadId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid load ID'
+      });
+    }
+
+    if (req.user.userType !== 'cargo_owner') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Cargo owner account required.'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const loadsCollection = db.collection('loads');
+    const bookingsCollection = db.collection('bookings');
+
+    // Verify load ownership
+    const load = await loadsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(loadId),
+      cargoOwnerId: new mongoose.Types.ObjectId(req.user.id)
+    });
+
+    if (!load) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Load not found or not authorized'
+      });
+    }
+
+    // Find the job
+    const job = await bookingsCollection.findOne({
+      loadId: new mongoose.Types.ObjectId(loadId)
+    });
+
+    if (!job) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'No job found for this load'
+      });
+    }
+
+    // Get updates since lastUpdate timestamp
+    let query = {};
+    if (lastUpdate) {
+      query = {
+        timestamp: { $gt: new Date(lastUpdate) }
+      };
+    }
+
+    // Get recent updates
+    const recentUpdates = (job.trackingUpdates || [])
+      .filter(update => {
+        if (!lastUpdate) return true;
+        return new Date(update.timestamp) > new Date(lastUpdate);
+      })
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 10); // Limit to 10 most recent
+
+    res.json({
+      status: 'success',
+      data: {
+        hasUpdates: recentUpdates.length > 0,
+        currentStatus: job.status,
+        statusDisplay: job.status?.replace(/_/g, ' ').toUpperCase(),
+        lastUpdateTime: job.updatedAt,
+        updates: recentUpdates.map(update => ({
+          _id: update._id,
+          status: update.status,
+          message: update.message || update.notes,
+          location: update.location,
+          timestamp: update.timestamp,
+          type: update.status ? 'status_change' : 'driver_note'
+        })),
+        currentLocation: recentUpdates.find(update => update.location)?.location || null
+      }
+    });
+
+  } catch (error) {
+    console.error('Get live tracking error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching live tracking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
 // @route   POST /api/jobs/:id/tracking
 // @desc    Add tracking update to job
 // @access  Private (Driver only)
@@ -669,132 +1084,6 @@ router.post('/:id/tracking', auth, jobsLimiter, [
   }
 });
 
-// @route   GET /api/jobs/driver/earnings
-// @desc    Get driver earnings summary
-// @access  Private (Driver only)
-router.get('/driver/earnings', auth, jobsLimiter, [
-  query('period').optional().isIn(['week', 'month', 'quarter', 'year']),
-  query('year').optional().isInt({ min: 2020, max: 2030 }),
-  query('month').optional().isInt({ min: 1, max: 12 })
-], async (req, res) => {
-  try {
-    if (req.user.userType !== 'driver') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only drivers can view earnings'
-      });
-    }
 
-    const { period = 'month', year, month } = req.query;
-    const driverId = new mongoose.Types.ObjectId(req.user.id);
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const bookingsCollection = db.collection('bookings');
-
-    const now = new Date();
-    let startDate, endDate;
-
-    // Set date ranges
-    switch (period) {
-      case 'week':
-        startDate = new Date(now);
-        startDate.setDate(now.getDate() - 7);
-        endDate = now;
-        break;
-      case 'month':
-        if (year && month) {
-          startDate = new Date(year, month - 1, 1);
-          endDate = new Date(year, month, 0);
-        } else {
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        }
-        break;
-      case 'quarter':
-        const quarter = Math.floor(now.getMonth() / 3);
-        startDate = new Date(now.getFullYear(), quarter * 3, 1);
-        endDate = new Date(now.getFullYear(), (quarter + 1) * 3, 0);
-        break;
-      case 'year':
-        const targetYear = year || now.getFullYear();
-        startDate = new Date(targetYear, 0, 1);
-        endDate = new Date(targetYear, 11, 31);
-        break;
-    }
-
-    // Get earnings data
-    const earnings = await bookingsCollection.aggregate([
-      {
-        $match: {
-          driverId,
-          status: 'completed',
-          completedAt: { $gte: startDate, $lte: endDate },
-          totalAmount: { $exists: true, $ne: null, $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$completedAt' },
-            month: { $month: '$completedAt' },
-            day: { $dayOfMonth: '$completedAt' }
-          },
-          dailyEarnings: { $sum: '$totalAmount' },
-          jobCount: { $sum: 1 },
-          jobs: { $push: {
-            _id: '$_id',
-            title: '$title',
-            amount: '$totalAmount',
-            completedAt: '$completedAt'
-          }}
-        }
-      },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
-      }
-    ]).toArray();
-
-    // Calculate summary
-    const totalEarnings = earnings.reduce((sum, day) => sum + day.dailyEarnings, 0);
-    const totalJobs = earnings.reduce((sum, day) => sum + day.jobCount, 0);
-
-    res.json({
-      status: 'success',
-      data: {
-        period,
-        dateRange: { startDate, endDate },
-        summary: {
-          totalEarnings: Math.round(totalEarnings * 100) / 100,
-          totalJobs,
-          avgEarningsPerJob: totalJobs > 0 ? Math.round((totalEarnings / totalJobs) * 100) / 100 : 0,
-          avgEarningsPerDay: earnings.length > 0 ? Math.round((totalEarnings / earnings.length) * 100) / 100 : 0
-        },
-        dailyBreakdown: earnings.map(day => ({
-          date: `${day._id.year}-${String(day._id.month).padStart(2, '0')}-${String(day._id.day).padStart(2, '0')}`,
-          earnings: Math.round(day.dailyEarnings * 100) / 100,
-          jobCount: day.jobCount,
-          jobs: day.jobs
-        }))
-      }
-    });
-
-  } catch (error) {
-    console.error('Get driver earnings error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching earnings',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 module.exports = router;

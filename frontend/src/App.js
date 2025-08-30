@@ -41,6 +41,7 @@ const DriverEarnings = lazy(() => import('./components/driver/DriverEarnings'));
 const DriverVehiclesPage = lazy(() => import('./components/driver/DriverVehiclesPage'));
 const DriverBidsPage = lazy(() => import('./components/driver/DriverBidsPage'));
 const BidDetails = lazy(() => import('./components/driver/BidDetails'));
+const LoadTracking = lazy (()=> import('./components/cargoowner/LoadTracking'));
 
 // Core Functionality Pages
 const LoadSearch = lazy(() => import('./components/driver/LoadSearch'));
@@ -339,6 +340,21 @@ function App() {
                       <CargoOwnerDashboard />
                     </>
                   } 
+                />
+
+                <Route
+                path="/loads/:id/tracking" 
+                element={
+                  <>
+                  <SEOHelmet 
+                    title="Load Tracking"
+                    description="Track your cargo load in real-time. Get updates on pickup, transit, and delivery status directly from your dashboard."
+                    keywords="load tracking, cargo status, real-time tracking, shipment updates"
+                    canonicalUrl="https://infinitecargo.co.ke/loads/:id/tracking"
+                  />
+                  <LoadTracking />
+                  </>
+                }
                 />
 
                 <Route
