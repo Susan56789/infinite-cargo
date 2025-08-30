@@ -32,7 +32,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build && npm run generate-sitemap",
+   "build": "react-scripts build && npm run generate-sitemap && echo '/*    /index.html   200' > build/_redirects",
     "generate-sitemap": "node scripts/generate-sitemap.js",
     "optimize-images": "node scripts/optimize-images.js",
     "deploy": "npm run build",
