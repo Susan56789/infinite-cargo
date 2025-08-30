@@ -3,7 +3,8 @@ const corsHandler = (req, res, next) => {
     'http://localhost:3000',
     'http://localhost:5173',
     'https://infinitecargo.co.ke',
-    'https://www.infinitecargo.co.ke'
+    'https://www.infinitecargo.co.ke',
+    'https://infinite-cargo.onrender.com'
   ];
   
   const origin = req.headers.origin;
