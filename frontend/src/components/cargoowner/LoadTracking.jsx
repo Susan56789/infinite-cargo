@@ -18,7 +18,8 @@ import {
   Timer,
   Weight,
   Package2,
-  DollarSign
+  DollarSign,
+  Send
 } from 'lucide-react';
 import { authManager, isAuthenticated, getUser, getAuthHeader } from '../../utils/auth';
 
@@ -32,6 +33,13 @@ const LoadTracking = () => {
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [authCheckComplete, setAuthCheckComplete] = useState(false);
+  
+  // Rating modal state
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [review, setReview] = useState('');
+  const [submittingRating, setSubmittingRating] = useState(false);
+  const [ratingError, setRatingError] = useState('');
 
   // Authentication check
   useEffect(() => {
@@ -73,7 +81,6 @@ const LoadTracking = () => {
       else setLoading(true);
       setError('');
 
-      // Use the same auth utility as the driver component
       const authHeader = getAuthHeader();
       if (!authHeader.Authorization) {
         throw new Error('No authorization token available');
@@ -132,6 +139,94 @@ const LoadTracking = () => {
     }
   }, [id, lastUpdateTime, fetchTrackingData]);
 
+  // Submit driver rating
+  const submitRating = async () => {
+    if (rating === 0) {
+      setRatingError('Please select a rating');
+      return;
+    }
+
+    // More robust way to get driverId - updated for your data structure
+    const driverId = trackingData?.job?.driverId; // Your DB has driverId in job object
+    const jobId = trackingData?.job?._id;
+
+    console.log('Debug - Rating submission:', {
+      driverId,
+      jobId,
+      trackingData: trackingData?.job,
+      driver: trackingData?.driver
+    });
+
+    if (!driverId) {
+      setRatingError('Driver information not available');
+      console.error('Driver ID missing. Available data:', {
+        job: trackingData?.job,
+        driver: trackingData?.driver
+      });
+      return;
+    }
+
+    if (!jobId) {
+      setRatingError('Job information not available');
+      console.error('Job ID missing. Job data:', trackingData?.job);
+      return;
+    }
+
+    setSubmittingRating(true);
+    setRatingError('');
+
+    try {
+      const authHeader = getAuthHeader();
+      const response = await fetch(`https://infinite-cargo-api.onrender.com/api/drivers/rate/${driverId}`, {
+        method: 'POST',
+        headers: {
+          ...authHeader,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          rating: rating,
+          review: review.trim(),
+          bookingId: jobId
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to submit rating');
+      }
+
+      if (data.status === 'success') {
+        // Update local state to reflect the rating has been submitted
+        setTrackingData(prev => ({
+          ...prev,
+          job: {
+            ...prev.job,
+            rating: rating,
+            review: review.trim(),
+            ratedAt: new Date().toISOString()
+          },
+          driver: {
+            ...prev.driver,
+            rating: data.data.newAverageRating,
+            totalRatings: data.data.totalRatings
+          }
+        }));
+        
+        setShowRatingModal(false);
+        setRating(0);
+        setReview('');
+      } else {
+        throw new Error(data.message || 'Failed to submit rating');
+      }
+    } catch (err) {
+      console.error('Rating submission error:', err);
+      setRatingError(err.message || 'Failed to submit rating');
+    } finally {
+      setSubmittingRating(false);
+    }
+  };
+
   // Initial load with auth check
   useEffect(() => {
     if (authCheckComplete) {
@@ -143,7 +238,7 @@ const LoadTracking = () => {
   useEffect(() => {
     if (!autoRefreshEnabled || !trackingData) return;
 
-    const interval = setInterval(checkLiveUpdates, 30000); // Check every 30 seconds
+    const interval = setInterval(checkLiveUpdates, 30000);
     return () => clearInterval(interval);
   }, [autoRefreshEnabled, trackingData, checkLiveUpdates]);
 
@@ -197,6 +292,48 @@ const LoadTracking = () => {
     return `${currency} ${parseFloat(amount).toLocaleString()}`;
   };
 
+  // Fixed canRateDriver function - now works with your data structure
+  const canRateDriver = () => {
+    const hasCompletedJob = trackingData?.job?.status === 'completed';
+    const notYetRated = !trackingData?.job?.rating;
+    // Check for driverId in job object (which exists in your DB)
+    const hasDriverInfo = !!trackingData?.job?.driverId;
+    const hasJobId = !!trackingData?.job?._id;
+    
+    // Debug logging
+    console.log('Rating eligibility check:', {
+      hasCompletedJob,
+      notYetRated,
+      hasDriverInfo,
+      hasJobId,
+      jobStatus: trackingData?.job?.status,
+      jobRating: trackingData?.job?.rating,
+      driverId: trackingData?.job?.driverId,
+      jobId: trackingData?.job?._id,
+      canRate: hasCompletedJob && notYetRated && hasDriverInfo && hasJobId
+    });
+    
+    return hasCompletedJob && notYetRated && hasDriverInfo && hasJobId;
+  };
+
+  const renderStars = (currentRating, interactive = false, size = 'w-5 h-5') => {
+    return (
+      <div className="flex space-x-1">
+        {[1, 2, 3, 4, 5].map((star) => (
+          <Star
+            key={star}
+            className={`${size} cursor-pointer transition-colors ${
+              star <= currentRating 
+                ? 'text-yellow-400 fill-current' 
+                : 'text-gray-300 hover:text-yellow-300'
+            }`}
+            onClick={interactive ? () => setRating(star) : undefined}
+          />
+        ))}
+      </div>
+    );
+  };
+
   // Show loading while auth is being checked
   if (!authCheckComplete) {
     return (
@@ -235,7 +372,7 @@ const LoadTracking = () => {
               Try Again
             </button>
             <button 
-              onClick={() => navigate('/cargo-owner-dashboard')} 
+              onClick={() => navigate('/cargo-dashboard')} 
               className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition"
             >
               Back to Dashboard
@@ -293,6 +430,20 @@ const LoadTracking = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Debug Panel - Remove this in production */}
+        {process.env.NODE_ENV === 'development' && trackingData && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+            <h4 className="font-medium text-yellow-800 mb-2">Debug Info</h4>
+            <div className="text-sm text-yellow-700 space-y-1">
+              <div>Job Status: {trackingData?.job?.status}</div>
+              <div>Job Rating: {trackingData?.job?.rating || 'None'}</div>
+              <div>Driver ID: {trackingData?.driver?._id || trackingData?.job?.driverId || 'None'}</div>
+              <div>Job ID: {trackingData?.job?._id || 'None'}</div>
+              <div>Can Rate: {canRateDriver() ? 'Yes' : 'No'}</div>
+            </div>
+          </div>
+        )}
+
         {/* Current Status Card */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <div className="flex items-center justify-between">
@@ -331,6 +482,46 @@ const LoadTracking = () => {
               <span>Delivered</span>
             </div>
           </div>
+
+          {/* Rate Driver Button - Show only if job is completed and not yet rated */}
+          {canRateDriver() && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-900">Job Completed!</h4>
+                  <p className="text-sm text-gray-600">How was your experience with the driver?</p>
+                </div>
+                <button
+                  onClick={() => setShowRatingModal(true)}
+                  className="flex items-center space-x-2 bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 transition"
+                >
+                  <Star className="w-4 h-4" />
+                  <span>Rate Driver</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Show existing rating if already rated */}
+          {job?.rating && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-900">Your Rating</h4>
+                  <div className="flex items-center space-x-2 mt-1">
+                    {renderStars(job.rating)}
+                    <span className="text-sm text-gray-600">({job.rating}/5)</span>
+                  </div>
+                  {job.review && (
+                    <p className="text-sm text-gray-600 mt-2">"{job.review}"</p>
+                  )}
+                </div>
+                <div className="text-right text-xs text-gray-500">
+                  Rated on {formatDateTime(job.ratedAt)}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -491,9 +682,19 @@ const LoadTracking = () => {
             {/* Driver Information */}
             {driver && (
               <div className="bg-white rounded-lg shadow p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Assigned Driver</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Assigned Driver</h3>
+                  {canRateDriver() && (
+                    <button
+                      onClick={() => setShowRatingModal(true)}
+                      className="text-sm bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full hover:bg-yellow-200 transition"
+                    >
+                      Rate Driver
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-3">
-                                    <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-3">
                     <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
                       <User className="w-5 h-5 text-blue-600" />
                     </div>
@@ -502,7 +703,7 @@ const LoadTracking = () => {
                       <div className="flex items-center space-x-2">
                         <Star className="w-4 h-4 text-yellow-400" />
                         <span className="text-sm text-gray-600">
-                          {driver.rating?.toFixed(1) || 'No rating'} ({driver.totalJobs || 0} jobs)
+                          {driver.rating?.toFixed(1) || 'No rating'} ({driver.totalRatings || driver.totalJobs || 0} ratings)
                         </span>
                       </div>
                     </div>
@@ -521,6 +722,7 @@ const LoadTracking = () => {
                       </span>
                     </div>
                   </div>
+                  
                 </div>
               </div>
             )}
@@ -635,6 +837,111 @@ const LoadTracking = () => {
           </p>
         </div>
       </div>
+
+      {/* Rating Modal */}
+      {showRatingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Rate Your Driver</h3>
+              <button 
+                onClick={() => {
+                  setShowRatingModal(false);
+                  setRating(0);
+                  setReview('');
+                  setRatingError('');
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Driver Info */}
+            <div className="flex items-center space-x-3 mb-6 p-3 bg-gray-50 rounded-lg">
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <User className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">{driver?.name}</p>
+                <p className="text-sm text-gray-600">{driver?.vehicleType}</p>
+              </div>
+            </div>
+
+            {/* Rating Stars */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Rate this driver (1-5 stars)
+              </label>
+              <div className="flex justify-center">
+                {renderStars(rating, true, 'w-8 h-8')}
+              </div>
+              <p className="text-center text-sm text-gray-500 mt-2">
+                {rating === 0 && 'Click to rate'}
+                {rating === 1 && 'Poor'}
+                {rating === 2 && 'Fair'}
+                {rating === 3 && 'Good'}
+                {rating === 4 && 'Very Good'}
+                {rating === 5 && 'Excellent'}
+              </p>
+            </div>
+
+            {/* Review Text */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Review (Optional)
+              </label>
+              <textarea
+                value={review}
+                onChange={(e) => setReview(e.target.value)}
+                placeholder="Share your experience with this driver..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                rows={3}
+                maxLength={500}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {review.length}/500 characters
+              </p>
+            </div>
+
+            {/* Error Message */}
+            {ratingError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md">
+                <p className="text-sm text-red-600">{ratingError}</p>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowRatingModal(false);
+                  setRating(0);
+                  setReview('');
+                  setRatingError('');
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitRating}
+                disabled={submittingRating || rating === 0}
+                className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {submittingRating ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>Submit Rating</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

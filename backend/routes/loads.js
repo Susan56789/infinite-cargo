@@ -1984,20 +1984,51 @@ router.get('/:id/tracking', auth, jobsLimiter, async (req, res) => {
       });
     }
 
-    // Get driver details
-    const driver = job.driverId ? await driversCollection.findOne(
-      { _id: job.driverId },
-      { 
-        projection: { 
-          name: 1, 
-          phone: 1, 
-          vehicleType: 1, 
-          vehicleNumber: 1,
-          'driverProfile.rating': 1,
-          'driverProfile.totalJobs': 1
-        } 
+    // Get driver details - FIXED LOGIC
+    let driverDetails = null;
+    if (job.driverId) {
+      // Try to get full driver profile
+      const driverDoc = await driversCollection.findOne(
+        { _id: job.driverId },
+        { 
+          projection: { 
+            name: 1, 
+            phone: 1, 
+            vehicleType: 1, 
+            vehicleNumber: 1,
+            'driverProfile.rating': 1,
+            'driverProfile.totalRatings': 1,
+            'driverProfile.totalJobs': 1
+          } 
+        }
+      );
+      
+      if (driverDoc) {
+        // Use data from driver document
+        driverDetails = {
+          _id: driverDoc._id,
+          name: driverDoc.name,
+          phone: driverDoc.phone,
+          vehicleType: driverDoc.vehicleType,
+          vehicleNumber: driverDoc.vehicleNumber,
+          rating: driverDoc.driverProfile?.rating || 0,
+          totalRatings: driverDoc.driverProfile?.totalRatings || 0,
+          totalJobs: driverDoc.driverProfile?.totalJobs || 0
+        };
+      } else if (job.driverInfo) {
+        // Fallback to embedded driver info (but include the driverId)
+        driverDetails = {
+          _id: job.driverId, // IMPORTANT: Include the driver ID
+          name: job.driverInfo.name,
+          phone: job.driverInfo.phone,
+          vehicleType: job.driverInfo.vehicleType,
+          vehicleNumber: job.driverInfo.vehicleNumber,
+          rating: job.driverInfo.rating || 0,
+          totalRatings: job.driverInfo.totalRatings || 0,
+          totalJobs: job.driverInfo.totalJobs || 0
+        };
       }
-    ) : null;
+    }
 
     // Calculate estimated progress based on status
     const getProgressPercentage = (status) => {
@@ -2036,9 +2067,10 @@ router.get('/:id/tracking', auth, jobsLimiter, async (req, res) => {
         currency: load.currency || 'KES'
       },
 
-      // Job/booking information
+      // Job/booking information - INCLUDE DRIVER ID
       job: {
         _id: job._id,
+        driverId: job.driverId, // IMPORTANT: Include driver ID in job object
         status: job.status,
         statusDisplay: job.status?.replace(/_/g, ' ').toUpperCase(),
         assignedAt: job.assignedAt || job.acceptedAt,
@@ -2051,18 +2083,15 @@ router.get('/:id/tracking', auth, jobsLimiter, async (req, res) => {
         estimatedDistance: job.estimatedDistance,
         estimatedDuration: job.estimatedDuration,
         actualDistance: job.actualDistance,
-        actualDuration: job.actualDuration
+        actualDuration: job.actualDuration,
+        // Include existing rating if any
+        rating: job.rating,
+        review: job.review,
+        ratedAt: job.ratedAt
       },
 
-      // Driver information
-      driver: driver ? {
-        name: driver.name,
-        phone: driver.phone,
-        vehicleType: driver.vehicleType,
-        vehicleNumber: driver.vehicleNumber,
-        rating: driver.driverProfile?.rating || 0,
-        totalJobs: driver.driverProfile?.totalJobs || 0
-      } : null,
+      // Driver information - WITH ID
+      driver: driverDetails,
 
       // Progress tracking
       progress: {
@@ -2074,21 +2103,21 @@ router.get('/:id/tracking', auth, jobsLimiter, async (req, res) => {
       },
 
       // Timeline with driver notes
-      timeline: (job.trackingUpdates || []).map(update => ({
+      timeline: (job.trackingUpdates || job.timeline || []).map(update => ({
         _id: update._id,
-        status: update.status,
-        message: update.message || update.notes,
+        status: update.status || update.event,
+        message: update.message || update.notes || update.description,
         location: update.location,
         timestamp: update.timestamp,
-        isStatusUpdate: !!update.status,
-        isDriverNote: !!update.message || !!update.notes
+        isStatusUpdate: !!(update.status || update.event),
+        isDriverNote: !!(update.message || update.notes)
       })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
 
       // Status history
-      statusHistory: (job.statusHistory || []).map(history => ({
-        status: history.status,
+      statusHistory: (job.statusHistory || job.timeline || []).map(history => ({
+        status: history.status || history.event,
         timestamp: history.timestamp,
-        statusDisplay: history.status?.replace(/_/g, ' ').toUpperCase()
+        statusDisplay: (history.status || history.event)?.replace(/_/g, ' ').toUpperCase()
       })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
 
       // Latest location if available
