@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -28,7 +28,23 @@ import {
   logout 
 } from '../../utils/auth';
 
-// BidForm Component - 
+// Hook for outside click detection
+const useOutsideClick = (ref, callback) => {
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (ref.current && !ref.current.contains(event.target)) {
+        callback();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [ref, callback]);
+};
+
+// BidForm Component
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   const [bidData, setBidData] = useState({
     bidAmount: '',
@@ -49,21 +65,22 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   });
 
   const [errors, setErrors] = useState({});
+  const formRef = useRef(null);
+
+  // Auto-close on outside click
+  useOutsideClick(formRef, onCancel);
 
   const validateForm = () => {
     const newErrors = {};
     
-    // Bid amount validation (must be at least 1 KES)
     if (!bidData.bidAmount || parseFloat(bidData.bidAmount) < 1) {
       newErrors.bidAmount = 'Bid amount must be at least 1 KES';
     }
     
-    // Check if bid amount is reasonable compared to budget
     if (load.budget && parseFloat(bidData.bidAmount) > parseFloat(load.budget) * 2) {
       newErrors.bidAmount = 'Bid amount seems unusually high compared to budget';
     }
     
-    // Proposed pickup date validation (ISO 8601 format required)
     if (!bidData.proposedPickupDate) {
       newErrors.proposedPickupDate = 'Valid proposed pickup date is required';
     } else {
@@ -75,7 +92,6 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
       }
     }
     
-    // Proposed delivery date validation (ISO 8601 format required)
     if (!bidData.proposedDeliveryDate) {
       newErrors.proposedDeliveryDate = 'Valid proposed delivery date is required';
     } else {
@@ -89,17 +105,14 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
       }
     }
 
-    // Message length validation (max 1000 characters)
     if (bidData.message && bidData.message.length > 1000) {
       newErrors.message = 'Message cannot exceed 1000 characters';
     }
 
-    // Cover letter length validation (max 2000 characters)
     if (bidData.coverLetter && bidData.coverLetter.length > 2000) {
       newErrors.coverLetter = 'Cover letter cannot exceed 2000 characters';
     }
 
-    // Vehicle type validation
     const validVehicleTypes = [
       'pickup', 'van', 'small_truck', 'medium_truck', 'large_truck', 
       'heavy_truck', 'trailer', 'refrigerated_truck', 'flatbed', 'container_truck'
@@ -108,7 +121,6 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
       newErrors.vehicleType = 'Invalid vehicle type selected';
     }
 
-    // Vehicle capacity validation (min 0.1 tonnes)
     if (!bidData.vehicleDetails.capacity || parseFloat(bidData.vehicleDetails.capacity) < 0.1) {
       newErrors.vehicleCapacity = 'Vehicle capacity must be at least 0.1 tonnes';
     }
@@ -122,9 +134,8 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
     
     if (!validateForm()) return;
 
-    //  Match backend API expectations exactly
     const bidPayload = {
-      load: load._id,  // Backend expects 'load' field
+      load: load._id,
       bidAmount: parseFloat(bidData.bidAmount),
       currency: bidData.currency,
       proposedPickupDate: bidData.proposedPickupDate,
@@ -181,7 +192,7 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   };
 
   return (
-    <div className="bg-gray-50 border rounded-lg p-4 mt-4">
+    <div ref={formRef} className="bg-gray-50 border rounded-lg p-4 mt-4 relative z-10">
       <div className="flex items-center justify-between mb-4">
         <h4 className="font-medium text-gray-900 flex items-center">
           <Plus className="w-4 h-4 mr-2" />
@@ -437,7 +448,16 @@ const LoadSearch = () => {
   const [bidStates, setBidStates] = useState({}); 
   const [successMessage, setSuccessMessage] = useState('');
   const [userBids, setUserBids] = useState(new Set()); 
-  const [bidsLoading, setBidsLoading] = useState(false); // Track bid fetch status
+  const [bidsLoading, setBidsLoading] = useState(false);
+  const [checkingBids, setCheckingBids] = useState({}); // Track individual load bid checks
+
+  // Refs for outside click detection
+  const modalRef = useRef(null);
+  const loginPromptRef = useRef(null);
+
+  // Auto-close modals on outside click
+  useOutsideClick(modalRef, () => setShowLoadModal(false));
+  useOutsideClick(loginPromptRef, () => setShowLoginPrompt(false));
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -525,7 +545,51 @@ const LoadSearch = () => {
     }
   };
 
-  //  Fetch user's existing bids to track which loads they've already bid on
+  // Check bid status for a single load
+  const checkBidStatusForLoad = async (loadId) => {
+    if (!isUserAuthenticated || user?.userType !== 'driver') {
+      return false;
+    }
+
+    try {
+      setCheckingBids(prev => ({ ...prev, [loadId]: true }));
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders()
+      };
+
+      const response = await fetch(`https://infinite-cargo-api.onrender.com/api/bids?loadId=${loadId}`, {
+        method: 'GET',
+        headers,
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 'success' && data.data && Array.isArray(data.data.bids)) {
+          const hasBid = data.data.bids.some(bid => 
+            bid.status !== 'withdrawn' && 
+            bid.status !== 'expired'
+          );
+          
+          if (hasBid) {
+            setUserBids(prev => new Set([...prev, loadId]));
+            return true;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Error checking bid status for load ${loadId}:`, error);
+    } finally {
+      setCheckingBids(prev => ({ ...prev, [loadId]: false }));
+    }
+    
+    return false;
+  };
+
+  // Fetch user's existing bids
   const fetchUserBids = async () => {
     try {
       setBidsLoading(true);
@@ -550,15 +614,13 @@ const LoadSearch = () => {
       if (response.ok) {
         const data = await response.json();
         if (data.status === 'success' && data.data && Array.isArray(data.data.bids)) {
-          // Extract load IDs that user has bid on
           const bidLoadIds = new Set(
             data.data.bids
-              .filter(bid => bid.load && (bid.status === 'pending' || bid.status === 'accepted'))
+              .filter(bid => bid.load && (bid.status === 'pending' || bid.status === 'accepted' || bid.status === 'submitted' || bid.status === 'under_review'))
               .map(bid => typeof bid.load === 'object' ? bid.load._id : bid.load)
           );
           
           setUserBids(bidLoadIds);
-         
         } else {
           setUserBids(new Set());
         }
@@ -574,7 +636,6 @@ const LoadSearch = () => {
     }
   };
 
-  //  Ensure user bids are fetched whenever auth status changes
   useEffect(() => {
     const initializeData = async () => {
       const authenticated = checkAuthStatus();
@@ -587,7 +648,6 @@ const LoadSearch = () => {
     initializeData();
   }, []);
 
-  //  Separate effect to fetch user bids when authentication status changes
   useEffect(() => {
     if (isUserAuthenticated && user?.userType === 'driver') {
       fetchUserBids();
@@ -611,21 +671,17 @@ const LoadSearch = () => {
       setLoading(true);
       setError('');
 
-      // Build query parameters
       const params = new URLSearchParams({
         page: page.toString(),
         limit: limit.toString()
       });
 
-      // Add search query if provided
       if (searchQuery && searchQuery.trim()) {
         params.append('search', searchQuery.trim());
       }
 
-      // Add filters only if they have values
       Object.entries(filters).forEach(([key, value]) => {
         if (value && value.toString().trim()) {
-          // Map frontend filter names to backend expected names
           const filterMap = {
             pickupLocation: 'pickupLocation',
             deliveryLocation: 'deliveryLocation', 
@@ -643,7 +699,6 @@ const LoadSearch = () => {
         }
       });
 
-      // Add default sorting
       params.append('sortBy', 'createdAt');
       params.append('sortOrder', 'desc');
 
@@ -687,7 +742,6 @@ const LoadSearch = () => {
         throw new Error('No data returned from server.');
       }
 
-      // Extract loads and pagination
       const { loads: loadsArray, pagination } = data.data;
 
       if (!Array.isArray(loadsArray)) {
@@ -695,15 +749,13 @@ const LoadSearch = () => {
         throw new Error('Invalid loads data format received from server.');
       }
 
-      // FILTER OUT EXPIRED LOADS - this is the key fix
+      // Filter out expired loads
       const now = new Date();
       const activeLoads = loadsArray.filter(load => {
-        // Filter out expired loads
         if (load.status === 'expired') {
           return false;
         }
         
-        // Filter out loads with past pickup dates
         if (load.pickupDate) {
           const pickupDate = new Date(load.pickupDate);
           if (pickupDate < now) {
@@ -711,14 +763,12 @@ const LoadSearch = () => {
           }
         }
         
-        // Only show loads that are actually available for bidding
         return ['available', 'posted', 'receiving_bids'].includes(load.status);
       });
 
-      // Process loads to ensure consistent data structure
+      // Process loads with better structure
       const processedLoads = activeLoads.map(load => ({
         ...load,
-        // Ensure these fields exist with fallbacks
         _id: load._id || load.id,
         title: load.title || 'Untitled Load',
         description: load.description || 'No description available',
@@ -735,7 +785,6 @@ const LoadSearch = () => {
         isPriorityListing: Boolean(load.isPriorityListing),
         bidCount: load.bidCount || 0,
         viewCount: load.viewCount || 0,
-        // Ensure postedBy has minimum required structure
         postedBy: load.postedBy || {
           _id: load.postedBy || load.cargoOwnerId,
           name: load.cargoOwnerName || 'Anonymous',
@@ -744,16 +793,13 @@ const LoadSearch = () => {
         }
       }));
 
-      // Update state
       setLoads(processedLoads);
       
-      // Update pagination (adjust for filtered results)
       if (pagination) {
         setCurrentPage(pagination.currentPage || page);
         setTotalPages(Math.ceil(processedLoads.length / limit) || 1);
         setTotalLoads(processedLoads.length);
       } else {
-        // Fallback when pagination not present
         setCurrentPage(page);
         setTotalPages(1);
         setTotalLoads(processedLoads.length);
@@ -762,7 +808,6 @@ const LoadSearch = () => {
     } catch (err) {
       console.error('Error loading loads:', err);
       
-      // Set user-friendly error messages
       let userMessage = '';
       if (err.message.includes('Failed to fetch')) {
         userMessage = 'Network error: Could not reach server. Please check your internet connection.';
@@ -778,7 +823,6 @@ const LoadSearch = () => {
       
       setError(userMessage);
       
-      // Don't clear existing loads on error unless it's the first load
       if (page === 1) {
         setLoads([]);
         setCurrentPage(1);
@@ -791,10 +835,9 @@ const LoadSearch = () => {
     }
   };
 
-  //  Place bid function - matches backend API expectations
+  // Place bid function
   const handleBidSubmit = async (bidData) => {
     try {
-      // Check auth
       if (!isUserAuthenticated) {
         setShowLoginPrompt(true);
         return { success: false, error: 'Please login to place a bid' };
@@ -805,16 +848,14 @@ const LoadSearch = () => {
         return { success: false, error: 'Only drivers can place bids' };
       }
 
-      // Build headers
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         ...getAuthHeaders()
       };
 
-      //  Prepare payload to match backend validation exactly
       const payload = {
-        load: bidData.load,  // Backend expects 'load' field (MongoDB ObjectId)
+        load: bidData.load,
         bidAmount: parseFloat(bidData.bidAmount),
         currency: bidData.currency || 'KES',
         proposedPickupDate: bidData.proposedPickupDate,
@@ -852,10 +893,8 @@ const LoadSearch = () => {
           
           errorMsg = errorData.message || errorMsg;
           
-          // Handle specific error cases
           if (response.status === 400) {
             if (errorData.errors && Array.isArray(errorData.errors)) {
-              // Validation errors - show first error
               errorMsg = errorData.errors[0].msg || errorData.errors[0].message || errorMsg;
             } else if (errorMsg.includes('already')) {
               errorMsg = 'You already have a bid on this load.';
@@ -882,23 +921,17 @@ const LoadSearch = () => {
       if (result.status === 'success') {
         setSuccessMessage('Bid placed successfully! The cargo owner will be notified.');
         
-       
         setUserBids(prev => {
           const newBids = new Set([...prev, payload.load]);
-         
           return newBids;
         });
         
-        // Close bid form
         setBidStates(prev => ({
           ...prev,
           [payload.load]: { showBidForm: false, submitting: false }
         }));
         
-        // Refresh loads to update bid count
         await fetchLoads(currentPage);
-        
-        //  Re-fetch user bids to ensure consistency
         await fetchUserBids();
         
         return { success: true };
@@ -997,11 +1030,9 @@ const LoadSearch = () => {
     return vehicleType ? vehicleType.label : type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
-  //  Handle refresh to ensure user bids are also refreshed
   const handleRefresh = async () => {
     checkAuthStatus();
     
-    // Run both fetches in parallel for better performance
     const promises = [fetchLoads(currentPage)];
     
     if (isUserAuthenticated && user?.userType === 'driver') {
@@ -1046,7 +1077,7 @@ const LoadSearch = () => {
     }
   };
 
-  const handleBidClick = (load) => {
+  const handleBidClick = async (load) => {
     if (!isUserAuthenticated) {
       setShowLoginPrompt(true);
       return;
@@ -1054,6 +1085,13 @@ const LoadSearch = () => {
 
     if (user?.userType !== 'driver') {
       setError('Only drivers can place bids on loads.');
+      return;
+    }
+
+    // Check bid status before allowing new bid
+    const hasBid = await checkBidStatusForLoad(load._id);
+    if (hasBid) {
+      setError('You already have an active bid on this load.');
       return;
     }
 
@@ -1070,7 +1108,6 @@ const LoadSearch = () => {
     }));
   };
 
-  //  Handle bid form submission with proper error handling
   const handleBidFormSubmit = async (loadId, bidData) => {
     setBidStates(prev => ({
       ...prev,
@@ -1086,7 +1123,6 @@ const LoadSearch = () => {
           [loadId]: { ...prev[loadId], submitting: false }
         }));
       }
-      // If successful, the bid form is closed in handleBidSubmit
     } catch (error) {
       console.error('Bid form submission error:', error);
       setBidStates(prev => ({
@@ -1164,7 +1200,7 @@ const LoadSearch = () => {
                       onClick={() => {
                         logout();
                         checkAuthStatus();
-                        setUserBids(new Set()); // Clear user bids on logout
+                        setUserBids(new Set());
                       }}
                       className="text-sm text-gray-600 hover:text-gray-800"
                     >
@@ -1276,7 +1312,6 @@ const LoadSearch = () => {
           </div>
         )}
 
-        {/*  Show loading indicator for bids */}
         {bidsLoading && isUserAuthenticated && user?.userType === 'driver' && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <div className="flex items-center">
@@ -1427,74 +1462,85 @@ const LoadSearch = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
               {loads.map((load) => {
                 const bidState = bidStates[load._id] || { showBidForm: false, submitting: false };
-                const hasUserBid = userBids.has(load._id); // Check if user has already bid
+                const hasUserBid = userBids.has(load._id);
+                const isCheckingBid = checkingBids[load._id];
                 
                 return (
                   <div key={load._id} className={`bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 ${load.isPriorityListing ? 'ring-2 ring-yellow-400' : ''}`}>
                     <div className="p-6">
-                      <div className="flex items-start justify-between mb-3">
-                        <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">{load.title || 'Untitled Load'}</h3>
-                        <div className="flex flex-col items-end space-y-1">
-                          {load.isUrgent && (
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                              <Clock className="w-3 h-3 mr-1" />
-                              Urgent
-                            </span>
-                          )}
-                          {load.isPriorityListing && (
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                              <TrendingUp className="w-3 h-3 mr-1" />
-                              Featured
-                            </span>
-                          )}
-                          {hasUserBid && (
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                              <CheckCircle className="w-3 h-3 mr-1" />
-                              Bid Placed
-                            </span>
-                          )}
+                      {/* DETAILS AT TOP - Load Title and Key Info */}
+                      <div className="mb-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <h3 className="text-lg font-semibold text-gray-900 line-clamp-2 flex-1 mr-2">{load.title || 'Untitled Load'}</h3>
+                          <div className="flex flex-col items-end space-y-1 flex-shrink-0">
+                            {load.isUrgent && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                <Clock className="w-3 h-3 mr-1" />
+                                Urgent
+                              </span>
+                            )}
+                            {load.isPriorityListing && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                <TrendingUp className="w-3 h-3 mr-1" />
+                                Featured
+                              </span>
+                            )}
+                            {hasUserBid && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                Bid Placed
+                              </span>
+                            )}
+                            {isCheckingBid && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                <Loader className="w-3 h-3 mr-1 animate-spin" />
+                                Checking...
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Key Details Row - Budget and Weight prominently displayed */}
+                        <div className="flex items-center justify-between mb-3 p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center text-green-600 font-bold text-lg">
+                            <DollarSign className="w-5 h-5 mr-1 flex-shrink-0" />
+                            <span>{formatCurrency(load.budget)}</span>
+                          </div>
+                          <div className="flex items-center text-gray-600 font-medium">
+                            <Weight className="w-4 h-4 mr-2 flex-shrink-0" />
+                            <span>{load.weight || 0} kg</span>
+                          </div>
+                        </div>
+
+                        {/* Route Information - Prominent */}
+                        <div className="space-y-2 mb-3 p-3 bg-blue-50 rounded-lg">
+                          <div className="flex items-center text-sm text-gray-700">
+                            <MapPin className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" />
+                            <span className="font-medium">From:</span>
+                            <span className="ml-1 truncate font-semibold">{load.pickupLocation || 'N/A'}</span>
+                          </div>
+                          <div className="flex items-center text-sm text-gray-700">
+                            <MapPin className="w-4 h-4 mr-2 text-red-500 flex-shrink-0" />
+                            <span className="font-medium">To:</span>
+                            <span className="ml-1 truncate font-semibold">{load.deliveryLocation || 'N/A'}</span>
+                          </div>
+                        </div>
+
+                        {/* Cargo and Vehicle Type */}
+                        <div className="grid grid-cols-2 gap-4 mb-3 text-xs">
+                          <div className="flex items-center text-gray-500">
+                            <Package className="w-3 h-3 mr-1 flex-shrink-0" />
+                            <span className="truncate">{getCargoTypeLabel(load.cargoType)}</span>
+                          </div>
+                          <div className="flex items-center text-gray-500">
+                            <Truck className="w-3 h-3 mr-1 flex-shrink-0" />
+                            <span className="truncate">{getVehicleTypeLabel(load.vehicleType)}</span>
+                          </div>
                         </div>
                       </div>
-                      
+
+                      {/* Description */}
                       <p className="text-gray-600 text-sm mb-4 line-clamp-3">{load.description || 'No description available'}</p>
-
-                      {/* Route */}
-                      <div className="space-y-2 mb-4">
-                        <div className="flex items-center text-sm text-gray-600">
-                          <MapPin className="w-4 h-4 mr-2 text-green-500 flex-shrink-0" />
-                          <span className="font-medium">From:</span>
-                          <span className="ml-1 truncate">{load.pickupLocation || 'N/A'}</span>
-                        </div>
-                        <div className="flex items-center text-sm text-gray-600">
-                          <MapPin className="w-4 h-4 mr-2 text-red-500 flex-shrink-0" />
-                          <span className="font-medium">To:</span>
-                          <span className="ml-1 truncate">{load.deliveryLocation || 'N/A'}</span>
-                        </div>
-                      </div>
-
-                      {/* Details */}
-                      <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-                        <div className="flex items-center text-gray-600">
-                          <Weight className="w-4 h-4 mr-2 flex-shrink-0" />
-                          <span>{load.weight || 0} kg</span>
-                        </div>
-                        <div className="flex items-center text-green-600 font-medium">
-                          <DollarSign className="w-4 h-4 mr-1 flex-shrink-0" />
-                          <span>{formatCurrency(load.budget)}</span>
-                        </div>
-                      </div>
-
-                      {/* Cargo and Vehicle Type */}
-                      <div className="grid grid-cols-2 gap-4 mb-4 text-xs">
-                        <div className="flex items-center text-gray-500">
-                          <Package className="w-3 h-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{getCargoTypeLabel(load.cargoType)}</span>
-                        </div>
-                        <div className="flex items-center text-gray-500">
-                          <Truck className="w-3 h-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{getVehicleTypeLabel(load.vehicleType)}</span>
-                        </div>
-                      </div>
 
                       {/* Posted info */}
                       <div className="text-xs text-gray-500 mb-4">
@@ -1528,6 +1574,14 @@ const LoadSearch = () => {
                               >
                                 <CheckCircle className="w-4 h-4 mr-1 inline" />
                                 Bid Already Placed
+                              </button>
+                            ) : isCheckingBid ? (
+                              <button 
+                                disabled={true}
+                                className="flex-1 px-3 py-2 text-sm bg-blue-100 text-blue-700 rounded-md cursor-not-allowed"
+                              >
+                                <Loader className="w-4 h-4 mr-1 inline animate-spin" />
+                                Checking...
                               </button>
                             ) : (
                               <button 
@@ -1587,8 +1641,8 @@ const LoadSearch = () => {
 
       {/* Login Prompt Modal */}
       {showLoginPrompt && (
-        <div className=" inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div ref={loginPromptRef} className="bg-white rounded-lg p-6 max-w-md w-full">
             <div className="flex items-center mb-4">
               <User className="w-6 h-6 text-blue-600 mr-3" />
               <h3 className="text-lg font-semibold text-gray-900">Login Required</h3>
@@ -1616,8 +1670,8 @@ const LoadSearch = () => {
 
       {/* Load Details Modal */}
       {showLoadModal && selectedLoad && (
-        <div className=" inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div ref={modalRef} className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Load Details</h3>
               <button
@@ -1628,10 +1682,41 @@ const LoadSearch = () => {
               </button>
             </div>
             
+            {/* DETAILS AT TOP - Key Information First */}
             <div className="space-y-4">
               <div>
-                <h4 className="font-semibold text-gray-900">{selectedLoad.title || 'Untitled Load'}</h4>
+                <h4 className="font-semibold text-gray-900 text-xl">{selectedLoad.title || 'Untitled Load'}</h4>
                 <p className="text-gray-600 mt-1">{selectedLoad.description || 'No description available'}</p>
+              </div>
+
+              {/* Key Details Prominently Displayed */}
+              <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Budget</label>
+                  <p className="text-green-600 font-bold text-xl">{formatCurrency(selectedLoad.budget)}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Weight</label>
+                  <p className="text-gray-900 font-semibold text-lg">{selectedLoad.weight || 0} kg</p>
+                </div>
+              </div>
+
+              {/* Route Information */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-blue-50 rounded-lg">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Pickup Location</label>
+                  <p className="text-gray-900 font-semibold">{selectedLoad.pickupLocation || 'Not specified'}</p>
+                  {selectedLoad.pickupAddress && (
+                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.pickupAddress}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Delivery Location</label>
+                  <p className="text-gray-900 font-semibold">{selectedLoad.deliveryLocation || 'Not specified'}</p>
+                  {selectedLoad.deliveryAddress && (
+                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.deliveryAddress}</p>
+                  )}
+                </div>
               </div>
 
               {/* Status and Priority Indicators */}
@@ -1663,29 +1748,8 @@ const LoadSearch = () => {
                 </span>
               </div>
               
+              {/* Secondary Details */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Pickup Location</label>
-                  <p className="text-gray-900">{selectedLoad.pickupLocation || 'Not specified'}</p>
-                  {selectedLoad.pickupAddress && (
-                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.pickupAddress}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Delivery Location</label>
-                  <p className="text-gray-900">{selectedLoad.deliveryLocation || 'Not specified'}</p>
-                  {selectedLoad.deliveryAddress && (
-                    <p className="text-sm text-gray-600 mt-1">{selectedLoad.deliveryAddress}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Weight</label>
-                  <p className="text-gray-900">{selectedLoad.weight || 0} kg</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Budget</label>
-                  <p className="text-green-600 font-semibold">{formatCurrency(selectedLoad.budget)}</p>
-                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Cargo Type</label>
                   <p className="text-gray-900">{getCargoTypeLabel(selectedLoad.cargoType)}</p>
