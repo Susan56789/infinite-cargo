@@ -562,2070 +562,6 @@ router.get('/me', adminAuth, async (req, res) => {
   }
 });
 
-
-
-
-// @route   GET /api/admin/users
-// @desc    Get users with pagination and search
-// @access  Private
-router.get('/users', 
-  adminAuth, 
-  [
-    query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-    query('search').optional().isLength({ max: 100 }).withMessage('Search term too long'),
-    query('userType').optional().isIn(['driver', 'cargo_owner']).withMessage('Invalid user type')
-  ], 
-  async (req, res) => {
-    try {
-      if (!req.admin.permissions.manageUsers) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied. You do not have permission to manage users.'
-        });
-      }
-
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
-
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 10;
-      const search = req.query.search || '';
-      const userType = req.query.userType;
-      const skip = (page - 1) * limit;
-
-      const db = mongoose.connection.db;
-
-      // Build search query
-      let searchQuery = {};
-      if (search) {
-        const searchRegex = new RegExp(search, 'i');
-        searchQuery = {
-          $or: [
-            { name: searchRegex },
-            { email: searchRegex },
-            { phone: searchRegex }
-          ]
-        };
-      }
-
-      // Get users from collections based on userType filter
-      let allUsers = [];
-      
-      if (!userType || userType === 'driver') {
-        const drivers = await db.collection('drivers').find(searchQuery)
-          .project({ password: 0, loginHistory: 0, registrationIp: 0 })
-          .toArray();
-        allUsers.push(...drivers.map(user => ({ ...user, userType: 'driver' })));
-      }
-      
-      if (!userType || userType === 'cargo_owner') {
-        const cargoOwners = await db.collection('cargo-owners').find(searchQuery)
-          .project({ password: 0, loginHistory: 0, registrationIp: 0 })
-          .toArray();
-        allUsers.push(...cargoOwners.map(user => ({ ...user, userType: 'cargo_owner' })));
-      }
-
-      // Get subscription info for each user
-      const userIds = allUsers.map(user => user._id);
-      const subscriptions = await Subscription.find({
-        userId: { $in: userIds },
-        status: 'active'
-      }).select('userId planName status expiresAt');
-
-      // Create subscription map
-      const subscriptionMap = {};
-      subscriptions.forEach(sub => {
-        subscriptionMap[sub.userId.toString()] = {
-          planName: sub.planName,
-          status: sub.status,
-          expiresAt: sub.expiresAt,
-          isExpired: sub.expiresAt && new Date() > sub.expiresAt
-        };
-      });
-
-      // Add subscription info to users
-      allUsers = allUsers.map(user => ({
-        ...user,
-        subscription: subscriptionMap[user._id.toString()] || null
-      }));
-
-      // Sort by creation date (newest first)
-      allUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-      // Apply pagination
-      const total = allUsers.length;
-      const users = allUsers.slice(skip, skip + limit);
-      const totalPages = Math.ceil(total / limit);
-
-      res.json({
-        status: 'success',
-        data: {
-          users,
-          total,
-          totalPages,
-          currentPage: page,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        }
-      });
-
-    } catch (error) {
-      console.error('Get users error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Server error fetching users'
-      });
-    }
-  }
-);
-
-
-// @route   POST /api/admin/users/:id/suspend
-// @desc    Suspend a user
-// @access  Private
-router.post('/users/:id/suspend', adminAuth, async (req, res) => {
-  try {
-    if (!req.admin.permissions.manageUsers) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to manage users.'
-      });
-    }
-
-    const userId = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid user ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const objectId = new mongoose.Types.ObjectId(userId);
-
-    // Try to find and update in both collections
-    const [driverResult, cargoOwnerResult] = await Promise.all([
-      db.collection('drivers').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isActive: false,
-            accountStatus: 'suspended',
-            suspendedAt: new Date(),
-            suspendedBy: req.admin.id,
-            updatedAt: new Date()
-          }
-        },
-        { returnDocument: 'after' }
-      ),
-      db.collection('cargo-owners').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isActive: false,
-            accountStatus: 'suspended',
-            suspendedAt: new Date(),
-            suspendedBy: req.admin.id,
-            updatedAt: new Date()
-          }
-        },
-        { returnDocument: 'after' }
-      )
-    ]);
-
-    const updatedUser = driverResult.value || cargoOwnerResult.value;
-    const userType = driverResult.value ? 'driver' : 'cargo_owner';
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-try {
-  const auditLogsCollection = db.collection('audit_logs');
-  await auditLogsCollection.insertOne({
-    action: 'user_suspend',   
-    entityType: 'user',         
-    entityId: new mongoose.Types.ObjectId(userId),
-    adminId: new mongoose.Types.ObjectId(req.admin.id),
-    adminName: req.admin.name,
-    userId: userId,    
-    userType: userType,
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    createdAt: new Date()
-  });
-} catch (auditError) {
-  console.warn('Audit log failed:', auditError);
-}
-  console.log('User suspended:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
-
-    res.json({
-      status: 'success',
-      message: 'User suspended successfully',
-      user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        userType,
-        isActive: updatedUser.isActive,
-        accountStatus: updatedUser.accountStatus
-      }
-    });
-
-  } catch (error) {
-    console.error('Suspend user error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error suspending user'
-    });
-  }
-});
-
-// @route   POST /api/admin/users/:id/activate
-// @desc    Activate a user
-// @access  Private
-router.post('/users/:id/activate', adminAuth, async (req, res) => {
-  try {
-    if (!req.admin.permissions.manageUsers) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to manage users.'
-      });
-    }
-
-    const userId = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid user ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const objectId = new mongoose.Types.ObjectId(userId);
-
-    // Try to find and update in both collections
-    const [driverResult, cargoOwnerResult] = await Promise.all([
-      db.collection('drivers').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isActive: true,
-            accountStatus: 'active',
-            reactivatedAt: new Date(),
-            reactivatedBy: req.admin.id,
-            updatedAt: new Date()
-          },
-          $unset: {
-            suspendedAt: 1,
-            suspendedBy: 1
-          }
-        },
-        { returnDocument: 'after' }
-      ),
-      db.collection('cargo-owners').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isActive: true,
-            accountStatus: 'active',
-            reactivatedAt: new Date(),
-            reactivatedBy: req.admin.id,
-            updatedAt: new Date()
-          },
-          $unset: {
-            suspendedAt: 1,
-            suspendedBy: 1
-          }
-        },
-        { returnDocument: 'after' }
-      )
-    ]);
-
-    const updatedUser = driverResult.value || cargoOwnerResult.value;
-    const userType = driverResult.value ? 'driver' : 'cargo_owner';
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-
-    try {
-  const auditLogsCollection = db.collection('audit_logs');
-  await auditLogsCollection.insertOne({
-    action: 'user_activate',   
-    entityType: 'user',         
-    entityId: new mongoose.Types.ObjectId(userId),
-    adminId: new mongoose.Types.ObjectId(req.admin.id),
-    adminName: req.admin.name,
-    userId: userId,    
-    userType: userType,
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    createdAt: new Date()
-  });
-} catch (auditError) {
-  console.warn('Audit log failed:', auditError);
-}
-console.log('User activated:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
-
-    res.json({
-      status: 'success',
-      message: 'User activated successfully',
-      user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        userType,
-        isActive: updatedUser.isActive,
-        accountStatus: updatedUser.accountStatus
-      }
-    });
-
-  } catch (error) {
-    console.error('Activate user error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error activating user'
-    });
-  }
-});
-
-// @route   DELETE /api/admin/users/:id
-// @desc    Delete a user
-// @access  Private
-router.delete('/users/:id', adminAuth, async (req, res) => {
-  try {
-    if (!req.admin.permissions.manageUsers || req.admin.role !== 'super_admin') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. Only super admins can delete users.'
-      });
-    }
-
-    const userId = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid user ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const objectId = new mongoose.Types.ObjectId(userId);
-
-    // Try to delete from both collections
-    const [driverResult, cargoOwnerResult] = await Promise.all([
-      db.collection('drivers').findOneAndDelete({ _id: objectId }),
-      db.collection('cargo-owners').findOneAndDelete({ _id: objectId })
-    ]);
-
-    const deletedUser = driverResult.value || cargoOwnerResult.value;
-    const userType = driverResult.value ? 'driver' : 'cargo_owner';
-
-    if (!deletedUser) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-
-    console.log('User deleted:', { id: userId, email: deletedUser.email, userType, admin: req.admin.id });
-
-    res.json({
-      status: 'success',
-      message: 'User deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete user error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error deleting user'
-    });
-  }
-});
-
-// @route   POST /api/admin/users/:id/verify
-// @desc    Verify a user
-// @access  Private
-router.post('/users/:id/verify', adminAuth, async (req, res) => {
-  try {
-    if (!req.admin.permissions.manageUsers) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to manage users.'
-      });
-    }
-
-    const userId = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid user ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const objectId = new mongoose.Types.ObjectId(userId);
-
-    // Try to find and update in both collections
-    const [driverResult, cargoOwnerResult] = await Promise.all([
-      db.collection('drivers').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isVerified: true,
-            verifiedAt: new Date(),
-            verifiedBy: req.admin.id,
-            updatedAt: new Date(),
-            'driverProfile.verified': true,
-            'driverProfile.verificationStatus': 'verified'
-          }
-        },
-        { returnDocument: 'after' }
-      ),
-      db.collection('cargo-owners').findOneAndUpdate(
-        { _id: objectId },
-        { 
-          $set: { 
-            isVerified: true,
-            verifiedAt: new Date(),
-            verifiedBy: req.admin.id,
-            updatedAt: new Date(),
-            'cargoOwnerProfile.verified': true,
-            'cargoOwnerProfile.verificationStatus': 'verified'
-          }
-        },
-        { returnDocument: 'after' }
-      )
-    ]);
-
-    const updatedUser = driverResult.value || cargoOwnerResult.value;
-    const userType = driverResult.value ? 'driver' : 'cargo_owner';
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-try {
-  const auditLogsCollection = db.collection('audit_logs');
-  await auditLogsCollection.insertOne({
-    action: 'user_verify',   
-    entityType: 'user',         
-    entityId: new mongoose.Types.ObjectId(userId),
-    adminId: new mongoose.Types.ObjectId(req.admin.id),
-    adminName: req.admin.name,
-    userId: userId,    
-    userType: userType,
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    createdAt: new Date()
-  });
-} catch (auditError) {
-  console.warn('Audit log failed:', auditError);
-}
-    console.log('User verified:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
-
-    res.json({
-      status: 'success',
-      message: 'User verified successfully',
-      user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        userType,
-        isVerified: updatedUser.isVerified
-      }
-    });
-
-  } catch (error) {
-    console.error('Verify user error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error verifying user'
-    });
-  }
-});
-
-// @route   GET /api/admin/notifications
-// @desc    Get all notifications for admin view
-// @access  Private (Admin only)
-router.get('/notifications', adminAuth, [
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('unread').optional().isBoolean().withMessage('Unread must be boolean'),
-  query('type').optional().isString().withMessage('Type must be a string'),
-  query('search').optional().isString().withMessage('Search must be a string')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const {
-      page = 1,
-      limit = 20,
-      unread,
-      type,
-      search
-    } = req.query;
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    // Build query filter - admin should see notifications meant for admins
-    const matchQuery = {
-      $or: [
-        // Notifications specifically for this admin
-        { 
-          userId: new mongoose.Types.ObjectId(req.admin.id),
-          userType: 'admin' 
-        },
-        // System-wide notifications for admins
-        { 
-          userType: 'admin',
-          $or: [
-            { userId: null },
-            { userId: { $exists: false } }
-          ]
-        },
-        // Notifications about user actions that need admin attention
-        {
-          userType: { $in: ['admin', 'system'] },
-          type: { 
-            $in: [
-              'subscription_request', 
-              'user_registration', 
-              'load_flagged',
-              'payment_issue',
-              'system_alert',
-              'security_alert'
-            ] 
-          }
-        }
-      ]
-    };
-
-    // Add unread filter if specified
-    if (unread !== undefined) {
-      matchQuery.isRead = unread === 'true' ? false : true;
-    }
-
-    // Add type filter if specified
-    if (type && type !== 'all') {
-      matchQuery.type = type;
-    }
-
-    // Add search filter if specified
-    if (search) {
-      matchQuery.$and = matchQuery.$and || [];
-      matchQuery.$and.push({
-        $or: [
-          { title: { $regex: search, $options: 'i' } },
-          { message: { $regex: search, $options: 'i' } }
-        ]
-      });
-    }
-
-    // Get total count for pagination
-    const totalNotifications = await notificationsCollection.countDocuments(matchQuery);
-
-    // Calculate pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const totalPages = Math.ceil(totalNotifications / parseInt(limit));
-
-    // Fetch notifications with pagination and sorting
-    const notifications = await notificationsCollection
-      .find(matchQuery)
-      .sort({ createdAt: -1 }) // Most recent first
-      .skip(skip)
-      .limit(parseInt(limit))
-      .toArray();
-
-    // Get summary statistics for admin
-    const summaryPipeline = [
-      { $match: matchQuery }, // Use same filter for summary
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          unread: {
-            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
-          },
-          read: {
-            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
-          },
-          highPriority: {
-            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
-          }
-        }
-      }
-    ];
-
-    const summaryResult = await notificationsCollection.aggregate(summaryPipeline).toArray();
-    const summary = summaryResult[0] || { total: 0, unread: 0, read: 0, highPriority: 0 };
-
-    // Populate user information for admin view
-    const enrichedNotifications = await Promise.all(
-      notifications.map(async (notif) => {
-        let userInfo = {};
-        
-        // For subscription requests and similar notifications, get user info from data field
-        if (notif.data && notif.data.userId) {
-          try {
-            const userId = notif.data.userId;
-            const userType = notif.data.userType || 'cargo_owner'; // Default assumption for subscription requests
-            
-            const userCollection = userType === 'driver' ? 'drivers' : 
-                                 userType === 'cargo_owner' ? 'cargo-owners' : 
-                                 userType === 'admin' ? 'admins' : null;
-            
-            if (userCollection) {
-              const user = await db.collection(userCollection).findOne(
-                { _id: new mongoose.Types.ObjectId(userId) },
-                { projection: { name: 1, email: 1, phone: 1 } }
-              );
-              
-              if (user) {
-                userInfo = {
-                  userName: user.name,
-                  userEmail: user.email,
-                  userPhone: user.phone
-                };
-              } else {
-                // Use data from notification if user not found in DB
-                userInfo = {
-                  userName: notif.data.userName,
-                  userEmail: notif.data.userEmail,
-                  userPhone: notif.data.userPhone
-                };
-              }
-            }
-          } catch (userError) {
-            console.error('Error fetching user info:', userError);
-            // Fallback to data in notification
-            userInfo = {
-              userName: notif.data.userName || 'Unknown User',
-              userEmail: notif.data.userEmail || '',
-              userPhone: notif.data.userPhone || ''
-            };
-          }
-        }
-        // For direct admin notifications, get user info from userId field
-        else if (notif.userId && notif.userType) {
-          try {
-            const userCollection = notif.userType === 'driver' ? 'drivers' : 
-                                 notif.userType === 'cargo_owner' ? 'cargo-owners' : 
-                                 notif.userType === 'admin' ? 'admins' : null;
-            
-            if (userCollection) {
-              const user = await db.collection(userCollection).findOne(
-                { _id: notif.userId },
-                { projection: { name: 1, email: 1, phone: 1 } }
-              );
-              
-              if (user) {
-                userInfo = {
-                  userName: user.name,
-                  userEmail: user.email,
-                  userPhone: user.phone
-                };
-              }
-            }
-          } catch (userError) {
-            console.error('Error fetching user info:', userError);
-          }
-        }
-
-        return {
-          ...notif,
-          ...userInfo
-        };
-      })
-    );
-
-    res.json({
-      status: 'success',
-      data: {
-        notifications: enrichedNotifications,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages,
-          totalNotifications,
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1,
-          limit: parseInt(limit)
-        },
-        summary
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin get notifications error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching notifications',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   GET /api/admin/notifications/summary
-// @desc    Get notification summary for admin
-// @access  Private (Admin only)
-router.get('/notifications/summary', adminAuth, async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    // Get comprehensive summary for admin
-    const summary = await notificationsCollection.aggregate([
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          unread: {
-            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
-          },
-          read: {
-            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
-          },
-          highPriority: {
-            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
-          },
-          mediumPriority: {
-            $sum: { $cond: [{ $eq: ['$priority', 'medium'] }, 1, 0] }
-          },
-          lowPriority: {
-            $sum: { $cond: [{ $eq: ['$priority', 'low'] }, 1, 0] }
-          }
-        }
-      }
-    ]).toArray();
-
-    // Get type breakdown
-    const typeBreakdown = await notificationsCollection.aggregate([
-      {
-        $group: {
-          _id: '$type',
-          total: { $sum: 1 },
-          unread: {
-            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
-          }
-        }
-      },
-      { $sort: { total: -1 } }
-    ]).toArray();
-
-    // Get user type breakdown
-    const userTypeBreakdown = await notificationsCollection.aggregate([
-      {
-        $group: {
-          _id: '$userType',
-          total: { $sum: 1 },
-          unread: {
-            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
-          }
-        }
-      }
-    ]).toArray();
-
-    // Get recent notifications (last 24 hours)
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentCount = await notificationsCollection.countDocuments({
-      createdAt: { $gte: yesterday }
-    });
-
-    const summaryData = summary[0] || {
-      total: 0,
-      unread: 0,
-      read: 0,
-      highPriority: 0,
-      mediumPriority: 0,
-      lowPriority: 0
-    };
-
-    res.json({
-      status: 'success',
-      data: {
-        summary: summaryData,
-        typeBreakdown: typeBreakdown.reduce((acc, item) => {
-          acc[item._id] = { total: item.total, unread: item.unread };
-          return acc;
-        }, {}),
-        userTypeBreakdown: userTypeBreakdown.reduce((acc, item) => {
-          acc[item._id] = { total: item.total, unread: item.unread };
-          return acc;
-        }, {}),
-        recentCount
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin notification summary error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching notification summary',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   PUT /api/admin/notifications/:id/read
-// @desc    Mark notification as read (admin)
-// @access  Private (Admin only)
-router.put('/notifications/:id/read', adminAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid notification ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const result = await notificationsCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(id) },
-      { 
-        $set: { 
-          isRead: true,
-          readAt: new Date(),
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Notification not found'
-      });
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Notification marked as read',
-      data: {
-        notificationId: id,
-        isRead: true,
-        readAt: new Date()
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin mark notification read error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error marking notification as read',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   PUT /api/admin/notifications/read-all
-// @desc    Mark all notifications as read (admin)
-// @access  Private (Admin only)
-router.put('/notifications/read-all', adminAuth, async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const result = await notificationsCollection.updateMany(
-      { isRead: false },
-      { 
-        $set: { 
-          isRead: true,
-          readAt: new Date(),
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    res.json({
-      status: 'success',
-      message: `${result.modifiedCount} notifications marked as read`,
-      data: {
-        updatedCount: result.modifiedCount,
-        readAt: new Date()
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin mark all notifications read error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error marking all notifications as read',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   DELETE /api/admin/notifications/:id
-// @desc    Delete notification (admin)
-// @access  Private (Admin only)
-router.delete('/notifications/:id', adminAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid notification ID'
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const result = await notificationsCollection.deleteOne({
-      _id: new mongoose.Types.ObjectId(id)
-    });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Notification not found'
-      });
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Notification deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Admin delete notification error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error deleting notification',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   PUT /api/admin/notifications/bulk-read
-// @desc    Mark multiple notifications as read (admin)
-// @access  Private (Admin only)
-router.put('/notifications/bulk-read', adminAuth, [
-  body('notificationIds')
-    .isArray({ min: 1 })
-    .withMessage('Notification IDs array is required')
-    .custom((ids) => {
-      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
-    })
-    .withMessage('All notification IDs must be valid')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { notificationIds } = req.body;
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
-
-    const result = await notificationsCollection.updateMany(
-      { 
-        _id: { $in: objectIds },
-        isRead: false
-      },
-      { 
-        $set: { 
-          isRead: true,
-          readAt: new Date(),
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    res.json({
-      status: 'success',
-      message: `${result.modifiedCount} notifications marked as read`,
-      data: {
-        requestedCount: notificationIds.length,
-        updatedCount: result.modifiedCount
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin bulk read notifications error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error marking notifications as read',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   DELETE /api/admin/notifications/bulk-delete
-// @desc    Delete multiple notifications (admin)
-// @access  Private (Admin only)
-router.delete('/notifications/bulk-delete', adminAuth, [
-  body('notificationIds')
-    .isArray({ min: 1 })
-    .withMessage('Notification IDs array is required')
-    .custom((ids) => {
-      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
-    })
-    .withMessage('All notification IDs must be valid')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { notificationIds } = req.body;
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
-
-    const result = await notificationsCollection.deleteMany({
-      _id: { $in: objectIds }
-    });
-
-    res.json({
-      status: 'success',
-      message: `${result.deletedCount} notifications deleted`,
-      data: {
-        requestedCount: notificationIds.length,
-        deletedCount: result.deletedCount
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin bulk delete notifications error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error deleting notifications',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   POST /api/admin/notifications/broadcast
-// @desc    Send broadcast notification to multiple users (admin only)
-// @access  Private (Admin only)
-router.post('/notifications/broadcast', adminAuth, [
-  body('userType').optional().isIn(['driver', 'cargo_owner', 'all']).withMessage('Invalid user type'),
-  body('userIds').optional().isArray().withMessage('User IDs must be an array'),
-  body('type').notEmpty().withMessage('Notification type is required'),
-  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
-  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
-  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const {
-      userType,
-      userIds,
-      type,
-      title,
-      message,
-      priority = 'medium',
-      data = {},
-      icon,
-      actionUrl,
-      expiresAt
-    } = req.body;
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-
-    let targetUsers = [];
-
-    if (userIds && userIds.length > 0) {
-      // Send to specific users
-      targetUsers = userIds.map(id => ({
-        userId: new mongoose.Types.ObjectId(id),
-        userType: userType || 'driver' // Default to driver if not specified
-      }));
-    } else if (userType && userType !== 'all') {
-      // Send to all users of specific type
-      const collection = userType === 'driver' ? 'drivers' : 'cargo-owners';
-      const users = await db.collection(collection).find(
-        { status: { $ne: 'deleted' } }, // Only active users
-        { projection: { _id: 1 } }
-      ).toArray();
-      
-      targetUsers = users.map(user => ({
-        userId: user._id,
-        userType
-      }));
-    } else {
-      // Send to all users
-      const [drivers, cargoOwners] = await Promise.all([
-        db.collection('drivers').find(
-          { status: { $ne: 'deleted' } },
-          { projection: { _id: 1 } }
-        ).toArray(),
-        db.collection('cargo-owners').find(
-          { status: { $ne: 'deleted' } },
-          { projection: { _id: 1 } }
-        ).toArray()
-      ]);
-      
-      targetUsers = [
-        ...drivers.map(user => ({ userId: user._id, userType: 'driver' })),
-        ...cargoOwners.map(user => ({ userId: user._id, userType: 'cargo_owner' }))
-      ];
-    }
-
-    if (targetUsers.length === 0) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'No target users found for the specified criteria'
-      });
-    }
-
-    // Create notifications for all target users
-    const notificationsCollection = db.collection('notifications');
-    const notifications = targetUsers.map(user => ({
-      userId: user.userId,
-      userType: user.userType,
-      type,
-      title,
-      message,
-      priority,
-      data,
-      icon: icon || 'bell',
-      actionUrl,
-      expiresAt: expiresAt ? new Date(expiresAt) : null,
-      sentBy: new mongoose.Types.ObjectId(req.admin.id),
-      sentByType: 'admin',
-      isRead: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    }));
-
-    const result = await notificationsCollection.insertMany(notifications);
-
-    // Log the broadcast action
-    const auditLog = {
-      adminId: new mongoose.Types.ObjectId(req.admin.id),
-      adminName: req.admin.name,
-      action: 'broadcast_notification',
-      details: `Sent "${title}" to ${result.insertedCount} users`,
-      targetUserType: userType || 'mixed',
-      notificationCount: result.insertedCount,
-      timestamp: new Date(),
-      ipAddress: req.ip
-    };
-
-    try {
-      await db.collection('audit-logs').insertOne(auditLog);
-    } catch (logError) {
-      console.error('Failed to log broadcast action:', logError);
-    }
-
-    res.status(201).json({
-      status: 'success',
-      message: `Notification sent to ${result.insertedCount} users`,
-      data: {
-        sentCount: result.insertedCount,
-        targetUserType: userType || 'mixed',
-        notificationIds: result.insertedIds
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin broadcast notification error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error broadcasting notification',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   GET /api/admin/notifications/stats
-// @desc    Get detailed notification statistics (admin)
-// @access  Private (Admin only)
-router.get('/notifications/stats', adminAuth, async (req, res) => {
-  try {
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    // Get comprehensive stats
-    const stats = await notificationsCollection.aggregate([
-      {
-        $facet: {
-          // Overall summary
-          summary: [
-            {
-              $group: {
-                _id: null,
-                total: { $sum: 1 },
-                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } },
-                read: { $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] } }
-              }
-            }
-          ],
-          
-          // By priority
-          byPriority: [
-            {
-              $group: {
-                _id: '$priority',
-                count: { $sum: 1 },
-                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
-              }
-            }
-          ],
-          
-          // By type
-          byType: [
-            {
-              $group: {
-                _id: '$type',
-                count: { $sum: 1 },
-                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
-              }
-            },
-            { $sort: { count: -1 } }
-          ],
-          
-          // By user type
-          byUserType: [
-            {
-              $group: {
-                _id: '$userType',
-                count: { $sum: 1 },
-                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
-              }
-            }
-          ],
-          
-          // Recent trends (last 7 days)
-          recentTrends: [
-            {
-              $match: {
-                createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-              }
-            },
-            {
-              $group: {
-                _id: {
-                  date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }
-                },
-                count: { $sum: 1 }
-              }
-            },
-            { $sort: { '_id.date': 1 } }
-          ]
-        }
-      }
-    ]).toArray();
-
-    const result = stats[0];
-
-    res.json({
-      status: 'success',
-      data: {
-        summary: result.summary[0] || { total: 0, unread: 0, read: 0 },
-        byPriority: result.byPriority.reduce((acc, item) => {
-          acc[item._id] = { count: item.count, unread: item.unread };
-          return acc;
-        }, {}),
-        byType: result.byType.reduce((acc, item) => {
-          acc[item._id] = { count: item.count, unread: item.unread };
-          return acc;
-        }, {}),
-        byUserType: result.byUserType.reduce((acc, item) => {
-          acc[item._id] = { count: item.count, unread: item.unread };
-          return acc;
-        }, {}),
-        recentTrends: result.recentTrends.map(item => ({
-          date: item._id.date,
-          count: item.count
-        }))
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin notification stats error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error fetching notification statistics',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   DELETE /api/admin/notifications/cleanup
-// @desc    Clean up old notifications (admin only)
-// @access  Private (Admin only)
-router.delete('/notifications/cleanup', adminAuth, [
-  body('olderThanDays').optional().isInt({ min: 1 }).withMessage('Days must be a positive integer'),
-  body('deleteRead').optional().isBoolean().withMessage('Delete read must be boolean')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { olderThanDays = 30, deleteRead = true } = req.body;
-    
-    const db = mongoose.connection.db;
-    const notificationsCollection = db.collection('notifications');
-
-    // Calculate cutoff date
-    const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
-
-    // Build cleanup query
-    const cleanupQuery = {
-      createdAt: { $lt: cutoffDate }
-    };
-
-    if (deleteRead) {
-      cleanupQuery.isRead = true;
-    }
-
-    const result = await notificationsCollection.deleteMany(cleanupQuery);
-
-    // Log the cleanup action
-    const auditLog = {
-      adminId: new mongoose.Types.ObjectId(req.admin.id),
-      adminName: req.admin.name,
-      action: 'cleanup_notifications',
-      details: `Deleted ${result.deletedCount} notifications older than ${olderThanDays} days`,
-      deletedCount: result.deletedCount,
-      criteria: { olderThanDays, deleteRead },
-      timestamp: new Date(),
-      ipAddress: req.ip
-    };
-
-    try {
-      await db.collection('audit-logs').insertOne(auditLog);
-    } catch (logError) {
-      console.error('Failed to log cleanup action:', logError);
-    }
-
-    res.json({
-      status: 'success',
-      message: `${result.deletedCount} notifications deleted`,
-      data: {
-        deletedCount: result.deletedCount,
-        criteria: { olderThanDays, deleteRead }
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin notification cleanup error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error cleaning up notifications',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   POST /api/admin/notifications/system
-// @desc    Create system notification (admin only)
-// @access  Private (Admin only)
-router.post('/notifications/system', adminAuth, [
-  body('type').isIn(['system_maintenance', 'security_alert', 'policy_update', 'system_announcement'])
-    .withMessage('Invalid system notification type'),
-  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
-  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
-  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high'),
-  body('scheduledFor').optional().isISO8601().withMessage('Scheduled date must be valid ISO 8601 format')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const {
-      type,
-      title,
-      message,
-      priority = 'medium',
-      data = {},
-      scheduledFor,
-      userType = 'all'
-    } = req.body;
-
-    const mongoose = require('mongoose');
-    const db = mongoose.connection.db;
-
-    // Create system notification record
-    const systemNotification = {
-      type,
-      title,
-      message,
-      priority,
-      data,
-      createdBy: new mongoose.Types.ObjectId(req.admin.id),
-      createdByName: req.admin.name,
-      scheduledFor: scheduledFor ? new Date(scheduledFor) : new Date(),
-      userType,
-      status: scheduledFor ? 'scheduled' : 'sent',
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    // If not scheduled, send immediately
-    if (!scheduledFor) {
-      // Get target users
-      let targetUsers = [];
-      
-      if (userType === 'all') {
-        const [drivers, cargoOwners] = await Promise.all([
-          db.collection('drivers').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray(),
-          db.collection('cargo-owners').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray()
-        ]);
-        
-        targetUsers = [
-          ...drivers.map(user => ({ userId: user._id, userType: 'driver' })),
-          ...cargoOwners.map(user => ({ userId: user._id, userType: 'cargo_owner' }))
-        ];
-      } else {
-        const collection = userType === 'driver' ? 'drivers' : 'cargo-owners';
-        const users = await db.collection(collection).find(
-          { status: { $ne: 'deleted' } },
-          { projection: { _id: 1 } }
-        ).toArray();
-        
-        targetUsers = users.map(user => ({ userId: user._id, userType }));
-      }
-
-      // Create individual notifications
-      const notifications = targetUsers.map(user => ({
-        userId: user.userId,
-        userType: user.userType,
-        type,
-        title,
-        message,
-        priority,
-        data,
-        icon: type === 'security_alert' ? 'alert-triangle' : 
-              type === 'system_maintenance' ? 'settings' : 'info',
-        sentBy: new mongoose.Types.ObjectId(req.admin.id),
-        sentByType: 'admin',
-        isRead: false,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }));
-
-      if (notifications.length > 0) {
-        await db.collection('notifications').insertMany(notifications);
-        systemNotification.sentCount = notifications.length;
-      }
-    }
-
-    // Save system notification record
-    const result = await db.collection('system-notifications').insertOne(systemNotification);
-
-    // Log the action
-    const auditLog = {
-      adminId: new mongoose.Types.ObjectId(req.admin.id),
-      adminName: req.admin.name,
-      action: 'create_system_notification',
-      details: `Created ${type} notification: "${title}"`,
-      notificationId: result.insertedId,
-      scheduledFor: systemNotification.scheduledFor,
-      timestamp: new Date(),
-      ipAddress: req.ip
-    };
-
-    try {
-      await db.collection('audit-logs').insertOne(auditLog);
-    } catch (logError) {
-      console.error('Failed to log system notification creation:', logError);
-    }
-
-    res.status(201).json({
-      status: 'success',
-      message: scheduledFor ? 'System notification scheduled successfully' : 'System notification sent successfully',
-      data: {
-        notificationId: result.insertedId,
-        sentCount: systemNotification.sentCount || 0,
-        scheduledFor: systemNotification.scheduledFor,
-        status: systemNotification.status
-      }
-    });
-
-  } catch (error) {
-    console.error('Create system notification error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error creating system notification',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// @route   GET /api/admin/subscriptions
-// @desc    Get subscriptions with optional status filter
-// @access  Private
-router.get('/subscriptions', 
-  adminAuth, 
-  [
-    query('status').optional().isIn(['pending', 'active', 'expired', 'cancelled', 'rejected']),
-    query('page').optional().isInt({ min: 1 }),
-    query('limit').optional().isInt({ min: 1, max: 100 })
-  ], 
-  async (req, res) => {
-    try {
-      if (!req.admin.permissions.managePayments) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied. You do not have permission to manage subscriptions.'
-        });
-      }
-
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
-
-      const status = req.query.status;
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 50;
-      const skip = (page - 1) * limit;
-
-      // Build query
-      let query = {};
-      if (status === 'expired') {
-        query = {
-          status: 'active',
-          expiresAt: { $lte: new Date() }
-        };
-      } else if (status) {
-        query.status = status;
-      }
-
-      // Get subscriptions with user data
-      const subscriptions = await Subscription.aggregate([
-        { $match: query },
-        {
-          $lookup: {
-            from: 'drivers',
-            localField: 'userId',
-            foreignField: '_id',
-            as: 'driverUser'
-          }
-        },
-        {
-          $lookup: {
-            from: 'cargo-owners',
-            localField: 'userId',
-            foreignField: '_id',
-            as: 'cargoUser'
-          }
-        },
-        {
-          $addFields: {
-            user: {
-              $cond: {
-                if: { $gt: [{ $size: '$driverUser' }, 0] },
-                then: { $arrayElemAt: ['$driverUser', 0] },
-                else: { $arrayElemAt: ['$cargoUser', 0] }
-              }
-            },
-            userType: {
-              $cond: {
-                if: { $gt: [{ $size: '$driverUser' }, 0] },
-                then: 'driver',
-                else: 'cargo_owner'
-              }
-            }
-          }
-        },
-        {
-          $project: {
-            driverUser: 0,
-            cargoUser: 0,
-            'user.password': 0,
-            'user.loginHistory': 0
-          }
-        },
-        { $sort: { createdAt: -1 } },
-        { $skip: skip },
-        { $limit: limit }
-      ]);
-
-      const total = await Subscription.countDocuments(query);
-      const totalPages = Math.ceil(total / limit);
-
-      res.json({
-        status: 'success',
-        data: {
-          subscriptions,
-          total,
-          totalPages,
-          currentPage: page,
-          hasNextPage: page < totalPages,
-          hasPrevPage: page > 1
-        }
-      });
-
-    } catch (error) {
-      console.error('Get subscriptions error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Server error fetching subscriptions'
-      });
-    }
-  }
-);
-
-// @route   POST /api/admin/subscriptions/:id/approve
-// @desc    Approve a subscription
-// @access  Private
-router.post('/subscriptions/:id/approve', adminAuth, [
-  body('paymentVerified').optional().isBoolean(),
-  body('notes').optional().isLength({ max: 500 }),
-  body('verificationDetails').optional().isObject()
-], async (req, res) => {
-  try {
-    if (!req.admin.permissions.managePayments) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to manage subscriptions.'
-      });
-    }
-
-    const subscriptionId = req.params.id;
-    const { 
-      paymentVerified = true, 
-      notes = '', 
-      verificationDetails = {} 
-    } = req.body;
-    
-    if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid subscription ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const subscriptionsCollection = db.collection('subscriptions');
-    const usersCollection = db.collection('cargo-owners');
-    const notificationsCollection = db.collection('notifications');
-    const auditLogsCollection = db.collection('audit_logs');
-
-    //Find subscription by ID
-    const subscription = await subscriptionsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(subscriptionId)
-    });
-
-    if (!subscription) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Subscription not found'
-      });
-    }
-
-    if (subscription.status !== 'pending') {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Only pending subscriptions can be approved'
-      });
-    }
-
-    // Calculate expiry from approval time, not original request time
-    const activatedAt = new Date();
-    const expiresAt = new Date(activatedAt.getTime() + subscription.duration * 24 * 60 * 60 * 1000);
-
-    const adminId = req.admin.id || req.admin._id || null;
-    const adminName = req.admin.name || 'Admin';
-    const adminEmail = req.admin.email || '';
-
-    // Use transaction to ensure data consistency
-    const session = await mongoose.startSession();
-    
-    try {
-      await session.withTransaction(async () => {
-        // Update the subscription to active
-        await subscriptionsCollection.updateOne(
-          { _id: new mongoose.Types.ObjectId(subscriptionId) },
-          {
-            $set: {
-              status: 'active',
-              paymentStatus: 'completed',
-              paymentVerified,
-              activatedAt,
-              expiresAt,
-              approvedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-              approvedAt: new Date(),
-              adminNotes: notes || '',
-              verificationDetails: {
-                ...verificationDetails,
-                approvedByName: adminName,
-                approvedByEmail: adminEmail,
-                verificationTimestamp: new Date()
-              },
-              updatedAt: new Date()
-            }
-          },
-          { session }
-        );
-
-        // Deactivate any other active premium subscriptions (keep basic as fallback)
-        await subscriptionsCollection.updateMany(
-          {
-            userId: subscription.userId,
-            _id: { $ne: new mongoose.Types.ObjectId(subscriptionId) },
-            status: 'active',
-            planId: { $ne: 'basic' } // Don't deactivate basic plan
-          },
-          {
-            $set: {
-              status: 'replaced',
-              deactivatedAt: new Date(),
-              replacedBy: new mongoose.Types.ObjectId(subscriptionId),
-              updatedAt: new Date()
-            }
-          },
-          { session }
-        );
-
-        // Update user's subscription record
-        await usersCollection.updateOne(
-          { _id: subscription.userId },
-          {
-            $set: {
-              currentSubscription: new mongoose.Types.ObjectId(subscriptionId),
-              subscriptionPlan: subscription.planId,
-              subscriptionStatus: 'active',
-              subscriptionExpiresAt: expiresAt,
-              updatedAt: new Date()
-            },
-            $unset: { pendingSubscription: '' }
-          },
-          { session }
-        );
-
-        // Create user notification
-        await notificationsCollection.insertOne({
-          userId: subscription.userId,
-          userType: 'cargo_owner',
-          type: 'subscription_approved',
-          title: 'Subscription Approved',
-          message: `Your ${subscription.planName} subscription is now active until ${expiresAt.toLocaleDateString()}.`,
-          data: {
-            subscriptionId,
-            planId: subscription.planId,
-            planName: subscription.planName,
-            activatedAt,
-            expiresAt
-          },
-          isRead: false,
-          priority: 'high',
-          createdAt: new Date()
-        }, { session });
-
-        // Create audit log
-        await auditLogsCollection.insertOne({
-          action: 'subscription_approved',
-          entityType: 'subscription',
-          entityId: new mongoose.Types.ObjectId(subscriptionId),
-          adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-          adminName,
-          userId: subscription.userId,
-          details: {
-            planId: subscription.planId,
-            planName: subscription.planName,
-            amount: subscription.price,
-            paymentMethod: subscription.paymentMethod,
-            paymentVerified,
-            notes,
-            activatedAt,
-            expiresAt,
-            verificationDetails
-          },
-          ipAddress: req.ip,
-          userAgent: req.get('User-Agent'),
-          createdAt: new Date()
-        }, { session });
-      });
-
-      console.log('Subscription approved successfully:', { 
-        subscriptionId, 
-        userId: subscription.userId,
-        planId: subscription.planId,
-        adminId,
-        activatedAt,
-        expiresAt
-      });
-
-      res.json({
-        status: 'success',
-        message: 'Subscription approved successfully',
-        data: {
-          subscriptionId,
-          approvedAt: activatedAt,
-          expiresAt,
-          approvedBy: adminName,
-          planName: subscription.planName
-        }
-      });
-
-    } finally {
-      await session.endSession();
-    }
-
-  } catch (error) {
-    console.error('Approve subscription error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error approving subscription',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-
-// @route   POST /api/admin/subscriptions/:id/reject
-// @desc    Reject a subscription
-// @access  Private
-router.post('/subscriptions/:id/reject', adminAuth, [
-  body('reason').notEmpty().withMessage('Rejection reason is required'),
-  body('reasonCategory').optional().isIn([
-    'payment_failed', 'invalid_details', 'fraud_suspected', 'other'
-  ]).withMessage('Valid reason category is required'),
-  body('notes').optional().isLength({ max: 500 }),
-  body('refundRequired').optional().isBoolean()
-], async (req, res) => {
-  try {
-    if (!req.admin.permissions.managePayments) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to manage subscriptions.'
-      });
-    }
-
-    const subscriptionId = req.params.id;
-    const {
-      reason,
-      reasonCategory = 'other',
-      notes = '',
-      refundRequired = false
-    } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid subscription ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const subscriptionsCollection = db.collection('subscriptions');
-    const usersCollection = db.collection('cargo-owners');
-    const notificationsCollection = db.collection('notifications');
-    const auditLogsCollection = db.collection('audit_logs');
-
-    const subscription = await subscriptionsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(subscriptionId)
-    });
-
-    if (!subscription) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Subscription not found'
-      });
-    }
-
-    if (subscription.status !== 'pending') {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Only pending subscriptions can be rejected'
-      });
-    }
-
-    const adminId = req.admin.id || req.admin._id || null;
-    const adminName = req.admin.name || 'Admin';
-    const adminEmail = req.admin.email || '';
-
-    // Update subscription to rejected
-    await subscriptionsCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(subscriptionId) },
-      {
-        $set: {
-          status: 'rejected',
-          paymentStatus: 'failed',
-          rejectedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-          rejectedAt: new Date(),
-          rejectionReason: reason,
-          rejectionCategory: reasonCategory,
-          adminNotes: notes,
-          refundRequired,
-          rejectionDetails: {
-            rejectedByName: adminName,
-            rejectedByEmail: adminEmail,
-            rejectionTimestamp: new Date()
-          },
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    // Remove pendingSubscription from user
-    await usersCollection.updateOne(
-      { _id: subscription.userId },
-      { $unset: { pendingSubscription: '' }, $set: { updatedAt: new Date() } }
-    );
-
-    // Send notification to user
-    const reasonMessages = {
-      payment_failed: 'Payment could not be verified',
-      invalid_details: 'Payment details were invalid',
-      fraud_suspected: 'Suspicious activity detected',
-      other: reason
-    };
-
-    await notificationsCollection.insertOne({
-      userId: subscription.userId,
-      userType: 'cargo_owner',
-      type: 'subscription_rejected',
-      title: 'Subscription Request Rejected',
-      message: `Your ${subscription.planName} request was declined. Reason: ${reasonMessages[reasonCategory]}. You remain on the Basic plan.`,
-      data: {
-        subscriptionId,
-        planName: subscription.planName,
-        reason,
-        reasonCategory,
-        refundRequired,
-        rejectedAt: new Date()
-      },
-      isRead: false,
-      priority: 'high',
-      createdAt: new Date()
-    });
-
-    // Create audit log
-    await auditLogsCollection.insertOne({
-      action: 'subscription_rejected',
-      entityType: 'subscription',
-      entityId: new mongoose.Types.ObjectId(subscriptionId),
-      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-      adminName,
-      userId: subscription.userId,
-      details: {
-        planId: subscription.planId,
-        planName: subscription.planName,
-        amount: subscription.price,
-        paymentMethod: subscription.paymentMethod,
-        reason,
-        reasonCategory,
-        refundRequired,
-        notes
-      },
-      ipAddress: req.ip,
-      userAgent: req.get('User-Agent'),
-      createdAt: new Date()
-    });
-
-    console.log('Subscription rejected successfully:', { 
-      subscriptionId, 
-      userId: subscription.userId,
-      reason,
-      adminId 
-    });
-
-    res.json({
-      status: 'success',
-      message: 'Subscription rejected successfully',
-      data: {
-        subscriptionId,
-        rejectedAt: new Date(),
-        reason,
-        reasonCategory
-      }
-    });
-
-  } catch (error) {
-    console.error('Reject subscription error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error rejecting subscription',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
 // @route   GET /api/admin/loads
 // @desc    Get loads with pagination (Admin only)
 // @access  Private
@@ -3956,6 +1892,2382 @@ router.post('/dashboard-stats/refresh', adminAuth, async (req, res) => {
     });
   }
 });
+
+
+
+// @route   GET /api/admin/users
+// @desc    Get users with pagination and search
+// @access  Private
+router.get('/users', 
+  adminAuth, 
+  [
+    query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    query('search').optional().isLength({ max: 100 }).withMessage('Search term too long'),
+    query('userType').optional().isIn(['driver', 'cargo_owner']).withMessage('Invalid user type')
+  ], 
+  async (req, res) => {
+    try {
+      if (!req.admin.permissions.manageUsers) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Access denied. You do not have permission to manage users.'
+        });
+      }
+
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const search = req.query.search || '';
+      const userType = req.query.userType;
+      const skip = (page - 1) * limit;
+
+      const db = mongoose.connection.db;
+
+      // Build search query
+      let searchQuery = {};
+      if (search) {
+        const searchRegex = new RegExp(search, 'i');
+        searchQuery = {
+          $or: [
+            { name: searchRegex },
+            { email: searchRegex },
+            { phone: searchRegex }
+          ]
+        };
+      }
+
+      // Get users from collections based on userType filter
+      let allUsers = [];
+      
+      if (!userType || userType === 'driver') {
+        const drivers = await db.collection('drivers').find(searchQuery)
+          .project({ password: 0, loginHistory: 0, registrationIp: 0 })
+          .toArray();
+        allUsers.push(...drivers.map(user => ({ ...user, userType: 'driver' })));
+      }
+      
+      if (!userType || userType === 'cargo_owner') {
+        const cargoOwners = await db.collection('cargo-owners').find(searchQuery)
+          .project({ password: 0, loginHistory: 0, registrationIp: 0 })
+          .toArray();
+        allUsers.push(...cargoOwners.map(user => ({ ...user, userType: 'cargo_owner' })));
+      }
+
+      // Get subscription info for each user
+      const userIds = allUsers.map(user => user._id);
+      const subscriptions = await Subscription.find({
+        userId: { $in: userIds },
+        status: 'active'
+      }).select('userId planName status expiresAt');
+
+      // Create subscription map
+      const subscriptionMap = {};
+      subscriptions.forEach(sub => {
+        subscriptionMap[sub.userId.toString()] = {
+          planName: sub.planName,
+          status: sub.status,
+          expiresAt: sub.expiresAt,
+          isExpired: sub.expiresAt && new Date() > sub.expiresAt
+        };
+      });
+
+      // Add subscription info to users
+      allUsers = allUsers.map(user => ({
+        ...user,
+        subscription: subscriptionMap[user._id.toString()] || null
+      }));
+
+      // Sort by creation date (newest first)
+      allUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      // Apply pagination
+      const total = allUsers.length;
+      const users = allUsers.slice(skip, skip + limit);
+      const totalPages = Math.ceil(total / limit);
+
+      res.json({
+        status: 'success',
+        data: {
+          users,
+          total,
+          totalPages,
+          currentPage: page,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      });
+
+    } catch (error) {
+      console.error('Get users error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Server error fetching users'
+      });
+    }
+  }
+);
+
+// @route   GET /api/admin/notifications
+// @desc    Get all notifications for admin view
+// @access  Private (Admin only)
+router.get('/notifications', adminAuth, [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('unread').optional().isBoolean().withMessage('Unread must be boolean'),
+  query('type').optional().isString().withMessage('Type must be a string'),
+  query('search').optional().isString().withMessage('Search must be a string'),
+  query('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      page = 1,
+      limit = 20,
+      unread,
+      type,
+      search,
+      priority
+    } = req.query;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Build query filter - Only notifications meant for admins
+    const matchQuery = {
+      $or: [
+        // Notifications specifically for this admin
+        { 
+          userId: new mongoose.Types.ObjectId(req.admin.id),
+          userType: 'admin' 
+        },
+        // System-wide notifications for all admins
+        { 
+          userType: 'admin',
+          $or: [
+            { userId: null },
+            { userId: { $exists: false } }
+          ]
+        },
+        // Admin-relevant notifications (subscription requests, user reports, etc.)
+        {
+          userType: 'admin',
+          type: { 
+            $in: [
+              'subscription_request', 
+              'user_registration', 
+              'load_flagged',
+              'payment_issue',
+              'system_alert',
+              'security_alert',
+              'user_report',
+              'document_verification_required',
+              'high_value_transaction',
+              'suspicious_activity'
+            ] 
+          }
+        }
+      ]
+    };
+
+    // Add additional filters
+    if (unread !== undefined) {
+      matchQuery.isRead = unread === 'true' ? false : true;
+    }
+
+    if (type && type !== 'all') {
+      matchQuery.type = type;
+    }
+
+    if (priority) {
+      matchQuery.priority = priority;
+    }
+
+    if (search) {
+      matchQuery.$and = matchQuery.$and || [];
+      matchQuery.$and.push({
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { message: { $regex: search, $options: 'i' } }
+        ]
+      });
+    }
+
+    // Get total count for pagination
+    const totalNotifications = await notificationsCollection.countDocuments(matchQuery);
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const totalPages = Math.ceil(totalNotifications / parseInt(limit));
+
+    // Fetch notifications with pagination and sorting
+    const notifications = await notificationsCollection
+      .find(matchQuery)
+      .sort({ 
+        priority: -1, // High priority first
+        createdAt: -1  // Most recent first
+      })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .toArray();
+
+    // Get summary statistics for admin
+    const summaryPipeline = [
+      { $match: matchQuery },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          },
+          read: {
+            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
+          },
+          highPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
+          },
+          pendingActions: {
+            $sum: { 
+              $cond: [
+                { 
+                  $and: [
+                    { $eq: ['$isRead', false] },
+                    { $in: ['$type', ['subscription_request', 'user_report', 'document_verification_required']] }
+                  ]
+                }, 
+                1, 
+                0
+              ] 
+            }
+          }
+        }
+      }
+    ];
+
+    const summaryResult = await notificationsCollection.aggregate(summaryPipeline).toArray();
+    const summary = summaryResult[0] || { 
+      total: 0, 
+      unread: 0, 
+      read: 0, 
+      highPriority: 0,
+      pendingActions: 0 
+    };
+
+    // Enrich notifications with user information
+    const enrichedNotifications = await Promise.all(
+      notifications.map(async (notif) => {
+        let userInfo = {};
+        
+        // Extract user info from notification data or fetch from database
+        if (notif.data && notif.data.userId) {
+          try {
+            const userId = notif.data.userId;
+            const userType = notif.data.userType || 
+                           (notif.type === 'subscription_request' ? 'cargo_owner' : 'driver');
+            
+            const userCollection = userType === 'driver' ? 'drivers' : 
+                                 userType === 'cargo_owner' ? 'cargo-owners' : 
+                                 userType === 'admin' ? 'admins' : null;
+            
+            if (userCollection) {
+              const user = await db.collection(userCollection).findOne(
+                { _id: new mongoose.Types.ObjectId(userId) },
+                { projection: { name: 1, email: 1, phone: 1, isVerified: 1, accountStatus: 1 } }
+              );
+              
+              if (user) {
+                userInfo = {
+                  userName: user.name,
+                  userEmail: user.email,
+                  userPhone: user.phone,
+                  userVerified: user.isVerified,
+                  userStatus: user.accountStatus
+                };
+              } else {
+                // Fallback to data in notification
+                userInfo = {
+                  userName: notif.data.userName || 'Unknown User',
+                  userEmail: notif.data.userEmail || '',
+                  userPhone: notif.data.userPhone || '',
+                  userVerified: notif.data.userVerified || false,
+                  userStatus: 'unknown'
+                };
+              }
+            }
+          } catch (userError) {
+            console.error('Error fetching user info for notification:', userError);
+            userInfo = {
+              userName: notif.data.userName || 'Unknown User',
+              userEmail: notif.data.userEmail || '',
+              userPhone: notif.data.userPhone || ''
+            };
+          }
+        }
+
+        return {
+          ...notif,
+          ...userInfo,
+          // Add action buttons based on notification type
+          availableActions: getAvailableActions(notif.type, notif.data),
+          // Add urgency indicator
+          isUrgent: notif.priority === 'high' && !notif.isRead,
+          // Add time indicators
+          isRecent: (Date.now() - new Date(notif.createdAt).getTime()) < 24 * 60 * 60 * 1000,
+          ageInHours: Math.floor((Date.now() - new Date(notif.createdAt).getTime()) / (1000 * 60 * 60))
+        };
+      })
+    );
+
+    res.json({
+      status: 'success',
+      data: {
+        notifications: enrichedNotifications,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalNotifications,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
+        },
+        summary,
+        filters: {
+          unread: unread,
+          type: type,
+          search: search,
+          priority: priority
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin get notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Helper function to determine available actions for each notification type
+function getAvailableActions(notificationType, notificationData) {
+  switch (notificationType) {
+    case 'subscription_request':
+      return ['approve', 'reject', 'view_details'];
+    case 'user_report':
+      return ['investigate', 'dismiss', 'suspend_user'];
+    case 'document_verification_required':
+      return ['verify', 'reject_verification', 'request_resubmission'];
+    case 'system_alert':
+      return ['acknowledge', 'investigate'];
+    case 'security_alert':
+      return ['investigate', 'escalate', 'acknowledge'];
+    default:
+      return ['mark_read', 'delete'];
+  }
+}
+
+
+// @route   GET /api/admin/notifications/summary
+// @desc    Get notification summary for admin
+// @access  Private (Admin only)
+router.get('/notifications/summary', adminAuth, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Admin-specific notification filter
+    const adminNotificationFilter = {
+      $or: [
+        { 
+          userId: new mongoose.Types.ObjectId(req.admin.id),
+          userType: 'admin' 
+        },
+        { 
+          userType: 'admin',
+          $or: [
+            { userId: null },
+            { userId: { $exists: false } }
+          ]
+        },
+        {
+          userType: 'admin',
+          type: { 
+            $in: [
+              'subscription_request', 
+              'user_registration', 
+              'load_flagged',
+              'payment_issue',
+              'system_alert',
+              'security_alert',
+              'user_report',
+              'document_verification_required'
+            ] 
+          }
+        }
+      ]
+    };
+
+    // Get comprehensive summary for admin
+    const summary = await notificationsCollection.aggregate([
+      { $match: adminNotificationFilter },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          },
+          read: {
+            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
+          },
+          highPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
+          },
+          mediumPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'medium'] }, 1, 0] }
+          },
+          lowPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'low'] }, 1, 0] }
+          },
+          subscriptionRequests: {
+            $sum: { $cond: [{ $eq: ['$type', 'subscription_request'] }, 1, 0] }
+          },
+          userReports: {
+            $sum: { $cond: [{ $eq: ['$type', 'user_report'] }, 1, 0] }
+          },
+          systemAlerts: {
+            $sum: { $cond: [{ $eq: ['$type', 'system_alert'] }, 1, 0] }
+          },
+          securityAlerts: {
+            $sum: { $cond: [{ $eq: ['$type', 'security_alert'] }, 1, 0] }
+          },
+          pendingActions: {
+            $sum: { 
+              $cond: [
+                { 
+                  $and: [
+                    { $eq: ['$isRead', false] },
+                    { $in: ['$type', ['subscription_request', 'user_report', 'document_verification_required']] }
+                  ]
+                }, 
+                1, 
+                0
+              ] 
+            }
+          }
+        }
+      }
+    ]).toArray();
+
+    // Get type breakdown
+    const typeBreakdown = await notificationsCollection.aggregate([
+      { $match: adminNotificationFilter },
+      {
+        $group: {
+          _id: '$type',
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          },
+          highPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { total: -1 } }
+    ]).toArray();
+
+    // Get recent notifications (last 24 hours)
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentCount = await notificationsCollection.countDocuments({
+      ...adminNotificationFilter,
+      createdAt: { $gte: yesterday }
+    });
+
+    // Get most urgent unread notifications
+    const urgentNotifications = await notificationsCollection
+      .find({
+        ...adminNotificationFilter,
+        isRead: false,
+        priority: 'high'
+      })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .toArray();
+
+    const summaryData = summary[0] || { 
+      total: 0, 
+      unread: 0, 
+      read: 0, 
+      highPriority: 0, 
+      mediumPriority: 0, 
+      lowPriority: 0,
+      subscriptionRequests: 0,
+      userReports: 0,
+      systemAlerts: 0,
+      securityAlerts: 0,
+      pendingActions: 0
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        summary: summaryData,
+        typeBreakdown: typeBreakdown.reduce((acc, item) => {
+          acc[item._id] = { 
+            total: item.total, 
+            unread: item.unread,
+            highPriority: item.highPriority 
+          };
+          return acc;
+        }, {}),
+        recentCount,
+        urgentNotifications: urgentNotifications.map(notif => ({
+          id: notif._id,
+          type: notif.type,
+          title: notif.title,
+          createdAt: notif.createdAt,
+          priority: notif.priority
+        })),
+        actionableCount: summaryData.pendingActions
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification summary error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notification summary',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/admin/notifications/read-all
+// @desc    Mark all notifications as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/read-all', adminAuth, async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.updateMany(
+      { isRead: false },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        updatedCount: result.modifiedCount,
+        readAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin mark all notifications read error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking all notifications as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/admin/notifications/bulk-read
+// @desc    Mark multiple notifications as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/bulk-read', adminAuth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.updateMany(
+      { 
+        _id: { $in: objectIds },
+        isRead: false
+      },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        requestedCount: notificationIds.length,
+        updatedCount: result.modifiedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin bulk read notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notifications as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/bulk-delete
+// @desc    Delete multiple notifications (admin)
+// @access  Private (Admin only)
+router.delete('/notifications/bulk-delete', adminAuth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.deleteMany({
+      _id: { $in: objectIds }
+    });
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        requestedCount: notificationIds.length,
+        deletedCount: result.deletedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin bulk delete notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/admin/notifications/broadcast
+// @desc    Send broadcast notification to selected users or all users
+// @access  Private (Admin only)
+router.post('/notifications/broadcast', adminAuth, [
+  body('recipients').notEmpty().withMessage('Recipients configuration is required'),
+  body('recipients.type').isIn(['all', 'selected', 'user_type', 'verified_only', 'active_only'])
+    .withMessage('Recipients type must be: all, selected, user_type, verified_only, or active_only'),
+  body('recipients.userType').optional().isIn(['driver', 'cargo_owner', 'admin'])
+    .withMessage('User type must be driver, cargo_owner, or admin'),
+  body('recipients.userIds').optional().isArray().withMessage('User IDs must be an array'),
+  body('recipients.userIds.*').optional().isMongoId().withMessage('Each user ID must be valid'),
+  body('notification.type').notEmpty().withMessage('Notification type is required'),
+  body('notification.title').notEmpty().isLength({ max: 200 })
+    .withMessage('Title is required and cannot exceed 200 characters'),
+  body('notification.message').notEmpty().isLength({ max: 1000 })
+    .withMessage('Message is required and cannot exceed 1000 characters'),
+  body('notification.priority').optional().isIn(['low', 'medium', 'high'])
+    .withMessage('Priority must be low, medium, or high'),
+  body('scheduling.sendNow').optional().isBoolean().withMessage('Send now must be boolean'),
+  body('scheduling.scheduledFor').optional().isISO8601().withMessage('Scheduled date must be valid ISO 8601 format')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      recipients,
+      notification,
+      scheduling = { sendNow: true }
+    } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Determine target users based on recipients configuration
+    let targetUsers = [];
+    let recipientCount = 0;
+
+    switch (recipients.type) {
+      case 'selected':
+        if (!recipients.userIds || recipients.userIds.length === 0) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'User IDs are required for selected recipients'
+          });
+        }
+        
+        // Validate and get selected users
+        for (const userId of recipients.userIds) {
+          // Try to find user in drivers collection
+          let user = await db.collection('drivers').findOne(
+            { _id: new mongoose.Types.ObjectId(userId) },
+            { projection: { _id: 1, name: 1, email: 1, isActive: 1 } }
+          );
+          
+          if (user) {
+            targetUsers.push({
+              userId: user._id,
+              userType: 'driver',
+              userName: user.name,
+              userEmail: user.email,
+              isActive: user.isActive
+            });
+          } else {
+            // Try cargo-owners collection
+            user = await db.collection('cargo-owners').findOne(
+              { _id: new mongoose.Types.ObjectId(userId) },
+              { projection: { _id: 1, name: 1, email: 1, isActive: 1 } }
+            );
+            
+            if (user) {
+              targetUsers.push({
+                userId: user._id,
+                userType: 'cargo_owner',
+                userName: user.name,
+                userEmail: user.email,
+                isActive: user.isActive
+              });
+            }
+          }
+        }
+        break;
+
+      case 'user_type':
+        if (!recipients.userType) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'User type is required for user_type recipients'
+          });
+        }
+        
+        const collection = recipients.userType === 'driver' ? 'drivers' : 
+                          recipients.userType === 'cargo_owner' ? 'cargo-owners' : 
+                          recipients.userType === 'admin' ? 'admins' : null;
+        
+        if (!collection) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid user type specified'
+          });
+        }
+        
+        const users = await db.collection(collection).find(
+          { 
+            $and: [
+              { $or: [{ isActive: true }, { accountStatus: 'active' }] },
+              { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
+            ]
+          },
+          { projection: { _id: 1, name: 1, email: 1 } }
+        ).toArray();
+        
+        targetUsers = users.map(user => ({
+          userId: user._id,
+          userType: recipients.userType,
+          userName: user.name,
+          userEmail: user.email
+        }));
+        break;
+
+      case 'verified_only':
+        const verificationFilter = { isVerified: true, isActive: true };
+        
+        const [verifiedDrivers, verifiedCargoOwners] = await Promise.all([
+          db.collection('drivers').find(verificationFilter, 
+            { projection: { _id: 1, name: 1, email: 1 } }).toArray(),
+          db.collection('cargo-owners').find(verificationFilter, 
+            { projection: { _id: 1, name: 1, email: 1 } }).toArray()
+        ]);
+        
+        targetUsers = [
+          ...verifiedDrivers.map(user => ({ 
+            userId: user._id, userType: 'driver', userName: user.name, userEmail: user.email 
+          })),
+          ...verifiedCargoOwners.map(user => ({ 
+            userId: user._id, userType: 'cargo_owner', userName: user.name, userEmail: user.email 
+          }))
+        ];
+        break;
+
+      case 'active_only':
+        const activeFilter = { 
+          $and: [
+            { $or: [{ isActive: true }, { accountStatus: 'active' }] },
+            { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
+          ]
+        };
+        
+        const [activeDrivers, activeCargoOwners] = await Promise.all([
+          db.collection('drivers').find(activeFilter, 
+            { projection: { _id: 1, name: 1, email: 1 } }).toArray(),
+          db.collection('cargo-owners').find(activeFilter, 
+            { projection: { _id: 1, name: 1, email: 1 } }).toArray()
+        ]);
+        
+        targetUsers = [
+          ...activeDrivers.map(user => ({ 
+            userId: user._id, userType: 'driver', userName: user.name, userEmail: user.email 
+          })),
+          ...activeCargoOwners.map(user => ({ 
+            userId: user._id, userType: 'cargo_owner', userName: user.name, userEmail: user.email 
+          }))
+        ];
+        break;
+
+      case 'all':
+      default:
+        // Send to all active users
+        const [allDrivers, allCargoOwners] = await Promise.all([
+          db.collection('drivers').find(
+            { $or: [{ isActive: true }, { accountStatus: { $ne: 'suspended' } }] },
+            { projection: { _id: 1, name: 1, email: 1 } }
+          ).toArray(),
+          db.collection('cargo-owners').find(
+            { $or: [{ isActive: true }, { accountStatus: { $ne: 'suspended' } }] },
+            { projection: { _id: 1, name: 1, email: 1 } }
+          ).toArray()
+        ]);
+        
+        targetUsers = [
+          ...allDrivers.map(user => ({ 
+            userId: user._id, userType: 'driver', userName: user.name, userEmail: user.email 
+          })),
+          ...allCargoOwners.map(user => ({ 
+            userId: user._id, userType: 'cargo_owner', userName: user.name, userEmail: user.email 
+          }))
+        ];
+        break;
+    }
+
+    if (targetUsers.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No eligible users found for the specified recipient criteria'
+      });
+    }
+
+    recipientCount = targetUsers.length;
+
+    // If scheduled for later, save as draft
+    if (scheduling.scheduledFor && !scheduling.sendNow) {
+      const scheduledNotification = {
+        type: 'scheduled_broadcast',
+        recipients,
+        notification,
+        scheduling,
+        targetUserCount: recipientCount,
+        createdBy: new mongoose.Types.ObjectId(req.admin.id),
+        createdByName: req.admin.name,
+        status: 'scheduled',
+        createdAt: new Date(),
+        scheduledFor: new Date(scheduling.scheduledFor)
+      };
+
+      const result = await db.collection('scheduled-notifications').insertOne(scheduledNotification);
+
+      return res.status(201).json({
+        status: 'success',
+        message: 'Notification scheduled successfully',
+        data: {
+          scheduledNotificationId: result.insertedId,
+          scheduledFor: scheduling.scheduledFor,
+          targetUserCount: recipientCount,
+          status: 'scheduled'
+        }
+      });
+    }
+
+    // Send notifications immediately
+    const notificationsCollection = db.collection('notifications');
+    const notifications = targetUsers.map(user => ({
+      userId: user.userId,
+      userType: user.userType,
+      type: notification.type,
+      title: notification.title,
+      message: notification.message,
+      priority: notification.priority || 'medium',
+      data: {
+        ...notification.data,
+        broadcastId: new mongoose.Types.ObjectId(),
+        sentByAdmin: true,
+        adminName: req.admin.name,
+        adminEmail: req.admin.email
+      },
+      icon: notification.icon || getBroadcastIcon(notification.type),
+      actionUrl: notification.actionUrl,
+      expiresAt: notification.expiresAt ? new Date(notification.expiresAt) : null,
+      sentBy: new mongoose.Types.ObjectId(req.admin.id),
+      sentByType: 'admin',
+      sentByName: req.admin.name,
+      isRead: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }));
+
+    const result = await notificationsCollection.insertMany(notifications);
+
+    // Log the broadcast action in audit logs
+    const auditLog = {
+      action: 'broadcast_notification',
+      entityType: 'notification',
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      adminEmail: req.admin.email,
+      details: {
+        notificationType: notification.type,
+        title: notification.title,
+        recipientsType: recipients.type,
+        targetUserType: recipients.userType,
+        targetUserCount: recipientCount,
+        sentCount: result.insertedCount,
+        priority: notification.priority || 'medium'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    };
+
+    try {
+      await db.collection('audit_logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log broadcast action:', logError);
+    }
+
+    console.log('Broadcast notification sent:', {
+      adminId: req.admin.id,
+      notificationType: notification.type,
+      recipientCount,
+      sentCount: result.insertedCount
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: `Notification sent successfully to ${result.insertedCount} users`,
+      data: {
+        sentCount: result.insertedCount,
+        targetUserCount: recipientCount,
+        recipients: recipients.type,
+        notificationIds: result.insertedIds,
+        broadcastId: notifications[0]?.data?.broadcastId,
+        sentAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin broadcast notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error broadcasting notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Helper function to get appropriate icon for broadcast notifications
+function getBroadcastIcon(notificationType) {
+  const iconMap = {
+    'system_announcement': 'megaphone',
+    'maintenance_notice': 'settings',
+    'security_alert': 'shield-alert',
+    'policy_update': 'file-text',
+    'feature_announcement': 'star',
+    'promotion': 'gift',
+    'reminder': 'clock',
+    'warning': 'alert-triangle',
+    'celebration': 'party-popper'
+  };
+  
+  return iconMap[notificationType] || 'bell';
+}
+
+// @route   GET /api/admin/notifications/stats
+// @desc    Get detailed notification statistics (admin)
+// @access  Private (Admin only)
+router.get('/notifications/stats', adminAuth, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Get comprehensive stats
+    const stats = await notificationsCollection.aggregate([
+      {
+        $facet: {
+          // Overall summary
+          summary: [
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } },
+                read: { $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // By priority
+          byPriority: [
+            {
+              $group: {
+                _id: '$priority',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // By type
+          byType: [
+            {
+              $group: {
+                _id: '$type',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            },
+            { $sort: { count: -1 } }
+          ],
+          
+          // By user type
+          byUserType: [
+            {
+              $group: {
+                _id: '$userType',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // Recent trends (last 7 days)
+          recentTrends: [
+            {
+              $match: {
+                createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+              }
+            },
+            {
+              $group: {
+                _id: {
+                  date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }
+                },
+                count: { $sum: 1 }
+              }
+            },
+            { $sort: { '_id.date': 1 } }
+          ]
+        }
+      }
+    ]).toArray();
+
+    const result = stats[0];
+
+    res.json({
+      status: 'success',
+      data: {
+        summary: result.summary[0] || { total: 0, unread: 0, read: 0 },
+        byPriority: result.byPriority.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        byType: result.byType.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        byUserType: result.byUserType.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        recentTrends: result.recentTrends.map(item => ({
+          date: item._id.date,
+          count: item.count
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification stats error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notification statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/cleanup
+// @desc    Clean up old notifications (admin only)
+// @access  Private (Admin only)
+router.delete('/notifications/cleanup', adminAuth, [
+  body('olderThanDays').optional().isInt({ min: 1 }).withMessage('Days must be a positive integer'),
+  body('deleteRead').optional().isBoolean().withMessage('Delete read must be boolean')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { olderThanDays = 30, deleteRead = true } = req.body;
+    
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Calculate cutoff date
+    const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+
+    // Build cleanup query
+    const cleanupQuery = {
+      createdAt: { $lt: cutoffDate }
+    };
+
+    if (deleteRead) {
+      cleanupQuery.isRead = true;
+    }
+
+    const result = await notificationsCollection.deleteMany(cleanupQuery);
+
+    // Log the cleanup action
+    const auditLog = {
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      action: 'cleanup_notifications',
+      details: `Deleted ${result.deletedCount} notifications older than ${olderThanDays} days`,
+      deletedCount: result.deletedCount,
+      criteria: { olderThanDays, deleteRead },
+      timestamp: new Date(),
+      ipAddress: req.ip
+    };
+
+    try {
+      await db.collection('audit-logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log cleanup action:', logError);
+    }
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        deletedCount: result.deletedCount,
+        criteria: { olderThanDays, deleteRead }
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification cleanup error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error cleaning up notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/admin/notifications/system
+// @desc    Create system notification (admin only)
+// @access  Private (Admin only)
+router.post('/notifications/system', adminAuth, [
+  body('type').isIn(['system_maintenance', 'security_alert', 'policy_update', 'system_announcement'])
+    .withMessage('Invalid system notification type'),
+  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
+  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
+  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high'),
+  body('scheduledFor').optional().isISO8601().withMessage('Scheduled date must be valid ISO 8601 format')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      type,
+      title,
+      message,
+      priority = 'medium',
+      data = {},
+      scheduledFor,
+      userType = 'all'
+    } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Create system notification record
+    const systemNotification = {
+      type,
+      title,
+      message,
+      priority,
+      data,
+      createdBy: new mongoose.Types.ObjectId(req.admin.id),
+      createdByName: req.admin.name,
+      scheduledFor: scheduledFor ? new Date(scheduledFor) : new Date(),
+      userType,
+      status: scheduledFor ? 'scheduled' : 'sent',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // If not scheduled, send immediately
+    if (!scheduledFor) {
+      // Get target users
+      let targetUsers = [];
+      
+      if (userType === 'all') {
+        const [drivers, cargoOwners] = await Promise.all([
+          db.collection('drivers').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray(),
+          db.collection('cargo-owners').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray()
+        ]);
+        
+        targetUsers = [
+          ...drivers.map(user => ({ userId: user._id, userType: 'driver' })),
+          ...cargoOwners.map(user => ({ userId: user._id, userType: 'cargo_owner' }))
+        ];
+      } else {
+        const collection = userType === 'driver' ? 'drivers' : 'cargo-owners';
+        const users = await db.collection(collection).find(
+          { status: { $ne: 'deleted' } },
+          { projection: { _id: 1 } }
+        ).toArray();
+        
+        targetUsers = users.map(user => ({ userId: user._id, userType }));
+      }
+
+      // Create individual notifications
+      const notifications = targetUsers.map(user => ({
+        userId: user.userId,
+        userType: user.userType,
+        type,
+        title,
+        message,
+        priority,
+        data,
+        icon: type === 'security_alert' ? 'alert-triangle' : 
+              type === 'system_maintenance' ? 'settings' : 'info',
+        sentBy: new mongoose.Types.ObjectId(req.admin.id),
+        sentByType: 'admin',
+        isRead: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }));
+
+      if (notifications.length > 0) {
+        await db.collection('notifications').insertMany(notifications);
+        systemNotification.sentCount = notifications.length;
+      }
+    }
+
+    // Save system notification record
+    const result = await db.collection('system-notifications').insertOne(systemNotification);
+
+    // Log the action
+    const auditLog = {
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      action: 'create_system_notification',
+      details: `Created ${type} notification: "${title}"`,
+      notificationId: result.insertedId,
+      scheduledFor: systemNotification.scheduledFor,
+      timestamp: new Date(),
+      ipAddress: req.ip
+    };
+
+    try {
+      await db.collection('audit-logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log system notification creation:', logError);
+    }
+
+    res.status(201).json({
+      status: 'success',
+      message: scheduledFor ? 'System notification scheduled successfully' : 'System notification sent successfully',
+      data: {
+        notificationId: result.insertedId,
+        sentCount: systemNotification.sentCount || 0,
+        scheduledFor: systemNotification.scheduledFor,
+        status: systemNotification.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Create system notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error creating system notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/admin/subscriptions
+// @desc    Get subscriptions with optional status filter
+// @access  Private
+router.get('/subscriptions', 
+  adminAuth, 
+  [
+    query('status').optional().isIn(['pending', 'active', 'expired', 'cancelled', 'rejected']),
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 })
+  ], 
+  async (req, res) => {
+    try {
+      if (!req.admin.permissions.managePayments) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Access denied. You do not have permission to manage subscriptions.'
+        });
+      }
+
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      const status = req.query.status;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 50;
+      const skip = (page - 1) * limit;
+
+      // Build query
+      let query = {};
+      if (status === 'expired') {
+        query = {
+          status: 'active',
+          expiresAt: { $lte: new Date() }
+        };
+      } else if (status) {
+        query.status = status;
+      }
+
+      // Get subscriptions with user data
+      const subscriptions = await Subscription.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'drivers',
+            localField: 'userId',
+            foreignField: '_id',
+            as: 'driverUser'
+          }
+        },
+        {
+          $lookup: {
+            from: 'cargo-owners',
+            localField: 'userId',
+            foreignField: '_id',
+            as: 'cargoUser'
+          }
+        },
+        {
+          $addFields: {
+            user: {
+              $cond: {
+                if: { $gt: [{ $size: '$driverUser' }, 0] },
+                then: { $arrayElemAt: ['$driverUser', 0] },
+                else: { $arrayElemAt: ['$cargoUser', 0] }
+              }
+            },
+            userType: {
+              $cond: {
+                if: { $gt: [{ $size: '$driverUser' }, 0] },
+                then: 'driver',
+                else: 'cargo_owner'
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            driverUser: 0,
+            cargoUser: 0,
+            'user.password': 0,
+            'user.loginHistory': 0
+          }
+        },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ]);
+
+      const total = await Subscription.countDocuments(query);
+      const totalPages = Math.ceil(total / limit);
+
+      res.json({
+        status: 'success',
+        data: {
+          subscriptions,
+          total,
+          totalPages,
+          currentPage: page,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      });
+
+    } catch (error) {
+      console.error('Get subscriptions error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Server error fetching subscriptions'
+      });
+    }
+  }
+);
+
+
+// @route   POST /api/admin/users/:id/suspend
+// @desc    Suspend a user
+// @access  Private
+router.post('/users/:id/suspend', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage users.'
+      });
+    }
+
+    const userId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const objectId = new mongoose.Types.ObjectId(userId);
+
+    // Try to find and update in both collections
+    const [driverResult, cargoOwnerResult] = await Promise.all([
+      db.collection('drivers').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isActive: false,
+            accountStatus: 'suspended',
+            suspendedAt: new Date(),
+            suspendedBy: req.admin.id,
+            updatedAt: new Date()
+          }
+        },
+        { returnDocument: 'after' }
+      ),
+      db.collection('cargo-owners').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isActive: false,
+            accountStatus: 'suspended',
+            suspendedAt: new Date(),
+            suspendedBy: req.admin.id,
+            updatedAt: new Date()
+          }
+        },
+        { returnDocument: 'after' }
+      )
+    ]);
+
+    const updatedUser = driverResult.value || cargoOwnerResult.value;
+    const userType = driverResult.value ? 'driver' : 'cargo_owner';
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_suspend',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
+  console.log('User suspended:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
+
+    res.json({
+      status: 'success',
+      message: 'User suspended successfully',
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        userType,
+        isActive: updatedUser.isActive,
+        accountStatus: updatedUser.accountStatus
+      }
+    });
+
+  } catch (error) {
+    console.error('Suspend user error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error suspending user'
+    });
+  }
+});
+
+// @route   POST /api/admin/users/:id/activate
+// @desc    Activate a user
+// @access  Private
+router.post('/users/:id/activate', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage users.'
+      });
+    }
+
+    const userId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const objectId = new mongoose.Types.ObjectId(userId);
+
+    // Try to find and update in both collections
+    const [driverResult, cargoOwnerResult] = await Promise.all([
+      db.collection('drivers').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isActive: true,
+            accountStatus: 'active',
+            reactivatedAt: new Date(),
+            reactivatedBy: req.admin.id,
+            updatedAt: new Date()
+          },
+          $unset: {
+            suspendedAt: 1,
+            suspendedBy: 1
+          }
+        },
+        { returnDocument: 'after' }
+      ),
+      db.collection('cargo-owners').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isActive: true,
+            accountStatus: 'active',
+            reactivatedAt: new Date(),
+            reactivatedBy: req.admin.id,
+            updatedAt: new Date()
+          },
+          $unset: {
+            suspendedAt: 1,
+            suspendedBy: 1
+          }
+        },
+        { returnDocument: 'after' }
+      )
+    ]);
+
+    const updatedUser = driverResult.value || cargoOwnerResult.value;
+    const userType = driverResult.value ? 'driver' : 'cargo_owner';
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_activate',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
+console.log('User activated:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
+
+    res.json({
+      status: 'success',
+      message: 'User activated successfully',
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        userType,
+        isActive: updatedUser.isActive,
+        accountStatus: updatedUser.accountStatus
+      }
+    });
+
+  } catch (error) {
+    console.error('Activate user error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error activating user'
+    });
+  }
+});
+
+// @route   DELETE /api/admin/users/:id
+// @desc    Delete a user
+// @access  Private
+router.delete('/users/:id', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions.manageUsers || req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Only super admins can delete users.'
+      });
+    }
+
+    const userId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const objectId = new mongoose.Types.ObjectId(userId);
+
+    // Try to delete from both collections
+    const [driverResult, cargoOwnerResult] = await Promise.all([
+      db.collection('drivers').findOneAndDelete({ _id: objectId }),
+      db.collection('cargo-owners').findOneAndDelete({ _id: objectId })
+    ]);
+
+    const deletedUser = driverResult.value || cargoOwnerResult.value;
+    const userType = driverResult.value ? 'driver' : 'cargo_owner';
+
+    if (!deletedUser) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    console.log('User deleted:', { id: userId, email: deletedUser.email, userType, admin: req.admin.id });
+
+    res.json({
+      status: 'success',
+      message: 'User deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting user'
+    });
+  }
+});
+
+// @route   POST /api/admin/users/:id/verify
+// @desc    Verify a user
+// @access  Private
+router.post('/users/:id/verify', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage users.'
+      });
+    }
+
+    const userId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid user ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const objectId = new mongoose.Types.ObjectId(userId);
+
+    // Try to find and update in both collections
+    const [driverResult, cargoOwnerResult] = await Promise.all([
+      db.collection('drivers').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isVerified: true,
+            verifiedAt: new Date(),
+            verifiedBy: req.admin.id,
+            updatedAt: new Date(),
+            'driverProfile.verified': true,
+            'driverProfile.verificationStatus': 'verified'
+          }
+        },
+        { returnDocument: 'after' }
+      ),
+      db.collection('cargo-owners').findOneAndUpdate(
+        { _id: objectId },
+        { 
+          $set: { 
+            isVerified: true,
+            verifiedAt: new Date(),
+            verifiedBy: req.admin.id,
+            updatedAt: new Date(),
+            'cargoOwnerProfile.verified': true,
+            'cargoOwnerProfile.verificationStatus': 'verified'
+          }
+        },
+        { returnDocument: 'after' }
+      )
+    ]);
+
+    const updatedUser = driverResult.value || cargoOwnerResult.value;
+    const userType = driverResult.value ? 'driver' : 'cargo_owner';
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+try {
+  const auditLogsCollection = db.collection('audit_logs');
+  await auditLogsCollection.insertOne({
+    action: 'user_verify',   
+    entityType: 'user',         
+    entityId: new mongoose.Types.ObjectId(userId),
+    adminId: new mongoose.Types.ObjectId(req.admin.id),
+    adminName: req.admin.name,
+    userId: userId,    
+    userType: userType,
+    ipAddress: req.ip,
+    userAgent: req.get('User-Agent'),
+    createdAt: new Date()
+  });
+} catch (auditError) {
+  console.warn('Audit log failed:', auditError);
+}
+    console.log('User verified:', { id: userId, email: updatedUser.email, userType, admin: req.admin.id });
+
+    res.json({
+      status: 'success',
+      message: 'User verified successfully',
+      user: {
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        userType,
+        isVerified: updatedUser.isVerified
+      }
+    });
+
+  } catch (error) {
+    console.error('Verify user error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error verifying user'
+    });
+  }
+});
+
+
+// @route   PUT /api/admin/notifications/:id/read
+// @desc    Mark notification as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/:id/read', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: {
+        notificationId: id,
+        isRead: true,
+        readAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin mark notification read error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notification as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/:id
+// @desc    Delete notification (admin)
+// @access  Private (Admin only)
+router.delete('/notifications/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.deleteOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Admin delete notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/admin/subscriptions/:id/approve
+// @desc    Approve a subscription
+// @access  Private
+router.post('/subscriptions/:id/approve', adminAuth, [
+  body('paymentVerified').optional().isBoolean(),
+  body('notes').optional().isLength({ max: 500 }),
+  body('verificationDetails').optional().isObject()
+], async (req, res) => {
+  try {
+    if (!req.admin.permissions.managePayments) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage subscriptions.'
+      });
+    }
+
+    const subscriptionId = req.params.id;
+    const { 
+      paymentVerified = true, 
+      notes = '', 
+      verificationDetails = {} 
+    } = req.body;
+    
+    if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    //Find subscription by ID
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(subscriptionId)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only pending subscriptions can be approved'
+      });
+    }
+
+    // Calculate expiry from approval time, not original request time
+    const activatedAt = new Date();
+    const expiresAt = new Date(activatedAt.getTime() + subscription.duration * 24 * 60 * 60 * 1000);
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+    const adminEmail = req.admin.email || '';
+
+    // Use transaction to ensure data consistency
+    const session = await mongoose.startSession();
+    
+    try {
+      await session.withTransaction(async () => {
+        // Update the subscription to active
+        await subscriptionsCollection.updateOne(
+          { _id: new mongoose.Types.ObjectId(subscriptionId) },
+          {
+            $set: {
+              status: 'active',
+              paymentStatus: 'completed',
+              paymentVerified,
+              activatedAt,
+              expiresAt,
+              approvedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+              approvedAt: new Date(),
+              adminNotes: notes || '',
+              verificationDetails: {
+                ...verificationDetails,
+                approvedByName: adminName,
+                approvedByEmail: adminEmail,
+                verificationTimestamp: new Date()
+              },
+              updatedAt: new Date()
+            }
+          },
+          { session }
+        );
+
+        // Deactivate any other active premium subscriptions (keep basic as fallback)
+        await subscriptionsCollection.updateMany(
+          {
+            userId: subscription.userId,
+            _id: { $ne: new mongoose.Types.ObjectId(subscriptionId) },
+            status: 'active',
+            planId: { $ne: 'basic' } // Don't deactivate basic plan
+          },
+          {
+            $set: {
+              status: 'replaced',
+              deactivatedAt: new Date(),
+              replacedBy: new mongoose.Types.ObjectId(subscriptionId),
+              updatedAt: new Date()
+            }
+          },
+          { session }
+        );
+
+        // Update user's subscription record
+        await usersCollection.updateOne(
+          { _id: subscription.userId },
+          {
+            $set: {
+              currentSubscription: new mongoose.Types.ObjectId(subscriptionId),
+              subscriptionPlan: subscription.planId,
+              subscriptionStatus: 'active',
+              subscriptionExpiresAt: expiresAt,
+              updatedAt: new Date()
+            },
+            $unset: { pendingSubscription: '' }
+          },
+          { session }
+        );
+
+        // Create user notification
+        await notificationsCollection.insertOne({
+          userId: subscription.userId,
+          userType: 'cargo_owner',
+          type: 'subscription_approved',
+          title: 'Subscription Approved',
+          message: `Your ${subscription.planName} subscription is now active until ${expiresAt.toLocaleDateString()}.`,
+          data: {
+            subscriptionId,
+            planId: subscription.planId,
+            planName: subscription.planName,
+            activatedAt,
+            expiresAt
+          },
+          isRead: false,
+          priority: 'high',
+          createdAt: new Date()
+        }, { session });
+
+        // Create audit log
+        await auditLogsCollection.insertOne({
+          action: 'subscription_approved',
+          entityType: 'subscription',
+          entityId: new mongoose.Types.ObjectId(subscriptionId),
+          adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+          adminName,
+          userId: subscription.userId,
+          details: {
+            planId: subscription.planId,
+            planName: subscription.planName,
+            amount: subscription.price,
+            paymentMethod: subscription.paymentMethod,
+            paymentVerified,
+            notes,
+            activatedAt,
+            expiresAt,
+            verificationDetails
+          },
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          createdAt: new Date()
+        }, { session });
+      });
+
+      console.log('Subscription approved successfully:', { 
+        subscriptionId, 
+        userId: subscription.userId,
+        planId: subscription.planId,
+        adminId,
+        activatedAt,
+        expiresAt
+      });
+
+      res.json({
+        status: 'success',
+        message: 'Subscription approved successfully',
+        data: {
+          subscriptionId,
+          approvedAt: activatedAt,
+          expiresAt,
+          approvedBy: adminName,
+          planName: subscription.planName
+        }
+      });
+
+    } finally {
+      await session.endSession();
+    }
+
+  } catch (error) {
+    console.error('Approve subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error approving subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
+// @route   POST /api/admin/subscriptions/:id/reject
+// @desc    Reject a subscription
+// @access  Private
+router.post('/subscriptions/:id/reject', adminAuth, [
+  body('reason').notEmpty().withMessage('Rejection reason is required'),
+  body('reasonCategory').optional().isIn([
+    'payment_failed', 'invalid_details', 'fraud_suspected', 'other'
+  ]).withMessage('Valid reason category is required'),
+  body('notes').optional().isLength({ max: 500 }),
+  body('refundRequired').optional().isBoolean()
+], async (req, res) => {
+  try {
+    if (!req.admin.permissions.managePayments) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage subscriptions.'
+      });
+    }
+
+    const subscriptionId = req.params.id;
+    const {
+      reason,
+      reasonCategory = 'other',
+      notes = '',
+      refundRequired = false
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(subscriptionId)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (subscription.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only pending subscriptions can be rejected'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+    const adminEmail = req.admin.email || '';
+
+    // Update subscription to rejected
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(subscriptionId) },
+      {
+        $set: {
+          status: 'rejected',
+          paymentStatus: 'failed',
+          rejectedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+          rejectedAt: new Date(),
+          rejectionReason: reason,
+          rejectionCategory: reasonCategory,
+          adminNotes: notes,
+          refundRequired,
+          rejectionDetails: {
+            rejectedByName: adminName,
+            rejectedByEmail: adminEmail,
+            rejectionTimestamp: new Date()
+          },
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Remove pendingSubscription from user
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      { $unset: { pendingSubscription: '' }, $set: { updatedAt: new Date() } }
+    );
+
+    // Send notification to user
+    const reasonMessages = {
+      payment_failed: 'Payment could not be verified',
+      invalid_details: 'Payment details were invalid',
+      fraud_suspected: 'Suspicious activity detected',
+      other: reason
+    };
+
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_rejected',
+      title: 'Subscription Request Rejected',
+      message: `Your ${subscription.planName} request was declined. Reason: ${reasonMessages[reasonCategory]}. You remain on the Basic plan.`,
+      data: {
+        subscriptionId,
+        planName: subscription.planName,
+        reason,
+        reasonCategory,
+        refundRequired,
+        rejectedAt: new Date()
+      },
+      isRead: false,
+      priority: 'high',
+      createdAt: new Date()
+    });
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_rejected',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(subscriptionId),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        amount: subscription.price,
+        paymentMethod: subscription.paymentMethod,
+        reason,
+        reasonCategory,
+        refundRequired,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    console.log('Subscription rejected successfully:', { 
+      subscriptionId, 
+      userId: subscription.userId,
+      reason,
+      adminId 
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Subscription rejected successfully',
+      data: {
+        subscriptionId,
+        rejectedAt: new Date(),
+        reason,
+        reasonCategory
+      }
+    });
+
+  } catch (error) {
+    console.error('Reject subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error rejecting subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 
 // @route   PUT /api/admin/:id/toggle-status
 // @desc    Toggle admin active status
