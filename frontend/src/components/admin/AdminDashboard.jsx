@@ -171,12 +171,78 @@ const AdminDashboard = () => {
     try {
       setStatsLoading(true);
       const response = await apiCall('/admin/dashboard-stats');
-      if (response.status === 'success' && response.stats) {
-        setDashboardStats(response.stats);
+      
+      if (response.status === 'success') {
+        // Handle the nested data structure from your API
+        const statsData = response.data || response.stats || {};
+        
+        // Flatten the structure for easier access in components
+        const flattenedStats = {
+          // Load metrics
+          totalLoads: statsData.loads?.total || 0,
+          activeLoads: statsData.loads?.active || 0,
+          newLoadsToday: statsData.loads?.newToday || 0,
+          newLoadsThisWeek: statsData.loads?.newThisWeek || 0,
+          newLoadsThisMonth: statsData.loads?.newThisMonth || 0,
+          completedLoads: statsData.loads?.completed || 0,
+          loadCompletionRate: statsData.loads?.completionRate || statsData.kpis?.loadCompletionRate || 0,
+          urgentLoads: statsData.loads?.urgent || 0,
+          
+          // User metrics
+          totalUsers: statsData.users?.total || 0,
+          activeUsers: statsData.users?.active || 0,
+          newUsersToday: statsData.users?.newToday || 0,
+          newUsersThisWeek: statsData.users?.newThisWeek || 0,
+          newUsersThisMonth: statsData.users?.newThisMonth || 0,
+          userGrowthRate: statsData.users?.growthRate || statsData.kpis?.userGrowthRate || 0,
+          
+          // Driver metrics
+          totalDrivers: statsData.users?.drivers?.total || 0,
+          activeDrivers: statsData.users?.drivers?.active || 0,
+          newDriversToday: statsData.users?.drivers?.newToday || 0,
+          newDriversThisWeek: statsData.users?.drivers?.newThisWeek || 0,
+          newDriversThisMonth: statsData.users?.drivers?.newThisMonth || 0,
+          verifiedDrivers: statsData.users?.drivers?.verified || 0,
+          
+          // Cargo owner metrics
+          totalCargoOwners: statsData.users?.cargoOwners?.total || 0,
+          activeCargoOwners: statsData.users?.cargoOwners?.active || 0,
+          newCargoOwnersToday: statsData.users?.cargoOwners?.newToday || 0,
+          newCargoOwnersThisWeek: statsData.users?.cargoOwners?.newThisWeek || 0,
+          newCargoOwnersThisMonth: statsData.users?.cargoOwners?.newThisMonth || 0,
+          verifiedCargoOwners: statsData.users?.cargoOwners?.verified || 0,
+          
+          // Subscription metrics
+          totalSubscriptions: statsData.subscriptions?.total || 0,
+          activeSubscriptions: statsData.subscriptions?.active || 0,
+          pendingSubscriptions: statsData.subscriptions?.pending || 0,
+          newSubscriptionsThisMonth: statsData.subscriptions?.newThisMonth || 0,
+          subscriptionRate: statsData.subscriptions?.rate || statsData.kpis?.subscriptionRate || 0,
+          subscriptionGrowthRate: statsData.subscriptions?.growthRate || 0,
+          
+          // Revenue metrics
+          monthlyRevenue: statsData.revenue?.monthly || 0,
+          totalRevenue: statsData.revenue?.total || 0,
+          averageRevenuePerSubscription: statsData.revenue?.averagePerSubscription || 0,
+          
+          // Additional KPIs
+          ...statsData.kpis
+        };
+        
+        setDashboardStats(flattenedStats);
       }
     } catch (error) {
       console.error('Failed to fetch dashboard stats:', error);
       showError('Failed to load dashboard statistics');
+      
+      // Set empty stats on error
+      setDashboardStats({
+        totalLoads: 0, activeLoads: 0, newLoadsToday: 0, newLoadsThisWeek: 0, newLoadsThisMonth: 0,
+        totalUsers: 0, activeUsers: 0, newUsersToday: 0, newUsersThisWeek: 0, newUsersThisMonth: 0,
+        totalDrivers: 0, activeDrivers: 0, totalCargoOwners: 0, activeCargoOwners: 0,
+        totalSubscriptions: 0, activeSubscriptions: 0, pendingSubscriptions: 0, newSubscriptionsThisMonth: 0,
+        monthlyRevenue: 0, totalRevenue: 0, userGrowthRate: 0, subscriptionRate: 0, loadCompletionRate: 0
+      });
     } finally {
       setStatsLoading(false);
     }
@@ -225,23 +291,47 @@ const AdminDashboard = () => {
     fetchActivityLogs();
   }, [navigate, fetchAdmin, fetchDashboardStats, fetchActivityLogs]);
 
-  // Admin creation handler
+  // Admin creation handler with improved error handling
   const handleAddAdminSubmit = async (e) => {
     e.preventDefault();
+    
+    // Basic validation
+    if (!newAdmin.name || !newAdmin.email || !newAdmin.phone || !newAdmin.password) {
+      showError('Please fill in all required fields');
+      return;
+    }
+
+    if (newAdmin.password.length < 8) {
+      showError('Password must be at least 8 characters long');
+      return;
+    }
+
     try {
       setLoading(true);
       const response = await apiCall('/admin/register', {
         method: 'POST',
         body: JSON.stringify(newAdmin),
       });
+      
       if (response.status === 'success') {
         showSuccess('Admin created successfully');
         setShowAddAdmin(false);
         setNewAdmin({ name: '', email: '', phone: '', password: '', role: 'admin' });
+        // Refresh stats after creating new admin
         fetchDashboardStats();
+        fetchActivityLogs();
+      } else {
+        // Handle validation errors from server
+        if (response.errors && Array.isArray(response.errors)) {
+          const errorMessages = response.errors.map(err => err.message).join(', ');
+          showError(errorMessages);
+        } else {
+          showError(response.message || 'Failed to create admin');
+        }
       }
     } catch (error) {
-      showError(error.message);
+      console.error('Add admin error:', error);
+      showError(error.message || 'Failed to create admin');
     } finally {
       setLoading(false);
     }
@@ -264,7 +354,12 @@ const AdminDashboard = () => {
 
   const getActivityDetails = (log) => {
     const details = log.details || log.description || log.resource || log.target;
-    if (!details) return null;
+    if (!details) {
+      // Try to build details from other fields
+      if (log.newAdminEmail) return `New admin: ${log.newAdminEmail} (${log.newAdminRole || 'admin'})`;
+      if (log.entityType && log.action) return `${log.action} on ${log.entityType}`;
+      return null;
+    }
     
     if (typeof details === 'object') {
       if (details.planName) return `Plan: ${details.planName}`;
@@ -283,10 +378,25 @@ const AdminDashboard = () => {
   const exportData = async (type) => {
     try {
       setLoading(true);
-      const response = await apiCall(`/admin/export/${type}`);
-      showSuccess(`${type} data exported successfully`);
+      const response = await apiCall(`/admin/analytics/export?type=${type}&format=json`);
+      
+      if (response.status === 'success') {
+        // Create and download file
+        const dataStr = JSON.stringify(response.data || response, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${type}-export-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showSuccess(`${type} data exported successfully`);
+      }
     } catch (error) {
-      showError(`Failed to export ${type} data`);
+      showError(`Failed to export ${type} data: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -492,12 +602,12 @@ const AdminDashboard = () => {
         )}
         <div className="flex items-center gap-4 text-xs text-gray-400">
           <span className="flex items-center gap-1">
-            <Clock className="w-3 h-3" />
+            <Clock className="w-4 h-4" />
             {formatTimestamp(log.timestamp || log.createdAt || log.date)}
           </span>
           {log.ipAddress && (
             <span className="flex items-center gap-1">
-              <MapPin className="w-3 h-3" />
+              <MapPin className="w-4 h-4" />
               {log.ipAddress}
             </span>
           )}
@@ -748,7 +858,7 @@ const AdminDashboard = () => {
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
-                            <span className="font-semibold text-gray-900">
+                            <span className="font-medium text-gray-900">
                               {getUserName(log)}
                             </span>
                             <span className={`px-2 py-1 text-xs rounded-full border ${getStatusBadgeColor(log.action || 'default')}`}>
@@ -756,16 +866,16 @@ const AdminDashboard = () => {
                             </span>
                           </div>
                           {getActivityDetails(log) && (
-                            <p className="text-gray-600">{getActivityDetails(log)}</p>
+                            <p className="text-sm text-gray-500 mb-2">{getActivityDetails(log)}</p>
                           )}
-                          <div className="flex items-center gap-4 text-sm text-gray-500">
+                          <div className="flex items-center gap-4 text-xs text-gray-400">
                             <span className="flex items-center gap-1">
-                              <Clock className="w-4 h-4" />
+                              <Clock className="w-3 h-3" />
                               {new Date(log.timestamp || log.createdAt || log.date).toLocaleString()}
                             </span>
                             {log.ipAddress && (
                               <span className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4" />
+                                <MapPin className="w-3 h-3" />
                                 {log.ipAddress}
                               </span>
                             )}
@@ -890,7 +1000,7 @@ const AdminDashboard = () => {
           icon={Users}
           color="blue"
           data={[
-            { label: 'Active Users', value: dashboardStats.activeUsers || 0 },
+            { label: 'Active Users', value: formatNumber(dashboardStats.activeUsers || 0) },
             { label: 'New This Month', value: `+${dashboardStats.newUsersThisMonth || 0}`, highlight: 'green' },
             { label: 'Growth Rate', value: `${dashboardStats.userGrowthRate || '0.0'}%` }
           ]}
@@ -901,8 +1011,8 @@ const AdminDashboard = () => {
           icon={Package}
           color="green"
           data={[
-            { label: 'Total Loads', value: dashboardStats.totalLoads || 0 },
-            { label: 'Active', value: dashboardStats.activeLoads || 0, highlight: 'blue' },
+            { label: 'Total Loads', value: formatNumber(dashboardStats.totalLoads || 0) },
+            { label: 'Active', value: formatNumber(dashboardStats.activeLoads || 0), highlight: 'blue' },
             { label: 'Completion Rate', value: `${dashboardStats.loadCompletionRate || '0.0'}%` }
           ]}
         />
@@ -923,9 +1033,9 @@ const AdminDashboard = () => {
           icon={Clock}
           color="orange"
           data={[
-            { label: 'Pending Subscriptions', value: dashboardStats.pendingSubscriptions || 0, highlight: 'orange' },
-            { label: 'Pending Verifications', value: '-' },
-            { label: 'Review Queue', value: '-' }
+            { label: 'Pending Subscriptions', value: formatNumber(dashboardStats.pendingSubscriptions || 0), highlight: 'orange' },
+            { label: 'Total Subscriptions', value: formatNumber(dashboardStats.totalSubscriptions || 0) },
+            { label: 'Active Subscriptions', value: formatNumber(dashboardStats.activeSubscriptions || 0) }
           ]}
         />
       </div>
