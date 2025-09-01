@@ -1061,6 +1061,982 @@ try {
   }
 });
 
+// @route   GET /api/admin/notifications
+// @desc    Get all notifications for admin view
+// @access  Private (Admin only)
+router.get('/notifications', adminAuth, [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('unread').optional().isBoolean().withMessage('Unread must be boolean'),
+  query('type').optional().isString().withMessage('Type must be a string'),
+  query('search').optional().isString().withMessage('Search must be a string')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      page = 1,
+      limit = 20,
+      unread,
+      type,
+      search
+    } = req.query;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Build query filter - admin can see all notifications
+    const matchQuery = {};
+
+    // Add unread filter if specified
+    if (unread !== undefined) {
+      matchQuery.isRead = unread === 'true' ? false : true;
+    }
+
+    // Add type filter if specified
+    if (type && type !== 'all') {
+      matchQuery.type = type;
+    }
+
+    // Add search filter if specified
+    if (search) {
+      matchQuery.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { message: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Get total count for pagination
+    const totalNotifications = await notificationsCollection.countDocuments(matchQuery);
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const totalPages = Math.ceil(totalNotifications / parseInt(limit));
+
+    // Fetch notifications with pagination and sorting
+    const notifications = await notificationsCollection
+      .find(matchQuery)
+      .sort({ createdAt: -1 }) // Most recent first
+      .skip(skip)
+      .limit(parseInt(limit))
+      .toArray();
+
+    // Get summary statistics
+    const summaryPipeline = [
+      { $match: {} }, // Admin can see all notifications
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          },
+          read: {
+            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
+          },
+          highPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
+          }
+        }
+      }
+    ];
+
+    const summaryResult = await notificationsCollection.aggregate(summaryPipeline).toArray();
+    const summary = summaryResult[0] || { total: 0, unread: 0, read: 0, highPriority: 0 };
+
+    // Populate user information for admin view
+    const enrichedNotifications = await Promise.all(
+      notifications.map(async (notif) => {
+        let userInfo = {};
+        
+        if (notif.userId && notif.userType) {
+          try {
+            const userCollection = notif.userType === 'driver' ? 'drivers' : 
+                                 notif.userType === 'cargo_owner' ? 'cargo-owners' : 
+                                 notif.userType === 'admin' ? 'admins' : null;
+            
+            if (userCollection) {
+              const user = await db.collection(userCollection).findOne(
+                { _id: notif.userId },
+                { projection: { name: 1, email: 1, phone: 1 } }
+              );
+              
+              if (user) {
+                userInfo = {
+                  userName: user.name,
+                  userEmail: user.email,
+                  userPhone: user.phone
+                };
+              }
+            }
+          } catch (userError) {
+            console.error('Error fetching user info:', userError);
+          }
+        }
+
+        return {
+          ...notif,
+          ...userInfo
+        };
+      })
+    );
+
+    res.json({
+      status: 'success',
+      data: {
+        notifications: enrichedNotifications,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalNotifications,
+          hasNextPage: parseInt(page) < totalPages,
+          hasPrevPage: parseInt(page) > 1,
+          limit: parseInt(limit)
+        },
+        summary
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin get notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/admin/notifications/summary
+// @desc    Get notification summary for admin
+// @access  Private (Admin only)
+router.get('/notifications/summary', adminAuth, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Get comprehensive summary for admin
+    const summary = await notificationsCollection.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          },
+          read: {
+            $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] }
+          },
+          highPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] }
+          },
+          mediumPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'medium'] }, 1, 0] }
+          },
+          lowPriority: {
+            $sum: { $cond: [{ $eq: ['$priority', 'low'] }, 1, 0] }
+          }
+        }
+      }
+    ]).toArray();
+
+    // Get type breakdown
+    const typeBreakdown = await notificationsCollection.aggregate([
+      {
+        $group: {
+          _id: '$type',
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { total: -1 } }
+    ]).toArray();
+
+    // Get user type breakdown
+    const userTypeBreakdown = await notificationsCollection.aggregate([
+      {
+        $group: {
+          _id: '$userType',
+          total: { $sum: 1 },
+          unread: {
+            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+          }
+        }
+      }
+    ]).toArray();
+
+    // Get recent notifications (last 24 hours)
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentCount = await notificationsCollection.countDocuments({
+      createdAt: { $gte: yesterday }
+    });
+
+    const summaryData = summary[0] || {
+      total: 0,
+      unread: 0,
+      read: 0,
+      highPriority: 0,
+      mediumPriority: 0,
+      lowPriority: 0
+    };
+
+    res.json({
+      status: 'success',
+      data: {
+        summary: summaryData,
+        typeBreakdown: typeBreakdown.reduce((acc, item) => {
+          acc[item._id] = { total: item.total, unread: item.unread };
+          return acc;
+        }, {}),
+        userTypeBreakdown: userTypeBreakdown.reduce((acc, item) => {
+          acc[item._id] = { total: item.total, unread: item.unread };
+          return acc;
+        }, {}),
+        recentCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification summary error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notification summary',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/admin/notifications/:id/read
+// @desc    Mark notification as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/:id/read', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification marked as read',
+      data: {
+        notificationId: id,
+        isRead: true,
+        readAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin mark notification read error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notification as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/admin/notifications/read-all
+// @desc    Mark all notifications as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/read-all', adminAuth, async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.updateMany(
+      { isRead: false },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        updatedCount: result.modifiedCount,
+        readAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin mark all notifications read error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking all notifications as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/:id
+// @desc    Delete notification (admin)
+// @access  Private (Admin only)
+router.delete('/notifications/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid notification ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const result = await notificationsCollection.deleteOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Notification not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Notification deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Admin delete notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/admin/notifications/bulk-read
+// @desc    Mark multiple notifications as read (admin)
+// @access  Private (Admin only)
+router.put('/notifications/bulk-read', adminAuth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.updateMany(
+      { 
+        _id: { $in: objectIds },
+        isRead: false
+      },
+      { 
+        $set: { 
+          isRead: true,
+          readAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      status: 'success',
+      message: `${result.modifiedCount} notifications marked as read`,
+      data: {
+        requestedCount: notificationIds.length,
+        updatedCount: result.modifiedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin bulk read notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error marking notifications as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/bulk-delete
+// @desc    Delete multiple notifications (admin)
+// @access  Private (Admin only)
+router.delete('/notifications/bulk-delete', adminAuth, [
+  body('notificationIds')
+    .isArray({ min: 1 })
+    .withMessage('Notification IDs array is required')
+    .custom((ids) => {
+      return ids.every(id => mongoose.Types.ObjectId.isValid(id));
+    })
+    .withMessage('All notification IDs must be valid')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { notificationIds } = req.body;
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    const objectIds = notificationIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const result = await notificationsCollection.deleteMany({
+      _id: { $in: objectIds }
+    });
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        requestedCount: notificationIds.length,
+        deletedCount: result.deletedCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin bulk delete notifications error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error deleting notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/admin/notifications/broadcast
+// @desc    Send broadcast notification to multiple users (admin only)
+// @access  Private (Admin only)
+router.post('/notifications/broadcast', adminAuth, [
+  body('userType').optional().isIn(['driver', 'cargo_owner', 'all']).withMessage('Invalid user type'),
+  body('userIds').optional().isArray().withMessage('User IDs must be an array'),
+  body('type').notEmpty().withMessage('Notification type is required'),
+  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
+  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
+  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      userType,
+      userIds,
+      type,
+      title,
+      message,
+      priority = 'medium',
+      data = {},
+      icon,
+      actionUrl,
+      expiresAt
+    } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    let targetUsers = [];
+
+    if (userIds && userIds.length > 0) {
+      // Send to specific users
+      targetUsers = userIds.map(id => ({
+        userId: new mongoose.Types.ObjectId(id),
+        userType: userType || 'driver' // Default to driver if not specified
+      }));
+    } else if (userType && userType !== 'all') {
+      // Send to all users of specific type
+      const collection = userType === 'driver' ? 'drivers' : 'cargo-owners';
+      const users = await db.collection(collection).find(
+        { status: { $ne: 'deleted' } }, // Only active users
+        { projection: { _id: 1 } }
+      ).toArray();
+      
+      targetUsers = users.map(user => ({
+        userId: user._id,
+        userType
+      }));
+    } else {
+      // Send to all users
+      const [drivers, cargoOwners] = await Promise.all([
+        db.collection('drivers').find(
+          { status: { $ne: 'deleted' } },
+          { projection: { _id: 1 } }
+        ).toArray(),
+        db.collection('cargo-owners').find(
+          { status: { $ne: 'deleted' } },
+          { projection: { _id: 1 } }
+        ).toArray()
+      ]);
+      
+      targetUsers = [
+        ...drivers.map(user => ({ userId: user._id, userType: 'driver' })),
+        ...cargoOwners.map(user => ({ userId: user._id, userType: 'cargo_owner' }))
+      ];
+    }
+
+    if (targetUsers.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No target users found for the specified criteria'
+      });
+    }
+
+    // Create notifications for all target users
+    const notificationsCollection = db.collection('notifications');
+    const notifications = targetUsers.map(user => ({
+      userId: user.userId,
+      userType: user.userType,
+      type,
+      title,
+      message,
+      priority,
+      data,
+      icon: icon || 'bell',
+      actionUrl,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      sentBy: new mongoose.Types.ObjectId(req.admin.id),
+      sentByType: 'admin',
+      isRead: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }));
+
+    const result = await notificationsCollection.insertMany(notifications);
+
+    // Log the broadcast action
+    const auditLog = {
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      action: 'broadcast_notification',
+      details: `Sent "${title}" to ${result.insertedCount} users`,
+      targetUserType: userType || 'mixed',
+      notificationCount: result.insertedCount,
+      timestamp: new Date(),
+      ipAddress: req.ip
+    };
+
+    try {
+      await db.collection('audit-logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log broadcast action:', logError);
+    }
+
+    res.status(201).json({
+      status: 'success',
+      message: `Notification sent to ${result.insertedCount} users`,
+      data: {
+        sentCount: result.insertedCount,
+        targetUserType: userType || 'mixed',
+        notificationIds: result.insertedIds
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin broadcast notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error broadcasting notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/admin/notifications/stats
+// @desc    Get detailed notification statistics (admin)
+// @access  Private (Admin only)
+router.get('/notifications/stats', adminAuth, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Get comprehensive stats
+    const stats = await notificationsCollection.aggregate([
+      {
+        $facet: {
+          // Overall summary
+          summary: [
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } },
+                read: { $sum: { $cond: [{ $eq: ['$isRead', true] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // By priority
+          byPriority: [
+            {
+              $group: {
+                _id: '$priority',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // By type
+          byType: [
+            {
+              $group: {
+                _id: '$type',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            },
+            { $sort: { count: -1 } }
+          ],
+          
+          // By user type
+          byUserType: [
+            {
+              $group: {
+                _id: '$userType',
+                count: { $sum: 1 },
+                unread: { $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] } }
+              }
+            }
+          ],
+          
+          // Recent trends (last 7 days)
+          recentTrends: [
+            {
+              $match: {
+                createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+              }
+            },
+            {
+              $group: {
+                _id: {
+                  date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }
+                },
+                count: { $sum: 1 }
+              }
+            },
+            { $sort: { '_id.date': 1 } }
+          ]
+        }
+      }
+    ]).toArray();
+
+    const result = stats[0];
+
+    res.json({
+      status: 'success',
+      data: {
+        summary: result.summary[0] || { total: 0, unread: 0, read: 0 },
+        byPriority: result.byPriority.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        byType: result.byType.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        byUserType: result.byUserType.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, unread: item.unread };
+          return acc;
+        }, {}),
+        recentTrends: result.recentTrends.map(item => ({
+          date: item._id.date,
+          count: item.count
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification stats error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching notification statistics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   DELETE /api/admin/notifications/cleanup
+// @desc    Clean up old notifications (admin only)
+// @access  Private (Admin only)
+router.delete('/notifications/cleanup', adminAuth, [
+  body('olderThanDays').optional().isInt({ min: 1 }).withMessage('Days must be a positive integer'),
+  body('deleteRead').optional().isBoolean().withMessage('Delete read must be boolean')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { olderThanDays = 30, deleteRead = true } = req.body;
+    
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Calculate cutoff date
+    const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+
+    // Build cleanup query
+    const cleanupQuery = {
+      createdAt: { $lt: cutoffDate }
+    };
+
+    if (deleteRead) {
+      cleanupQuery.isRead = true;
+    }
+
+    const result = await notificationsCollection.deleteMany(cleanupQuery);
+
+    // Log the cleanup action
+    const auditLog = {
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      action: 'cleanup_notifications',
+      details: `Deleted ${result.deletedCount} notifications older than ${olderThanDays} days`,
+      deletedCount: result.deletedCount,
+      criteria: { olderThanDays, deleteRead },
+      timestamp: new Date(),
+      ipAddress: req.ip
+    };
+
+    try {
+      await db.collection('audit-logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log cleanup action:', logError);
+    }
+
+    res.json({
+      status: 'success',
+      message: `${result.deletedCount} notifications deleted`,
+      data: {
+        deletedCount: result.deletedCount,
+        criteria: { olderThanDays, deleteRead }
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin notification cleanup error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error cleaning up notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/admin/notifications/system
+// @desc    Create system notification (admin only)
+// @access  Private (Admin only)
+router.post('/notifications/system', adminAuth, [
+  body('type').isIn(['system_maintenance', 'security_alert', 'policy_update', 'system_announcement'])
+    .withMessage('Invalid system notification type'),
+  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
+  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
+  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high'),
+  body('scheduledFor').optional().isISO8601().withMessage('Scheduled date must be valid ISO 8601 format')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      type,
+      title,
+      message,
+      priority = 'medium',
+      data = {},
+      scheduledFor,
+      userType = 'all'
+    } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+
+    // Create system notification record
+    const systemNotification = {
+      type,
+      title,
+      message,
+      priority,
+      data,
+      createdBy: new mongoose.Types.ObjectId(req.admin.id),
+      createdByName: req.admin.name,
+      scheduledFor: scheduledFor ? new Date(scheduledFor) : new Date(),
+      userType,
+      status: scheduledFor ? 'scheduled' : 'sent',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // If not scheduled, send immediately
+    if (!scheduledFor) {
+      // Get target users
+      let targetUsers = [];
+      
+      if (userType === 'all') {
+        const [drivers, cargoOwners] = await Promise.all([
+          db.collection('drivers').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray(),
+          db.collection('cargo-owners').find({ status: { $ne: 'deleted' } }, { projection: { _id: 1 } }).toArray()
+        ]);
+        
+        targetUsers = [
+          ...drivers.map(user => ({ userId: user._id, userType: 'driver' })),
+          ...cargoOwners.map(user => ({ userId: user._id, userType: 'cargo_owner' }))
+        ];
+      } else {
+        const collection = userType === 'driver' ? 'drivers' : 'cargo-owners';
+        const users = await db.collection(collection).find(
+          { status: { $ne: 'deleted' } },
+          { projection: { _id: 1 } }
+        ).toArray();
+        
+        targetUsers = users.map(user => ({ userId: user._id, userType }));
+      }
+
+      // Create individual notifications
+      const notifications = targetUsers.map(user => ({
+        userId: user.userId,
+        userType: user.userType,
+        type,
+        title,
+        message,
+        priority,
+        data,
+        icon: type === 'security_alert' ? 'alert-triangle' : 
+              type === 'system_maintenance' ? 'settings' : 'info',
+        sentBy: new mongoose.Types.ObjectId(req.admin.id),
+        sentByType: 'admin',
+        isRead: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }));
+
+      if (notifications.length > 0) {
+        await db.collection('notifications').insertMany(notifications);
+        systemNotification.sentCount = notifications.length;
+      }
+    }
+
+    // Save system notification record
+    const result = await db.collection('system-notifications').insertOne(systemNotification);
+
+    // Log the action
+    const auditLog = {
+      adminId: new mongoose.Types.ObjectId(req.admin.id),
+      adminName: req.admin.name,
+      action: 'create_system_notification',
+      details: `Created ${type} notification: "${title}"`,
+      notificationId: result.insertedId,
+      scheduledFor: systemNotification.scheduledFor,
+      timestamp: new Date(),
+      ipAddress: req.ip
+    };
+
+    try {
+      await db.collection('audit-logs').insertOne(auditLog);
+    } catch (logError) {
+      console.error('Failed to log system notification creation:', logError);
+    }
+
+    res.status(201).json({
+      status: 'success',
+      message: scheduledFor ? 'System notification scheduled successfully' : 'System notification sent successfully',
+      data: {
+        notificationId: result.insertedId,
+        sentCount: systemNotification.sentCount || 0,
+        scheduledFor: systemNotification.scheduledFor,
+        status: systemNotification.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Create system notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error creating system notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   GET /api/admin/subscriptions
 // @desc    Get subscriptions with optional status filter
 // @access  Private

@@ -51,7 +51,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     type: 'system_announcement'
   });
 
-  // Fetch notifications - Updated to match new API structure
+  // Fetch notifications - Use admin route
   const fetchNotifications = async (page = 1) => {
     try {
       setLoading(true);
@@ -63,9 +63,9 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         ...(filters.type !== 'all' && { type: filters.type })
       });
 
+      // Use admin notifications route
       const response = await apiCall(`/admin/notifications?${params}`);
 
-      // Updated to match backend response structure
       if (response.status === 'success' && response.data) {
         setNotifications(response.data.notifications || []);
         setPagination(response.data.pagination || {
@@ -92,16 +92,14 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Fetch notification summary - Updated to match new API structure
+  // Fetch notification summary - Use admin route
   const fetchNotificationSummary = async () => {
     try {
       const response = await apiCall('/admin/notifications/summary');
 
-      // Updated to match backend response structure
       if (response.status === 'success' && response.data?.summary) {
         setSummary(response.data.summary);
       } else if (response.summary) {
-        // Fallback for older response format
         setSummary(response.summary);
       }
 
@@ -115,13 +113,12 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     fetchNotificationSummary();
   }, [filters.unread, filters.search, filters.type]);
 
-  // Mark one notification as read - Updated to match new API endpoint
+  // Mark one notification as read - Use admin route
   const markAsRead = async (id) => {
     try {
       const response = await apiCall(`/admin/notifications/${id}/read`, { method: 'PUT' });
       
       if (response.status === 'success') {
-        // Update UI locally
         setNotifications(prev =>
           prev.map(n => n._id === id ? { ...n, isRead: true, readAt: new Date() } : n)
         );
@@ -134,13 +131,12 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Mark all as read - Updated to match new API endpoint
+  // Mark all as read - Use admin route
   const markAllAsRead = async () => {
     try {
       const response = await apiCall('/admin/notifications/read-all', { method: 'PUT' });
       
       if (response.status === 'success') {
-        // Update UI locally
         setNotifications(prev => prev.map(n => ({ ...n, isRead: true, readAt: new Date() })));
         fetchNotificationSummary();
         showSuccess(`${response.data.updatedCount} notifications marked as read`);
@@ -151,13 +147,12 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Delete one notification - Updated to match new API endpoint
+  // Delete one notification - Use admin route
   const deleteNotification = async (id) => {
     try {
       const response = await apiCall(`/admin/notifications/${id}`, { method: 'DELETE' });
       
       if (response.status === 'success') {
-        // Remove locally
         setNotifications(prev => prev.filter(n => n._id !== id));
         fetchNotificationSummary();
         showSuccess('Notification deleted successfully');
@@ -168,7 +163,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Bulk operations - Updated to match new API endpoints
+  // Bulk operations - Use admin routes
   const handleBulkAction = async (action) => {
     if (selectedNotifications.length === 0) {
       showError('Please select notifications first');
@@ -220,18 +215,27 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Send broadcast notification - Updated to match new API endpoint
+  // Send broadcast notification - Use admin route
   const sendBroadcastNotification = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
-      const response = await apiCall('/notifications/broadcast', {
+      
+      // Debug: Log the request details
+      console.log('Sending broadcast request:', {
+        path: '/admin/notifications/broadcast',
+        body: broadcastForm
+      });
+      
+      const response = await apiCall('/admin/notifications/broadcast', {
         method: 'POST',
         body: JSON.stringify(broadcastForm),
         headers: {
           'Content-Type': 'application/json'
         }
       });
+      
+      console.log('Broadcast response:', response);
       
       if (response.status === 'success') {
         showSuccess(`Notification sent to ${response.data.sentCount} users`);
@@ -245,15 +249,26 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         });
         fetchNotifications();
         fetchNotificationSummary();
+      } else {
+        // Handle error response
+        showError(response.message || 'Failed to broadcast notification');
       }
     } catch (error) {
-      showError('Failed to broadcast notification');
       console.error('Broadcast notification error:', error);
+      // Show specific error message if available
+      if (error.status === 401) {
+        showError('Unauthorized: Admin access required');
+      } else if (error.status === 403) {
+        showError('Access denied: Admin privileges required');
+      } else {
+        showError(error.message || 'Failed to broadcast notification');
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // Rest of the component remains the same...
   // Get notification icon
   const getNotificationIcon = (type, icon) => {
     const iconMap = {
@@ -685,6 +700,22 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
                 <select
                   value={broadcastForm.userType}
                   onChange={(e) => setBroadcastForm(prev => ({ ...prev, userType: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  required
+                >
+                  <option value="all">All Users</option>
+                  <option value="driver">All Drivers</option>
+                  <option value="cargo_owner">All Cargo Owners</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Type
+                </label>
+                <select
+                  value={broadcastForm.type}
+                  onChange={(e) => setBroadcastForm(prev => ({ ...prev, type: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 >

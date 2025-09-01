@@ -1313,7 +1313,15 @@ const AdminDashboard = () => {
 
           {activeTab === 'loads' && (
             <div className="p-6">
-              <LoadsTable {...tableProps} />
+              <LoadsTable 
+              apiCall={apiCall}
+              showError={showError}
+              showSuccess={showSuccess}
+              currentPage={currentPage}
+              setCurrentPage={setCurrentPage}
+              itemsPerPage={ITEMS_PER_PAGE}
+              getStatusBadgeColor={getStatusBadgeColor}
+              />
             </div>
           )}
 

@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
 const auth = require('../middleware/auth');
 
+
 const corsHandler = require('../middleware/corsHandler');
 
 router.use(corsHandler);
