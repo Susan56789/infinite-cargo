@@ -1093,8 +1093,38 @@ router.get('/notifications', adminAuth, [
     const db = mongoose.connection.db;
     const notificationsCollection = db.collection('notifications');
 
-    // Build query filter - admin can see all notifications
-    const matchQuery = {};
+    // Build query filter - admin should see notifications meant for admins
+    const matchQuery = {
+      $or: [
+        // Notifications specifically for this admin
+        { 
+          userId: new mongoose.Types.ObjectId(req.admin.id),
+          userType: 'admin' 
+        },
+        // System-wide notifications for admins
+        { 
+          userType: 'admin',
+          $or: [
+            { userId: null },
+            { userId: { $exists: false } }
+          ]
+        },
+        // Notifications about user actions that need admin attention
+        {
+          userType: { $in: ['admin', 'system'] },
+          type: { 
+            $in: [
+              'subscription_request', 
+              'user_registration', 
+              'load_flagged',
+              'payment_issue',
+              'system_alert',
+              'security_alert'
+            ] 
+          }
+        }
+      ]
+    };
 
     // Add unread filter if specified
     if (unread !== undefined) {
@@ -1108,10 +1138,13 @@ router.get('/notifications', adminAuth, [
 
     // Add search filter if specified
     if (search) {
-      matchQuery.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { message: { $regex: search, $options: 'i' } }
-      ];
+      matchQuery.$and = matchQuery.$and || [];
+      matchQuery.$and.push({
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { message: { $regex: search, $options: 'i' } }
+        ]
+      });
     }
 
     // Get total count for pagination
@@ -1129,9 +1162,9 @@ router.get('/notifications', adminAuth, [
       .limit(parseInt(limit))
       .toArray();
 
-    // Get summary statistics
+    // Get summary statistics for admin
     const summaryPipeline = [
-      { $match: {} }, // Admin can see all notifications
+      { $match: matchQuery }, // Use same filter for summary
       {
         $group: {
           _id: null,
@@ -1157,7 +1190,49 @@ router.get('/notifications', adminAuth, [
       notifications.map(async (notif) => {
         let userInfo = {};
         
-        if (notif.userId && notif.userType) {
+        // For subscription requests and similar notifications, get user info from data field
+        if (notif.data && notif.data.userId) {
+          try {
+            const userId = notif.data.userId;
+            const userType = notif.data.userType || 'cargo_owner'; // Default assumption for subscription requests
+            
+            const userCollection = userType === 'driver' ? 'drivers' : 
+                                 userType === 'cargo_owner' ? 'cargo-owners' : 
+                                 userType === 'admin' ? 'admins' : null;
+            
+            if (userCollection) {
+              const user = await db.collection(userCollection).findOne(
+                { _id: new mongoose.Types.ObjectId(userId) },
+                { projection: { name: 1, email: 1, phone: 1 } }
+              );
+              
+              if (user) {
+                userInfo = {
+                  userName: user.name,
+                  userEmail: user.email,
+                  userPhone: user.phone
+                };
+              } else {
+                // Use data from notification if user not found in DB
+                userInfo = {
+                  userName: notif.data.userName,
+                  userEmail: notif.data.userEmail,
+                  userPhone: notif.data.userPhone
+                };
+              }
+            }
+          } catch (userError) {
+            console.error('Error fetching user info:', userError);
+            // Fallback to data in notification
+            userInfo = {
+              userName: notif.data.userName || 'Unknown User',
+              userEmail: notif.data.userEmail || '',
+              userPhone: notif.data.userPhone || ''
+            };
+          }
+        }
+        // For direct admin notifications, get user info from userId field
+        else if (notif.userId && notif.userType) {
           try {
             const userCollection = notif.userType === 'driver' ? 'drivers' : 
                                  notif.userType === 'cargo_owner' ? 'cargo-owners' : 

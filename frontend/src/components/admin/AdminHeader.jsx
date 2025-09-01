@@ -13,7 +13,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
 
   // Fetch notification count and recent notifications
   const fetchNotifications = async (retryCount = 0) => {
-    // Don't fetch if not authenticated, apiCall is not available, or already loading
+   
     if (!isAuthenticated || !apiCall || loading || !authReady) {
       return;
     }
