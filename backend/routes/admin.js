@@ -1706,7 +1706,7 @@ router.get('/loads', adminAuth, [
 // @access  Private
 router.get('/dashboard-stats', adminAuth, async (req, res) => {
   try {
-    if (!req.admin.permissions.viewAnalytics) {
+    if (!req.admin.permissions?.viewAnalytics) {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. You do not have permission to view analytics.'
@@ -1720,280 +1720,344 @@ router.get('/dashboard-stats', adminAuth, async (req, res) => {
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
-    // Initialize stats object with default values
-    const stats = {
-      totalLoads: 0,
-      activeLoads: 0,
-      newLoadsThisMonth: 0,
-      totalDrivers: 0,
-      activeDrivers: 0,
-      newDriversToday: 0,
-      newDriversThisWeek: 0,
-      newDriversThisMonth: 0,
-      totalCargoOwners: 0,
-      activeCargoOwners: 0,
-      newCargoOwnersToday: 0,
-      newCargoOwnersThisWeek: 0,
-      newCargoOwnersThisMonth: 0,
-      totalUsers: 0,
-      activeUsers: 0,
-      newUsersToday: 0,
-      newUsersThisWeek: 0,
-      newUsersThisMonth: 0,
-      totalSubscriptions: 0,
-      activeSubscriptions: 0,
-      pendingSubscriptions: 0,
-      expiredSubscriptions: 0,
-      newSubscriptionsThisMonth: 0,
-      monthlyRevenue: 0,
-      totalRevenue: 0,
-      userGrowthRate: 0,
-      subscriptionRate: 0,
-      loadCompletionRate: 0,
-      lastUpdated: new Date()
-    };
-
-    // Fetch all statistics in parallel for better performance
-    const queries = await Promise.allSettled([
+    // Parallel execution of all statistics queries
+    const [
       // Load statistics
-      Load.countDocuments().catch(() => 0),
-      Load.countDocuments({ status: { $in: ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'] } }).catch(() => 0),
-      Load.countDocuments({ createdAt: { $gte: startOfMonth } }).catch(() => 0),
-      Load.countDocuments({ status: 'completed' }).catch(() => 0),
-
-      // Driver statistics
-      db.collection('drivers').countDocuments(),
-      db.collection('drivers').countDocuments({ 
-        $and: [
-          { $or: [{ isActive: true }, { accountStatus: 'active' }] },
-          { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
-        ]
-      }),
-      db.collection('drivers').countDocuments({ createdAt: { $gte: startOfToday } }),
-      db.collection('drivers').countDocuments({ createdAt: { $gte: startOfWeek } }),
-      db.collection('drivers').countDocuments({ createdAt: { $gte: startOfMonth } }),
-
-      // Cargo owner statistics
-      db.collection('cargo-owners').countDocuments(),
-      db.collection('cargo-owners').countDocuments({ 
-        $and: [
-          { $or: [{ isActive: true }, { accountStatus: 'active' }] },
-          { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
-        ]
-      }),
-      db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfToday } }),
-      db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfWeek } }),
-      db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfMonth } }),
-
+      loadStats,
+      // User statistics  
+      userStats,
       // Subscription statistics
-      Subscription.countDocuments().catch(() => db.collection('subscriptions').countDocuments()),
-      Subscription.countDocuments({ 
-        status: 'active',
-        $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }]
-      }).catch(() => db.collection('subscriptions').countDocuments({ status: 'active' })),
-      Subscription.countDocuments({ status: 'pending' }).catch(() => db.collection('subscriptions').countDocuments({ status: 'pending' })),
-      Subscription.countDocuments({ 
-        status: 'active', 
-        expiresAt: { $lte: now } 
-      }).catch(() => 0),
-      Subscription.countDocuments({ createdAt: { $gte: startOfMonth } }).catch(() => db.collection('subscriptions').countDocuments({ createdAt: { $gte: startOfMonth } }))
+      subscriptionStats,
+      // Revenue statistics
+      revenueStats,
+      // Growth statistics
+      growthStats
+    ] = await Promise.allSettled([
+      // Load Statistics
+      Promise.all([
+        Load.countDocuments().catch(() => 0),
+        Load.countDocuments({ 
+          status: { $in: ['posted', 'available', 'receiving_bids', 'assigned', 'in_transit'] } 
+        }).catch(() => 0),
+        Load.countDocuments({ createdAt: { $gte: startOfMonth } }).catch(() => 0),
+        Load.countDocuments({ createdAt: { $gte: startOfWeek } }).catch(() => 0),
+        Load.countDocuments({ createdAt: { $gte: startOfToday } }).catch(() => 0),
+        Load.countDocuments({ status: 'delivered' }).catch(() => 0),
+        Load.countDocuments({ status: 'cancelled' }).catch(() => 0),
+        Load.countDocuments({ isUrgent: true, isActive: true }).catch(() => 0)
+      ]),
+
+      // User Statistics
+      Promise.all([
+        db.collection('drivers').countDocuments(),
+        db.collection('cargo-owners').countDocuments(),
+        db.collection('drivers').countDocuments({ 
+          $and: [
+            { $or: [{ isActive: true }, { accountStatus: 'active' }] },
+            { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
+          ]
+        }),
+        db.collection('cargo-owners').countDocuments({ 
+          $and: [
+            { $or: [{ isActive: true }, { accountStatus: 'active' }] },
+            { $or: [{ isActive: { $ne: false } }, { accountStatus: { $ne: 'suspended' } }] }
+          ]
+        }),
+        db.collection('drivers').countDocuments({ createdAt: { $gte: startOfMonth } }),
+        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfMonth } }),
+        db.collection('drivers').countDocuments({ createdAt: { $gte: startOfWeek } }),
+        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfWeek } }),
+        db.collection('drivers').countDocuments({ createdAt: { $gte: startOfToday } }),
+        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfToday } }),
+        db.collection('drivers').countDocuments({ isVerified: true }),
+        db.collection('cargo-owners').countDocuments({ isVerified: true })
+      ]),
+
+      // Subscription Statistics
+      Promise.all([
+        Subscription.countDocuments().catch(() => 0),
+        Subscription.countDocuments({ 
+          status: 'active',
+          $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }]
+        }).catch(() => 0),
+        Subscription.countDocuments({ status: 'pending' }).catch(() => 0),
+        Subscription.countDocuments({ 
+          status: 'active', 
+          expiresAt: { $lte: now } 
+        }).catch(() => 0),
+        Subscription.countDocuments({ createdAt: { $gte: startOfMonth } }).catch(() => 0),
+        Subscription.countDocuments({ status: 'rejected' }).catch(() => 0)
+      ]),
+
+      // Revenue Statistics
+      Promise.all([
+        Subscription.aggregate([
+          {
+            $match: {
+              status: 'active',
+              paymentStatus: 'completed',
+              createdAt: { $gte: startOfMonth }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalRevenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+              count: { $sum: 1 }
+            }
+          }
+        ]).catch(() => []),
+        
+        Subscription.aggregate([
+          {
+            $match: {
+              status: 'active',
+              paymentStatus: 'completed'
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalRevenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+              count: { $sum: 1 }
+            }
+          }
+        ]).catch(() => []),
+
+        // Revenue by plan
+        Subscription.aggregate([
+          {
+            $match: {
+              status: 'active',
+              paymentStatus: 'completed'
+            }
+          },
+          {
+            $group: {
+              _id: '$planId',
+              revenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+              count: { $sum: 1 }
+            }
+          }
+        ]).catch(() => [])
+      ]),
+
+      // Growth Statistics (comparing this month vs last month)
+      Promise.all([
+        db.collection('drivers').countDocuments({ 
+          createdAt: { 
+            $gte: startOfLastMonth, 
+            $lt: startOfMonth 
+          } 
+        }),
+        db.collection('cargo-owners').countDocuments({ 
+          createdAt: { 
+            $gte: startOfLastMonth, 
+            $lt: startOfMonth 
+          } 
+        }),
+        Load.countDocuments({ 
+          createdAt: { 
+            $gte: startOfLastMonth, 
+            $lt: startOfMonth 
+          } 
+        }).catch(() => 0),
+        Subscription.countDocuments({ 
+          createdAt: { 
+            $gte: startOfLastMonth, 
+            $lt: startOfMonth 
+          } 
+        }).catch(() => 0)
+      ])
     ]);
 
-    // Extract results with error handling
+    // Process results with error handling
     const [
-      totalLoadsResult,
-      activeLoadsResult,
-      newLoadsThisMonthResult,
-      completedLoadsResult,
-      totalDriversResult,
-      activeDriversResult,
-      newDriversTodayResult,
-      newDriversThisWeekResult,
-      newDriversThisMonthResult,
-      totalCargoOwnersResult,
-      activeCargoOwnersResult,
-      newCargoOwnersTodayResult,
-      newCargoOwnersThisWeekResult,
-      newCargoOwnersThisMonthResult,
-      totalSubscriptionsResult,
-      activeSubscriptionsResult,
-      pendingSubscriptionsResult,
-      expiredSubscriptionsResult,
-      newSubscriptionsThisMonthResult
-    ] = queries;
+      totalLoads, activeLoads, newLoadsThisMonth, newLoadsThisWeek, 
+      newLoadsToday, completedLoads, cancelledLoads, urgentLoads
+    ] = loadStats.status === 'fulfilled' ? loadStats.value : Array(8).fill(0);
 
-    // Safely extract values
-    stats.totalLoads = totalLoadsResult.status === 'fulfilled' ? totalLoadsResult.value : 0;
-    stats.activeLoads = activeLoadsResult.status === 'fulfilled' ? activeLoadsResult.value : 0;
-    stats.newLoadsThisMonth = newLoadsThisMonthResult.status === 'fulfilled' ? newLoadsThisMonthResult.value : 0;
-    const completedLoads = completedLoadsResult.status === 'fulfilled' ? completedLoadsResult.value : 0;
+    const [
+      totalDrivers, totalCargoOwners, activeDrivers, activeCargoOwners,
+      newDriversThisMonth, newCargoOwnersThisMonth, newDriversThisWeek, 
+      newCargoOwnersThisWeek, newDriversToday, newCargoOwnersToday,
+      verifiedDrivers, verifiedCargoOwners
+    ] = userStats.status === 'fulfilled' ? userStats.value : Array(12).fill(0);
 
-    stats.totalDrivers = totalDriversResult.status === 'fulfilled' ? totalDriversResult.value : 0;
-    stats.activeDrivers = activeDriversResult.status === 'fulfilled' ? activeDriversResult.value : 0;
-    stats.newDriversToday = newDriversTodayResult.status === 'fulfilled' ? newDriversTodayResult.value : 0;
-    stats.newDriversThisWeek = newDriversThisWeekResult.status === 'fulfilled' ? newDriversThisWeekResult.value : 0;
-    stats.newDriversThisMonth = newDriversThisMonthResult.status === 'fulfilled' ? newDriversThisMonthResult.value : 0;
+    const [
+      totalSubscriptions, activeSubscriptions, pendingSubscriptions,
+      expiredSubscriptions, newSubscriptionsThisMonth, rejectedSubscriptions
+    ] = subscriptionStats.status === 'fulfilled' ? subscriptionStats.value : Array(6).fill(0);
 
-    stats.totalCargoOwners = totalCargoOwnersResult.status === 'fulfilled' ? totalCargoOwnersResult.value : 0;
-    stats.activeCargoOwners = activeCargoOwnersResult.status === 'fulfilled' ? activeCargoOwnersResult.value : 0;
-    stats.newCargoOwnersToday = newCargoOwnersTodayResult.status === 'fulfilled' ? newCargoOwnersTodayResult.value : 0;
-    stats.newCargoOwnersThisWeek = newCargoOwnersThisWeekResult.status === 'fulfilled' ? newCargoOwnersThisWeekResult.value : 0;
-    stats.newCargoOwnersThisMonth = newCargoOwnersThisMonthResult.status === 'fulfilled' ? newCargoOwnersThisMonthResult.value : 0;
+    const [monthlyRevenueData, totalRevenueData, revenueByPlan] = 
+      revenueStats.status === 'fulfilled' ? revenueStats.value : [[], [], []];
 
-    stats.totalSubscriptions = totalSubscriptionsResult.status === 'fulfilled' ? totalSubscriptionsResult.value : 0;
-    stats.activeSubscriptions = activeSubscriptionsResult.status === 'fulfilled' ? activeSubscriptionsResult.value : 0;
-    stats.pendingSubscriptions = pendingSubscriptionsResult.status === 'fulfilled' ? pendingSubscriptionsResult.value : 0;
-    stats.expiredSubscriptions = expiredSubscriptionsResult.status === 'fulfilled' ? expiredSubscriptionsResult.value : 0;
-    stats.newSubscriptionsThisMonth = newSubscriptionsThisMonthResult.status === 'fulfilled' ? newSubscriptionsThisMonthResult.value : 0;
+    const [
+      driversLastMonth, cargoOwnersLastMonth, loadsLastMonth, subscriptionsLastMonth
+    ] = growthStats.status === 'fulfilled' ? growthStats.value : Array(4).fill(0);
 
-    // Calculate aggregated user stats
-    stats.totalUsers = stats.totalDrivers + stats.totalCargoOwners;
-    stats.activeUsers = stats.activeDrivers + stats.activeCargoOwners;
-    stats.newUsersToday = stats.newDriversToday + stats.newCargoOwnersToday;
-    stats.newUsersThisWeek = stats.newDriversThisWeek + stats.newCargoOwnersThisWeek;
-    stats.newUsersThisMonth = stats.newDriversThisMonth + stats.newCargoOwnersThisMonth;
+    // Calculate derived metrics
+    const totalUsers = totalDrivers + totalCargoOwners;
+    const activeUsers = activeDrivers + activeCargoOwners;
+    const newUsersToday = newDriversToday + newCargoOwnersToday;
+    const newUsersThisWeek = newDriversThisWeek + newCargoOwnersThisWeek;
+    const newUsersThisMonth = newDriversThisMonth + newCargoOwnersThisMonth;
+    const usersLastMonth = driversLastMonth + cargoOwnersLastMonth;
 
-    // Calculate revenue statistics
-    try {
-      const revenueQueries = await Promise.allSettled([
-        // Monthly revenue from this month's approved subscriptions
-        Subscription.find({
-          createdAt: { $gte: startOfMonth },
-          status: 'active',
-          paymentStatus: 'completed'
-        }).select('price amount').lean().catch(() => []),
+    const monthlyRevenue = monthlyRevenueData[0]?.totalRevenue || 0;
+    const totalRevenue = totalRevenueData[0]?.totalRevenue || 0;
 
-        // Total all-time revenue from all approved subscriptions
-        Subscription.find({
-          status: 'active',
-          paymentStatus: 'completed'
-        }).select('price amount').lean().catch(() => [])
-      ]);
+    // Calculate growth rates
+    const userGrowthRate = usersLastMonth > 0 ? 
+      parseFloat(((newUsersThisMonth - usersLastMonth) / usersLastMonth * 100).toFixed(2)) : 
+      (newUsersThisMonth > 0 ? 100 : 0);
 
-      const [monthlySubsResult, allSubsResult] = revenueQueries;
+    const loadGrowthRate = loadsLastMonth > 0 ? 
+      parseFloat(((newLoadsThisMonth - loadsLastMonth) / loadsLastMonth * 100).toFixed(2)) : 
+      (newLoadsThisMonth > 0 ? 100 : 0);
 
-      if (monthlySubsResult.status === 'fulfilled') {
-        stats.monthlyRevenue = monthlySubsResult.value.reduce((total, sub) => {
-          return total + (sub.price || sub.amount || 0);
-        }, 0);
-      }
+    const subscriptionGrowthRate = subscriptionsLastMonth > 0 ? 
+      parseFloat(((newSubscriptionsThisMonth - subscriptionsLastMonth) / subscriptionsLastMonth * 100).toFixed(2)) : 
+      (newSubscriptionsThisMonth > 0 ? 100 : 0);
 
-      if (allSubsResult.status === 'fulfilled') {
-        stats.totalRevenue = allSubsResult.value.reduce((total, sub) => {
-          return total + (sub.price || sub.amount || 0);
-        }, 0);
-      }
+    // Calculate rates and percentages
+    const subscriptionRate = totalUsers > 0 ? 
+      parseFloat((activeSubscriptions / totalUsers * 100).toFixed(2)) : 0;
+    
+    const loadCompletionRate = totalLoads > 0 ? 
+      parseFloat((completedLoads / totalLoads * 100).toFixed(2)) : 0;
 
-      // Fallback to direct DB queries if Subscription model fails
-      if (monthlySubsResult.status === 'rejected' || allSubsResult.status === 'rejected') {
-        try {
-          const [monthlyRevenueDirect, totalRevenueDirect] = await Promise.all([
-            db.collection('subscriptions').find({
-              createdAt: { $gte: startOfMonth },
-              status: 'active',
-              paymentStatus: 'completed'
-            }).toArray(),
-            db.collection('subscriptions').find({
-              status: 'active',
-              paymentStatus: 'completed'
-            }).toArray()
-          ]);
+    const loadCancellationRate = totalLoads > 0 ? 
+      parseFloat((cancelledLoads / totalLoads * 100).toFixed(2)) : 0;
 
-          if (monthlySubsResult.status === 'rejected') {
-            stats.monthlyRevenue = monthlyRevenueDirect.reduce((total, sub) => {
-              return total + (sub.price || sub.amount || 0);
-            }, 0);
-          }
+    const driverVerificationRate = totalDrivers > 0 ? 
+      parseFloat((verifiedDrivers / totalDrivers * 100).toFixed(2)) : 0;
 
-          if (allSubsResult.status === 'rejected') {
-            stats.totalRevenue = totalRevenueDirect.reduce((total, sub) => {
-              return total + (sub.price || sub.amount || 0);
-            }, 0);
-          }
-        } catch (directDbError) {
-          console.warn('Direct DB revenue queries failed:', directDbError);
+    const cargoOwnerVerificationRate = totalCargoOwners > 0 ? 
+      parseFloat((verifiedCargoOwners / totalCargoOwners * 100).toFixed(2)) : 0;
+
+    const averageRevenuePerSubscription = activeSubscriptions > 0 ? 
+      parseFloat((totalRevenue / activeSubscriptions).toFixed(2)) : 0;
+
+    // Build comprehensive stats object
+    const stats = {
+      // Load metrics
+      loads: {
+        total: totalLoads,
+        active: activeLoads,
+        newToday: newLoadsToday,
+        newThisWeek: newLoadsThisWeek,
+        newThisMonth: newLoadsThisMonth,
+        completed: completedLoads,
+        cancelled: cancelledLoads,
+        urgent: urgentLoads,
+        completionRate: loadCompletionRate,
+        cancellationRate: loadCancellationRate,
+        growthRate: loadGrowthRate
+      },
+
+      // User metrics
+      users: {
+        total: totalUsers,
+        active: activeUsers,
+        newToday: newUsersToday,
+        newThisWeek: newUsersThisWeek,
+        newThisMonth: newUsersThisMonth,
+        growthRate: userGrowthRate,
+        drivers: {
+          total: totalDrivers,
+          active: activeDrivers,
+          newToday: newDriversToday,
+          newThisWeek: newDriversThisWeek,
+          newThisMonth: newDriversThisMonth,
+          verified: verifiedDrivers,
+          verificationRate: driverVerificationRate
+        },
+        cargoOwners: {
+          total: totalCargoOwners,
+          active: activeCargoOwners,
+          newToday: newCargoOwnersToday,
+          newThisWeek: newCargoOwnersThisWeek,
+          newThisMonth: newCargoOwnersThisMonth,
+          verified: verifiedCargoOwners,
+          verificationRate: cargoOwnerVerificationRate
         }
+      },
+
+      // Subscription metrics
+      subscriptions: {
+        total: totalSubscriptions,
+        active: activeSubscriptions,
+        pending: pendingSubscriptions,
+        expired: expiredSubscriptions,
+        rejected: rejectedSubscriptions,
+        newThisMonth: newSubscriptionsThisMonth,
+        rate: subscriptionRate,
+        growthRate: subscriptionGrowthRate,
+        byPlan: revenueByPlan.reduce((acc, plan) => {
+          acc[plan._id] = {
+            count: plan.count,
+            revenue: plan.revenue
+          };
+          return acc;
+        }, {})
+      },
+
+      // Revenue metrics
+      revenue: {
+        monthly: monthlyRevenue,
+        total: totalRevenue,
+        averagePerSubscription: averageRevenuePerSubscription,
+        byPlan: revenueByPlan
+      },
+
+      // Performance indicators
+      kpis: {
+        userGrowthRate,
+        loadGrowthRate,
+        subscriptionGrowthRate,
+        subscriptionRate,
+        loadCompletionRate,
+        loadCancellationRate,
+        driverVerificationRate,
+        cargoOwnerVerificationRate,
+        averageLoadsPerUser: totalUsers > 0 ? parseFloat((totalLoads / totalUsers).toFixed(2)) : 0,
+        dailyActiveUsers: activeUsers,
+        monthlyActiveRevenue: monthlyRevenue
+      },
+
+      // System metadata
+      metadata: {
+        lastUpdated: new Date(),
+        generatedBy: req.admin.name || 'System',
+        dataSource: 'mongodb',
+        queryExecutionTime: Date.now() - (req.startTime || Date.now())
       }
-    } catch (revenueError) {
-      console.warn('Revenue calculation failed:', revenueError);
-      stats.monthlyRevenue = 0;
-      stats.totalRevenue = 0;
-    }
-
-    // Calculate percentage rates with proper error handling
-    stats.userGrowthRate = stats.totalUsers > 0 ? 
-      parseFloat((stats.newUsersThisMonth / stats.totalUsers * 100).toFixed(2)) : 0;
-    
-    stats.subscriptionRate = stats.totalUsers > 0 ? 
-      parseFloat((stats.activeSubscriptions / stats.totalUsers * 100).toFixed(2)) : 0;
-    
-    stats.loadCompletionRate = stats.totalLoads > 0 ? 
-      parseFloat((completedLoads / stats.totalLoads * 100).toFixed(2)) : 0;
-
-    // Add additional analytics
-    stats.averageLoadsPerUser = stats.totalUsers > 0 ? 
-      parseFloat((stats.totalLoads / stats.totalUsers).toFixed(2)) : 0;
-    
-    stats.averageRevenuePerSubscription = stats.activeSubscriptions > 0 ? 
-      parseFloat((stats.totalRevenue / stats.activeSubscriptions).toFixed(2)) : 0;
-
-    // Log successful stats generation
-    console.log('Dashboard stats generated successfully:', {
-      totalLoads: stats.totalLoads,
-      totalUsers: stats.totalUsers,
-      activeUsers: stats.activeUsers,
-      newUsersToday: stats.newUsersToday,
-      pendingSubscriptions: stats.pendingSubscriptions,
-      monthlyRevenue: stats.monthlyRevenue,
-      totalRevenue: stats.totalRevenue,
-      processingTime: Date.now() - (req.startTime || Date.now())
-    });
+    };
 
     res.json({
       status: 'success',
       data: stats,
-      message: 'Dashboard statistics retrieved successfully',
-      generatedAt: new Date().toISOString()
+      message: 'Dashboard statistics retrieved successfully'
     });
 
   } catch (error) {
     console.error('Dashboard stats error:', error);
     
-    // Return minimal fallback stats on complete failure
+    // Return fallback stats structure
     const fallbackStats = {
-      totalLoads: 0,
-      activeLoads: 0,
-      newLoadsThisMonth: 0,
-      totalDrivers: 0,
-      activeDrivers: 0,
-      newDriversToday: 0,
-      newDriversThisWeek: 0,
-      newDriversThisMonth: 0,
-      totalCargoOwners: 0,
-      activeCargoOwners: 0,
-      newCargoOwnersToday: 0,
-      newCargoOwnersThisWeek: 0,
-      newCargoOwnersThisMonth: 0,
-      totalUsers: 0,
-      activeUsers: 0,
-      newUsersToday: 0,
-      newUsersThisWeek: 0,
-      newUsersThisMonth: 0,
-      totalSubscriptions: 0,
-      activeSubscriptions: 0,
-      pendingSubscriptions: 0,
-      expiredSubscriptions: 0,
-      newSubscriptionsThisMonth: 0,
-      monthlyRevenue: 0,
-      totalRevenue: 0,
-      userGrowthRate: 0,
-      subscriptionRate: 0,
-      loadCompletionRate: 0,
-      averageLoadsPerUser: 0,
-      averageRevenuePerSubscription: 0,
-      lastUpdated: new Date(),
-      error: true
+      loads: { total: 0, active: 0, newToday: 0, newThisWeek: 0, newThisMonth: 0, completed: 0, cancelled: 0, urgent: 0, completionRate: 0, cancellationRate: 0, growthRate: 0 },
+      users: { 
+        total: 0, active: 0, newToday: 0, newThisWeek: 0, newThisMonth: 0, growthRate: 0,
+        drivers: { total: 0, active: 0, newToday: 0, newThisWeek: 0, newThisMonth: 0, verified: 0, verificationRate: 0 },
+        cargoOwners: { total: 0, active: 0, newToday: 0, newThisWeek: 0, newThisMonth: 0, verified: 0, verificationRate: 0 }
+      },
+      subscriptions: { total: 0, active: 0, pending: 0, expired: 0, rejected: 0, newThisMonth: 0, rate: 0, growthRate: 0, byPlan: {} },
+      revenue: { monthly: 0, total: 0, averagePerSubscription: 0, byPlan: [] },
+      kpis: { userGrowthRate: 0, loadGrowthRate: 0, subscriptionGrowthRate: 0, subscriptionRate: 0, loadCompletionRate: 0, loadCancellationRate: 0, driverVerificationRate: 0, cargoOwnerVerificationRate: 0, averageLoadsPerUser: 0, dailyActiveUsers: 0, monthlyActiveRevenue: 0 },
+      metadata: { lastUpdated: new Date(), error: true, errorMessage: 'Error fetching statistics' }
     };
 
     res.status(500).json({
@@ -2045,184 +2109,275 @@ router.post('/dashboard-stats/refresh', adminAuth, async (req, res) => {
 // @access  Private
 router.get('/analytics/detailed', adminAuth, async (req, res) => {
   try {
-    if (!req.admin.permissions.viewAnalytics) {
+    if (!req.admin.permissions?.viewAnalytics) {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. You do not have permission to view analytics.'
       });
     }
 
-    const { timeframe = '30d' } = req.query;
+    const { 
+      timeframe = '30d',
+      groupBy = 'day',
+      includeGeography = 'false',
+      includeUserBehavior = 'false'
+    } = req.query;
+
+    // Calculate date ranges
+    let startDate, endDate = new Date();
+    const days = parseInt(timeframe.replace('d', '')) || 30;
+    startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
+
     const db = mongoose.connection.db;
-    
-    // Calculate time periods based on timeframe
-    let startDate;
-    switch (timeframe) {
-      case '7d':
-        startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    // Build aggregation pipeline for time grouping
+    let dateGrouping = {};
+    switch (groupBy) {
+      case 'hour':
+        dateGrouping = {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' },
+          day: { $dayOfMonth: '$createdAt' },
+          hour: { $hour: '$createdAt' }
+        };
         break;
-      case '30d':
-        startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      case 'day':
+        dateGrouping = {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' },
+          day: { $dayOfMonth: '$createdAt' }
+        };
         break;
-      case '90d':
-        startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      case 'week':
+        dateGrouping = {
+          year: { $year: '$createdAt' },
+          week: { $week: '$createdAt' }
+        };
+        break;
+      case 'month':
+        dateGrouping = {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' }
+        };
         break;
       default:
-        startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        dateGrouping = {
+          year: { $year: '$createdAt' },
+          month: { $month: '$createdAt' },
+          day: { $dayOfMonth: '$createdAt' }
+        };
     }
 
-    // Get daily user registration trends
-    const userRegistrationTrends = await Promise.allSettled([
+    const analyticsQueries = [];
+
+    // User registration trends
+    analyticsQueries.push(
       db.collection('drivers').aggregate([
-        {
-          $match: { createdAt: { $gte: startDate } }
-        },
+        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
         {
           $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' },
-              day: { $dayOfMonth: '$createdAt' }
-            },
-            count: { $sum: 1 }
+            _id: dateGrouping,
+            drivers: { $sum: 1 },
+            verifiedDrivers: { $sum: { $cond: [{ $eq: ['$isVerified', true] }, 1, 0] } }
           }
         },
-        {
-          $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
-        }
-      ]).toArray(),
-      
+        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1, '_id.hour': 1 } }
+      ]).toArray().catch(() => [])
+    );
+
+    analyticsQueries.push(
       db.collection('cargo-owners').aggregate([
-        {
-          $match: { createdAt: { $gte: startDate } }
-        },
+        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
         {
           $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' },
-              day: { $dayOfMonth: '$createdAt' }
-            },
-            count: { $sum: 1 }
+            _id: dateGrouping,
+            cargoOwners: { $sum: 1 },
+            verifiedCargoOwners: { $sum: { $cond: [{ $eq: ['$isVerified', true] }, 1, 0] } }
           }
         },
-        {
-          $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
-        }
-      ]).toArray()
-    ]);
+        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1, '_id.hour': 1 } }
+      ]).toArray().catch(() => [])
+    );
 
-    // Get subscription revenue trends
-    const revenueTrends = await Subscription.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: startDate },
-          status: 'active',
-          paymentStatus: 'completed'
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' },
-            day: { $dayOfMonth: '$createdAt' }
-          },
-          revenue: { $sum: { $ifNull: ['$price', '$amount'] } },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
-      }
-    ]).catch(() => []);
-
-    // Get load posting trends
-    const loadTrends = await Load.aggregate([
-      {
-        $match: { createdAt: { $gte: startDate } }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' },
-            day: { $dayOfMonth: '$createdAt' }
-          },
-          totalLoads: { $sum: 1 },
-          urgentLoads: { 
-            $sum: { $cond: [{ $eq: ['$isUrgent', true] }, 1, 0] }
-          },
-          averageBudget: { $avg: '$budget' }
-        }
-      },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
-      }
-    ]).catch(() => []);
-
-    // Get top performing locations
-    const topLocations = await Promise.allSettled([
-      db.collection('drivers').aggregate([
+    // Load posting trends
+    analyticsQueries.push(
+      Load.aggregate([
+        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
         {
           $group: {
-            _id: '$location',
-            driverCount: { $sum: 1 },
-            activeDrivers: {
-              $sum: {
-                $cond: [
-                  { $or: [{ $eq: ['$isActive', true] }, { $eq: ['$accountStatus', 'active'] }] },
-                  1,
-                  0
-                ]
-              }
+            _id: dateGrouping,
+            totalLoads: { $sum: 1 },
+            urgentLoads: { $sum: { $cond: [{ $eq: ['$isUrgent', true] }, 1, 0] } },
+            averageBudget: { $avg: '$budget' },
+            totalBudget: { $sum: '$budget' },
+            completedLoads: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1, '_id.hour': 1 } }
+      ]).catch(() => [])
+    );
+
+    // Subscription trends
+    analyticsQueries.push(
+      Subscription.aggregate([
+        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+        {
+          $group: {
+            _id: dateGrouping,
+            totalSubscriptions: { $sum: 1 },
+            approvedSubscriptions: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+            revenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+            basicPlan: { $sum: { $cond: [{ $eq: ['$planId', 'basic'] }, 1, 0] } },
+            proPlan: { $sum: { $cond: [{ $eq: ['$planId', 'pro'] }, 1, 0] } },
+            businessPlan: { $sum: { $cond: [{ $eq: ['$planId', 'business'] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1, '_id.hour': 1 } }
+      ]).catch(() => [])
+    );
+
+    // Geographic analysis (if requested)
+    if (includeGeography === 'true') {
+      analyticsQueries.push(
+        db.collection('drivers').aggregate([
+          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+          {
+            $group: {
+              _id: '$location',
+              driverCount: { $sum: 1 },
+              activeDrivers: { $sum: { $cond: [{ $eq: ['$isActive', true] }, 1, 0] } },
+              verifiedDrivers: { $sum: { $cond: [{ $eq: ['$isVerified', true] }, 1, 0] } }
             }
-          }
-        },
-        { $sort: { driverCount: -1 } },
-        { $limit: 10 }
-      ]).toArray(),
+          },
+          { $sort: { driverCount: -1 } },
+          { $limit: 20 }
+        ]).toArray().catch(() => [])
+      );
 
-      db.collection('cargo-owners').aggregate([
-        {
-          $group: {
-            _id: '$location',
-            cargoOwnerCount: { $sum: 1 },
-            activeCargoOwners: {
-              $sum: {
-                $cond: [
-                  { $or: [{ $eq: ['$isActive', true] }, { $eq: ['$accountStatus', 'active'] }] },
-                  1,
-                  0
-                ]
-              }
+      analyticsQueries.push(
+        db.collection('cargo-owners').aggregate([
+          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+          {
+            $group: {
+              _id: '$location',
+              cargoOwnerCount: { $sum: 1 },
+              activeCargoOwners: { $sum: { $cond: [{ $eq: ['$isActive', true] }, 1, 0] } },
+              verifiedCargoOwners: { $sum: { $cond: [{ $eq: ['$isVerified', true] }, 1, 0] } }
             }
-          }
-        },
-        { $sort: { cargoOwnerCount: -1 } },
-        { $limit: 10 }
-      ]).toArray()
-    ]);
+          },
+          { $sort: { cargoOwnerCount: -1 } },
+          { $limit: 20 }
+        ]).toArray().catch(() => [])
+      );
+
+      analyticsQueries.push(
+        Load.aggregate([
+          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+          {
+            $group: {
+              _id: '$pickupLocation',
+              loadCount: { $sum: 1 },
+              totalBudget: { $sum: '$budget' },
+              averageBudget: { $avg: '$budget' },
+              completedLoads: { $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0] } }
+            }
+          },
+          { $sort: { loadCount: -1 } },
+          { $limit: 20 }
+        ]).catch(() => [])
+      );
+    }
+
+    // User behavior analysis (if requested)
+    if (includeUserBehavior === 'true') {
+      analyticsQueries.push(
+        Load.aggregate([
+          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+          {
+            $group: {
+              _id: '$cargoType',
+              count: { $sum: 1 },
+              totalBudget: { $sum: '$budget' },
+              averageBudget: { $avg: '$budget' },
+              averageWeight: { $avg: '$weight' }
+            }
+          },
+          { $sort: { count: -1 } }
+        ]).catch(() => [])
+      );
+
+      analyticsQueries.push(
+        Load.aggregate([
+          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+          {
+            $group: {
+              _id: '$vehicleType',
+              count: { $sum: 1 },
+              totalBudget: { $sum: '$budget' },
+              averageBudget: { $avg: '$budget' }
+            }
+          },
+          { $sort: { count: -1 } }
+        ]).catch(() => [])
+      );
+    }
+
+    // Execute all queries
+    const results = await Promise.allSettled(analyticsQueries);
+
+    // Process results
+    const [
+      driverTrends,
+      cargoOwnerTrends,
+      loadTrends,
+      subscriptionTrends,
+      ...additionalResults
+    ] = results.map(result => result.status === 'fulfilled' ? result.value : []);
+
+    let geographicData = {};
+    let behaviorData = {};
+
+    if (includeGeography === 'true') {
+      const [driversByLocation, cargoOwnersByLocation, loadsByLocation] = additionalResults.slice(0, 3);
+      geographicData = {
+        driversByLocation,
+        cargoOwnersByLocation,
+        loadsByLocation
+      };
+    }
+
+    if (includeUserBehavior === 'true') {
+      const startIndex = includeGeography === 'true' ? 3 : 0;
+      const [cargoTypeAnalysis, vehicleTypeAnalysis] = additionalResults.slice(startIndex, startIndex + 2);
+      behaviorData = {
+        cargoTypeAnalysis,
+        vehicleTypeAnalysis
+      };
+    }
 
     const analytics = {
       timeframe,
+      groupBy,
       period: {
         start: startDate,
-        end: new Date()
+        end: endDate,
+        days: days
       },
       trends: {
         userRegistrations: {
-          drivers: userRegistrationTrends[0].status === 'fulfilled' ? userRegistrationTrends[0].value : [],
-          cargoOwners: userRegistrationTrends[1].status === 'fulfilled' ? userRegistrationTrends[1].value : []
+          drivers: driverTrends,
+          cargoOwners: cargoOwnerTrends
         },
-        revenue: revenueTrends,
-        loads: loadTrends
+        loads: loadTrends,
+        subscriptions: subscriptionTrends
       },
-      topLocations: {
-        drivers: topLocations[0].status === 'fulfilled' ? topLocations[0].value : [],
-        cargoOwners: topLocations[1].status === 'fulfilled' ? topLocations[1].value : []
-      },
-      generatedAt: new Date()
+      geography: geographicData,
+      behavior: behaviorData,
+      summary: {
+        totalDataPoints: driverTrends.length + cargoOwnerTrends.length + loadTrends.length + subscriptionTrends.length,
+        queryExecutionTime: Date.now() - (req.startTime || Date.now()),
+        generatedAt: new Date()
+      }
     };
 
     res.json({
@@ -2241,12 +2396,13 @@ router.get('/analytics/detailed', adminAuth, async (req, res) => {
   }
 });
 
+
 // @route   GET /api/admin/analytics/summary
 // @desc    Get quick summary stats for dashboard cards
 // @access  Private
 router.get('/analytics/summary', adminAuth, async (req, res) => {
   try {
-    if (!req.admin.permissions.viewAnalytics) {
+    if (!req.admin.permissions?.viewAnalytics) {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied'
@@ -2256,41 +2412,98 @@ router.get('/analytics/summary', adminAuth, async (req, res) => {
     const db = mongoose.connection.db;
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    // Get only the most essential stats for quick loading
+    // Quick essential stats only
     const [
-      totalUsers,
-      newUsersToday,
-      pendingSubscriptions,
-      totalRevenue
+      userCounts,
+      loadCounts, 
+      subscriptionCounts,
+      revenueData
     ] = await Promise.allSettled([
+      // User counts
       Promise.all([
         db.collection('drivers').countDocuments(),
-        db.collection('cargo-owners').countDocuments()
-      ]).then(([drivers, cargoOwners]) => drivers + cargoOwners),
-      
-      Promise.all([
+        db.collection('cargo-owners').countDocuments(),
         db.collection('drivers').countDocuments({ createdAt: { $gte: startOfToday } }),
-        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfToday } })
-      ]).then(([drivers, cargoOwners]) => drivers + cargoOwners),
+        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfToday } }),
+        db.collection('drivers').countDocuments({ createdAt: { $gte: startOfWeek } }),
+        db.collection('cargo-owners').countDocuments({ createdAt: { $gte: startOfWeek } })
+      ]),
       
-      Subscription.countDocuments({ status: 'pending' }).catch(() => 
-        db.collection('subscriptions').countDocuments({ status: 'pending' })
-      ),
+      // Load counts
+      Promise.all([
+        Load.countDocuments().catch(() => 0),
+        Load.countDocuments({ 
+          status: { $in: ['posted', 'available', 'receiving_bids', 'assigned', 'in_transit'] } 
+        }).catch(() => 0),
+        Load.countDocuments({ createdAt: { $gte: startOfToday } }).catch(() => 0)
+      ]),
       
-      Subscription.find({
-        status: 'active',
-        paymentStatus: 'completed'
-      }).select('price amount').lean().then(subs => 
-        subs.reduce((total, sub) => total + (sub.price || sub.amount || 0), 0)
-      ).catch(() => 0)
+      // Subscription counts
+      Promise.all([
+        Subscription.countDocuments().catch(() => 0),
+        Subscription.countDocuments({ status: 'pending' }).catch(() => 0),
+        Subscription.countDocuments({ 
+          status: 'active',
+          $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }]
+        }).catch(() => 0)
+      ]),
+      
+      // Revenue
+      Subscription.aggregate([
+        {
+          $match: {
+            status: 'active',
+            paymentStatus: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+            count: { $sum: 1 }
+          }
+        }
+      ]).catch(() => [])
     ]);
 
+    // Process results
+    const [drivers, cargoOwners, newDriversToday, newCargoOwnersToday, newDriversWeek, newCargoOwnersWeek] = 
+      userCounts.status === 'fulfilled' ? userCounts.value : [0, 0, 0, 0, 0, 0];
+
+    const [totalLoads, activeLoads, newLoadsToday] = 
+      loadCounts.status === 'fulfilled' ? loadCounts.value : [0, 0, 0];
+
+    const [totalSubscriptions, pendingSubscriptions, activeSubscriptions] = 
+      subscriptionCounts.status === 'fulfilled' ? subscriptionCounts.value : [0, 0, 0];
+
+    const revenue = revenueData.status === 'fulfilled' ? 
+      (revenueData.value[0]?.totalRevenue || 0) : 0;
+
     const summary = {
-      totalUsers: totalUsers.status === 'fulfilled' ? totalUsers.value : 0,
-      newUsersToday: newUsersToday.status === 'fulfilled' ? newUsersToday.value : 0,
-      pendingSubscriptions: pendingSubscriptions.status === 'fulfilled' ? pendingSubscriptions.value : 0,
-      totalRevenue: totalRevenue.status === 'fulfilled' ? totalRevenue.value : 0,
+      users: {
+        total: drivers + cargoOwners,
+        newToday: newDriversToday + newCargoOwnersToday,
+        newThisWeek: newDriversWeek + newCargoOwnersWeek,
+        breakdown: {
+          drivers,
+          cargoOwners
+        }
+      },
+      loads: {
+        total: totalLoads,
+        active: activeLoads,
+        newToday: newLoadsToday
+      },
+      subscriptions: {
+        total: totalSubscriptions,
+        active: activeSubscriptions,
+        pending: pendingSubscriptions
+      },
+      revenue: {
+        total: revenue
+      },
       lastUpdated: new Date()
     };
 
@@ -2308,6 +2521,362 @@ router.get('/analytics/summary', adminAuth, async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/analytics/performance
+// @desc    Get performance metrics and KPIs
+// @access  Private
+router.get('/analytics/performance', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions?.viewAnalytics) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to view analytics.'
+      });
+    }
+
+    const { period = '30d' } = req.query;
+    const days = parseInt(period.replace('d', '')) || 30;
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const endDate = new Date();
+
+    // Parallel execution of performance queries
+    const [
+      loadPerformance,
+      userEngagement,
+      revenueMetrics,
+      systemHealth
+    ] = await Promise.allSettled([
+      // Load performance metrics
+      Promise.all([
+        Load.countDocuments({ 
+          createdAt: { $gte: startDate },
+          status: 'delivered' 
+        }).catch(() => 0),
+        Load.countDocuments({ 
+          createdAt: { $gte: startDate } 
+        }).catch(() => 0),
+        Load.aggregate([
+          {
+            $match: { 
+              createdAt: { $gte: startDate },
+              status: 'delivered',
+              deliveredAt: { $exists: true }
+            }
+          },
+          {
+            $project: {
+              deliveryTime: {
+                $divide: [
+                  { $subtract: ['$deliveredAt', '$createdAt'] },
+                  1000 * 60 * 60 * 24 // Convert to days
+                ]
+              }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              avgDeliveryTime: { $avg: '$deliveryTime' },
+              minDeliveryTime: { $min: '$deliveryTime' },
+              maxDeliveryTime: { $max: '$deliveryTime' }
+            }
+          }
+        ]).catch(() => [])
+      ]),
+
+      // User engagement metrics
+      Promise.all([
+        mongoose.connection.db.collection('drivers').countDocuments({
+          createdAt: { $gte: startDate },
+          isActive: true
+        }),
+        mongoose.connection.db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startDate },
+          isActive: true
+        }),
+        mongoose.connection.db.collection('drivers').countDocuments({
+          createdAt: { $gte: startDate },
+          isVerified: true
+        }),
+        mongoose.connection.db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startDate },
+          isVerified: true
+        })
+      ]),
+
+      // Revenue performance
+      Subscription.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startDate },
+            status: 'active',
+            paymentStatus: 'completed'
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalRevenue: { $sum: { $ifNull: ['$price', '$amount'] } },
+            avgRevenue: { $avg: { $ifNull: ['$price', '$amount'] } },
+            count: { $sum: 1 }
+          }
+        }
+      ]).catch(() => []),
+
+      // System health indicators
+      Promise.all([
+        Load.countDocuments({ 
+          createdAt: { $gte: startDate },
+          status: 'cancelled' 
+        }).catch(() => 0),
+        Subscription.countDocuments({ 
+          createdAt: { $gte: startDate },
+          status: 'rejected' 
+        }).catch(() => 0),
+        mongoose.connection.db.collection('drivers').countDocuments({
+          createdAt: { $gte: startDate },
+          accountStatus: 'suspended'
+        }),
+        mongoose.connection.db.collection('cargo-owners').countDocuments({
+          createdAt: { $gte: startDate },
+          accountStatus: 'suspended'
+        })
+      ])
+    ]);
+
+    // Process results
+    const [completedLoads, totalLoads, deliveryTimeData] = 
+      loadPerformance.status === 'fulfilled' ? loadPerformance.value : [0, 0, []];
+
+    const [activeDrivers, activeCargoOwners, verifiedDrivers, verifiedCargoOwners] = 
+      userEngagement.status === 'fulfilled' ? userEngagement.value : [0, 0, 0, 0];
+
+    const revenueData = revenueMetrics.status === 'fulfilled' ? 
+      (revenueMetrics.value[0] || { totalRevenue: 0, avgRevenue: 0, count: 0 }) : 
+      { totalRevenue: 0, avgRevenue: 0, count: 0 };
+
+    const [cancelledLoads, rejectedSubscriptions, suspendedDrivers, suspendedCargoOwners] = 
+      systemHealth.status === 'fulfilled' ? systemHealth.value : [0, 0, 0, 0];
+
+    const avgDeliveryTime = deliveryTimeData.length > 0 ? 
+      deliveryTimeData[0].avgDeliveryTime : null;
+
+    // Calculate KPIs
+    const completionRate = totalLoads > 0 ? (completedLoads / totalLoads * 100) : 0;
+    const cancellationRate = totalLoads > 0 ? (cancelledLoads / totalLoads * 100) : 0;
+    const userActivationRate = (activeDrivers + activeCargoOwners) > 0 ? 
+      ((verifiedDrivers + verifiedCargoOwners) / (activeDrivers + activeCargoOwners) * 100) : 0;
+    const revenuePerUser = (activeDrivers + activeCargoOwners) > 0 ? 
+      (revenueData.totalRevenue / (activeDrivers + activeCargoOwners)) : 0;
+
+    const performance = {
+      period: {
+        days,
+        start: startDate,
+        end: endDate
+      },
+      kpis: {
+        loadCompletionRate: parseFloat(completionRate.toFixed(2)),
+        loadCancellationRate: parseFloat(cancellationRate.toFixed(2)),
+        userActivationRate: parseFloat(userActivationRate.toFixed(2)),
+        averageDeliveryTime: avgDeliveryTime ? parseFloat(avgDeliveryTime.toFixed(2)) : null,
+        revenuePerUser: parseFloat(revenuePerUser.toFixed(2)),
+        subscriptionConversionRate: (activeDrivers + activeCargoOwners) > 0 ? 
+          parseFloat((revenueData.count / (activeDrivers + activeCargoOwners) * 100).toFixed(2)) : 0
+      },
+      metrics: {
+        loads: {
+          total: totalLoads,
+          completed: completedLoads,
+          cancelled: cancelledLoads,
+          completionRate: parseFloat(completionRate.toFixed(2)),
+          cancellationRate: parseFloat(cancellationRate.toFixed(2)),
+          avgDeliveryDays: avgDeliveryTime ? parseFloat(avgDeliveryTime.toFixed(2)) : null
+        },
+        users: {
+          activeDrivers,
+          activeCargoOwners,
+          verifiedDrivers,
+          verifiedCargoOwners,
+          suspendedDrivers,
+          suspendedCargoOwners,
+          totalActive: activeDrivers + activeCargoOwners,
+          verificationRate: (activeDrivers + activeCargoOwners) > 0 ? 
+            parseFloat(((verifiedDrivers + verifiedCargoOwners) / (activeDrivers + activeCargoOwners) * 100).toFixed(2)) : 0
+        },
+        revenue: {
+          total: revenueData.totalRevenue,
+          average: parseFloat((revenueData.avgRevenue || 0).toFixed(2)),
+          subscriptions: revenueData.count,
+          revenuePerUser: parseFloat(revenuePerUser.toFixed(2))
+        },
+        system: {
+          rejectedSubscriptions,
+          suspendedUsers: suspendedDrivers + suspendedCargoOwners,
+          healthScore: parseFloat((100 - cancellationRate - (rejectedSubscriptions / Math.max(revenueData.count, 1) * 100)).toFixed(2))
+        }
+      },
+      generatedAt: new Date()
+    };
+
+    res.json({
+      status: 'success',
+      data: performance,
+      message: 'Performance metrics retrieved successfully'
+    });
+
+  } catch (error) {
+    console.error('Performance analytics error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error fetching performance metrics',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/admin/analytics/export
+// @desc    Export analytics data in various formats
+// @access  Private
+router.get('/analytics/export', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin.permissions?.viewAnalytics) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to export analytics.'
+      });
+    }
+
+    const { 
+      format = 'json',
+      type = 'summary',
+      period = '30d',
+      include = 'all'
+    } = req.query;
+
+    const days = parseInt(period.replace('d', '')) || 30;
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const endDate = new Date();
+
+    let exportData = {};
+
+    // Get data based on type
+    switch (type) {
+      case 'users':
+        const userExportData = await Promise.allSettled([
+          mongoose.connection.db.collection('drivers').find({
+            createdAt: { $gte: startDate }
+          }).project({
+            _id: 1, name: 1, email: 1, location: 1, isVerified: 1, 
+            isActive: 1, createdAt: 1
+          }).toArray(),
+          mongoose.connection.db.collection('cargo-owners').find({
+            createdAt: { $gte: startDate }
+          }).project({
+            _id: 1, name: 1, email: 1, location: 1, isVerified: 1, 
+            isActive: 1, createdAt: 1
+          }).toArray()
+        ]);
+        
+        exportData = {
+          drivers: userExportData[0].status === 'fulfilled' ? userExportData[0].value : [],
+          cargoOwners: userExportData[1].status === 'fulfilled' ? userExportData[1].value : []
+        };
+        break;
+
+      case 'loads':
+        exportData.loads = await Load.find({
+          createdAt: { $gte: startDate }
+        }).select({
+          title: 1, pickupLocation: 1, deliveryLocation: 1, weight: 1, 
+          budget: 1, status: 1, isUrgent: 1, createdAt: 1, deliveredAt: 1
+        }).lean().catch(() => []);
+        break;
+
+      case 'subscriptions':
+        exportData.subscriptions = await Subscription.find({
+          createdAt: { $gte: startDate }
+        }).select({
+          userId: 1, planId: 1, planName: 1, price: 1, status: 1, 
+          paymentStatus: 1, createdAt: 1, activatedAt: 1, expiresAt: 1
+        }).lean().catch(() => []);
+        break;
+
+      default: // summary
+        const summaryData = await Promise.allSettled([
+          mongoose.connection.db.collection('drivers').countDocuments({
+            createdAt: { $gte: startDate }
+          }),
+          mongoose.connection.db.collection('cargo-owners').countDocuments({
+            createdAt: { $gte: startDate }
+          }),
+          Load.countDocuments({ createdAt: { $gte: startDate } }).catch(() => 0),
+          Subscription.countDocuments({ createdAt: { $gte: startDate } }).catch(() => 0)
+        ]);
+
+        exportData = {
+          summary: {
+            period: { start: startDate, end: endDate, days },
+            drivers: summaryData[0].status === 'fulfilled' ? summaryData[0].value : 0,
+            cargoOwners: summaryData[1].status === 'fulfilled' ? summaryData[1].value : 0,
+            loads: summaryData[2].status === 'fulfilled' ? summaryData[2].value : 0,
+            subscriptions: summaryData[3].status === 'fulfilled' ? summaryData[3].value : 0
+          },
+          exportedAt: new Date(),
+          exportedBy: req.admin.name || 'Admin'
+        };
+    }
+
+    // Handle different export formats
+    switch (format.toLowerCase()) {
+      case 'csv':
+        // For CSV, we'll need to flatten the data structure
+        let csvContent = '';
+        if (type === 'users') {
+          csvContent = 'Type,ID,Name,Email,Location,Verified,Active,Created\n';
+          exportData.drivers?.forEach(driver => {
+            csvContent += `Driver,${driver._id},${driver.name},${driver.email},${driver.location},${driver.isVerified},${driver.isActive},${driver.createdAt}\n`;
+          });
+          exportData.cargoOwners?.forEach(owner => {
+            csvContent += `CargoOwner,${owner._id},${owner.name},${owner.email},${owner.location},${owner.isVerified},${owner.isActive},${owner.createdAt}\n`;
+          });
+        }
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=analytics-${type}-${period}.csv`);
+        return res.send(csvContent);
+
+      case 'xlsx':
+        // For production, you'd want to use a library like xlsx or exceljs
+        return res.status(501).json({
+          status: 'error',
+          message: 'XLSX export not implemented. Please use JSON or CSV format.'
+        });
+
+      default: // json
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename=analytics-${type}-${period}.json`);
+        return res.json({
+          status: 'success',
+          data: exportData,
+          metadata: {
+            exportType: type,
+            format: format,
+            period: period,
+            exportedAt: new Date(),
+            exportedBy: req.admin.name || 'Admin'
+          }
+        });
+    }
+
+  } catch (error) {
+    console.error('Analytics export error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error exporting analytics data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // Optional: Add a stats refresh endpoint
 router.post('/dashboard-stats/refresh', adminAuth, async (req, res) => {
