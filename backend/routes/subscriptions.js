@@ -596,179 +596,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
   }
 });
 
-// @route   POST /api/subscriptions/admin/:id/reject
-// @desc    Reject a subscription request 
-// @access  Private (Admin only)
-router.post('/admin/:id/reject', adminAuth, [
-  body('reason').notEmpty().withMessage('Rejection reason is required'),
-  body('reasonCategory').isIn([
-    'payment_failed', 'invalid_details', 'fraud_suspected', 'other'
-  ]).withMessage('Valid reason category is required'),
-  body('notes').optional().isLength({ max: 500 }),
-  body('refundRequired').optional().isBoolean()
-], async (req, res) => {
-  try {
-    if (!req.admin || !req.admin.permissions?.manageUsers) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Access denied. You do not have permission to reject subscriptions.'
-      });
-    }
 
-    const { id } = req.params;
-    const {
-      reason,
-      reasonCategory,
-      notes = '',
-      refundRequired = false
-    } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid subscription ID'
-      });
-    }
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const db = mongoose.connection.db;
-    const subscriptionsCollection = db.collection('subscriptions');
-    const usersCollection = db.collection('cargo-owners');
-    const notificationsCollection = db.collection('notifications');
-    const auditLogsCollection = db.collection('audit_logs');
-
-    const subscription = await subscriptionsCollection.findOne({
-      _id: new mongoose.Types.ObjectId(id)
-    });
-
-    if (!subscription) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Subscription not found'
-      });
-    }
-
-    if (subscription.status !== 'pending') {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Only pending subscriptions can be rejected'
-      });
-    }
-
-    const adminId = req.admin.id || req.admin._id || null;
-    const adminName = req.admin.name || 'Admin';
-    const adminEmail = req.admin.email || '';
-
-    // Update subscription to rejected
-    await subscriptionsCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(id) },
-      {
-        $set: {
-          status: 'rejected',
-          paymentStatus: 'failed',
-          rejectedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-          rejectedAt: new Date(),
-          rejectionReason: reason,
-          rejectionCategory: reasonCategory,
-          adminNotes: notes,
-          refundRequired,
-          rejectionDetails: {
-            rejectedByName: adminName,
-            rejectedByEmail: adminEmail,
-            rejectionTimestamp: new Date()
-          },
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    // Remove pendingSubscription from user
-    await usersCollection.updateOne(
-      { _id: subscription.userId },
-      { $unset: { pendingSubscription: '' }, $set: { updatedAt: new Date() } }
-    );
-
-    // Ensure user has basic subscription
-    await ensureBasicSubscription(subscription.userId, db);
-
-    // Send notification to user
-    const reasonMessages = {
-      payment_failed: 'Payment could not be verified',
-      invalid_details: 'Payment details were invalid',
-      fraud_suspected: 'Suspicious activity detected',
-      other: reason
-    };
-
-    await notificationsCollection.insertOne({
-      userId: subscription.userId,
-      userType: 'cargo_owner',
-      type: 'subscription_rejected',
-      title: 'Subscription Request Rejected',
-      message: `Your ${subscription.planName} request was declined. Reason: ${reasonMessages[reasonCategory]}. You remain on the Basic plan.`,
-      data: {
-        subscriptionId: id,
-        planName: subscription.planName,
-        reason,
-        reasonCategory,
-        refundRequired,
-        rejectedAt: new Date()
-      },
-      isRead: false,
-      priority: 'high',
-      createdAt: new Date()
-    });
-
-    // Create audit log
-    await auditLogsCollection.insertOne({
-      action: 'subscription_rejected',
-      entityType: 'subscription',
-      entityId: new mongoose.Types.ObjectId(id),
-      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
-      adminName,
-      userId: subscription.userId,
-      details: {
-        planId: subscription.planId,
-        planName: subscription.planName,
-        amount: subscription.price,
-        paymentMethod: subscription.paymentMethod,
-        reason,
-        reasonCategory,
-        refundRequired,
-        notes
-      },
-      ipAddress: req.ip,
-      userAgent: req.get('User-Agent'),
-      createdAt: new Date()
-    });
-
-    res.json({
-      status: 'success',
-      message: 'Subscription rejected successfully',
-      data: {
-        subscriptionId: id,
-        rejectedAt: new Date(),
-        reason,
-        reasonCategory
-      }
-    });
-
-  } catch (error) {
-    console.error('Reject subscription error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error rejecting subscription',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
 
 // @route   GET /api/subscriptions/admin/pending
 // @desc    Get pending subscription requests 
@@ -1363,8 +1191,6 @@ router.get('/my-subscription', auth, async (req, res) => {
   }
 });
 
-// Add this APPROVE endpoint after the reject endpoint and before the pending endpoint
-
 // @route   POST /api/subscriptions/admin/:id/approve
 // @desc    Approve a subscription request
 // @access  Private (Admin only)
@@ -1568,7 +1394,9 @@ router.post('/admin/:id/approve', adminAuth, [
   }
 });
 
-// ALSO FIX THE REJECT ENDPOINT - replace the existing reject endpoint with this:
+// @route   POST /api/subscriptions/admin/:id/reject
+// @desc    Reject a subscription request 
+// @access  Private (Admin only)
 router.post('/admin/:id/reject', adminAuth, [
   body('reason').notEmpty().withMessage('Rejection reason is required'),
   body('reasonCategory').isIn([
@@ -1735,6 +1563,824 @@ router.post('/admin/:id/reject', adminAuth, [
     res.status(500).json({
       status: 'error',
       message: 'Server error rejecting subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/subscriptions/admin/:id/cancel
+// @desc    Cancel an active subscription
+// @access  Private (Admin only)
+router.post('/admin/:id/cancel', adminAuth, [
+  body('reason').notEmpty().withMessage('Cancellation reason is required'),
+  body('reasonCategory').isIn([
+    'user_request', 'payment_failed', 'policy_violation', 'technical_issue', 'other'
+  ]).withMessage('Valid reason category is required'),
+  body('refundAmount').optional().isNumeric().withMessage('Refund amount must be numeric'),
+  body('effectiveDate').optional().isISO8601().withMessage('Invalid effective date'),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to cancel subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const {
+      reason,
+      reasonCategory,
+      refundAmount = 0,
+      effectiveDate,
+      notes = ''
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (!['active', 'pending'].includes(subscription.status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only active or pending subscriptions can be cancelled'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+    const cancelDate = effectiveDate ? new Date(effectiveDate) : new Date();
+
+    // Update subscription status
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+          cancelledAt: cancelDate,
+          cancellationReason: reason,
+          cancellationCategory: reasonCategory,
+          refundAmount: refundAmount,
+          adminNotes: notes,
+          cancellationDetails: {
+            cancelledByName: adminName,
+            cancelledByEmail: req.admin.email || '',
+            cancellationTimestamp: new Date(),
+            effectiveDate: cancelDate
+          },
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Update user record - downgrade to basic
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      {
+        $set: {
+          subscriptionPlan: 'basic',
+          subscriptionStatus: 'active',
+          updatedAt: new Date()
+        },
+        $unset: {
+          currentSubscription: '',
+          subscriptionExpiresAt: ''
+        }
+      }
+    );
+
+    // Ensure user has basic subscription
+    await ensureBasicSubscription(subscription.userId, db);
+
+    // Send notification to user
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_cancelled',
+      title: 'Subscription Cancelled',
+      message: `Your ${subscription.planName} subscription has been cancelled. ${refundAmount > 0 ? `A refund of ${formatCurrency(refundAmount)} will be processed.` : ''} You have been moved to the Basic plan.`,
+      data: {
+        subscriptionId: id,
+        planName: subscription.planName,
+        reason,
+        reasonCategory,
+        refundAmount,
+        cancelledAt: cancelDate
+      },
+      isRead: false,
+      priority: 'high',
+      createdAt: new Date()
+    });
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_cancelled',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        amount: subscription.price,
+        reason,
+        reasonCategory,
+        refundAmount,
+        effectiveDate: cancelDate,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Subscription cancelled successfully',
+      data: {
+        subscriptionId: id,
+        cancelledAt: cancelDate,
+        reason,
+        refundAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('Cancel subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error cancelling subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/subscriptions/admin/:id/adjust-duration
+// @desc    Adjust subscription duration
+// @access  Private (Admin only)
+router.put('/admin/:id/adjust-duration', adminAuth, [
+  body('additionalDays').isInt({ min: -365, max: 365 }).withMessage('Additional days must be between -365 and 365'),
+  body('reason').notEmpty().withMessage('Reason for adjustment is required'),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to adjust subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const { additionalDays, reason, notes = '' } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (subscription.status !== 'active') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only active subscriptions can be adjusted'
+      });
+    }
+
+    if (subscription.planId === 'basic') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Basic plan duration cannot be adjusted'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+
+    // Calculate new expiry date
+    const currentExpiry = subscription.expiresAt ? new Date(subscription.expiresAt) : new Date();
+    const newExpiry = new Date(currentExpiry.getTime() + (additionalDays * 24 * 60 * 60 * 1000));
+
+    // Create adjustment record
+    const adjustment = {
+      adjustedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adjustedAt: new Date(),
+      previousExpiry: currentExpiry,
+      newExpiry: newExpiry,
+      additionalDays: additionalDays,
+      reason: reason,
+      notes: notes,
+      adminName: adminName
+    };
+
+    // Update subscription
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: {
+          expiresAt: newExpiry,
+          updatedAt: new Date()
+        },
+        $push: {
+          durationAdjustments: adjustment
+        }
+      }
+    );
+
+    // Update user record
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      {
+        $set: {
+          subscriptionExpiresAt: newExpiry,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Send notification to user
+    const adjustmentType = additionalDays > 0 ? 'extended' : 'reduced';
+    const daysText = Math.abs(additionalDays) === 1 ? 'day' : 'days';
+    
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_adjusted',
+      title: 'Subscription Duration Adjusted',
+      message: `Your ${subscription.planName} subscription has been ${adjustmentType} by ${Math.abs(additionalDays)} ${daysText}. New expiry date: ${newExpiry.toLocaleDateString()}.`,
+      data: {
+        subscriptionId: id,
+        planName: subscription.planName,
+        additionalDays,
+        previousExpiry: currentExpiry,
+        newExpiry: newExpiry,
+        reason,
+        adjustedAt: new Date()
+      },
+      isRead: false,
+      priority: 'medium',
+      createdAt: new Date()
+    });
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_duration_adjusted',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        additionalDays,
+        previousExpiry: currentExpiry,
+        newExpiry: newExpiry,
+        reason,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    res.json({
+      status: 'success',
+      message: `Subscription duration ${adjustmentType} by ${Math.abs(additionalDays)} ${daysText}`,
+      data: {
+        subscriptionId: id,
+        previousExpiry: currentExpiry,
+        newExpiry: newExpiry,
+        additionalDays,
+        adjustedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Adjust subscription duration error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error adjusting subscription duration',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   PUT /api/subscriptions/admin/:id/update
+// @desc    Update subscription details
+// @access  Private (Admin only)
+router.put('/admin/:id/update', adminAuth, [
+  body('planId').optional().isIn(['basic', 'pro', 'business']).withMessage('Invalid plan ID'),
+  body('status').optional().isIn(['active', 'pending', 'cancelled', 'expired']).withMessage('Invalid status'),
+  body('expiresAt').optional().isISO8601().withMessage('Invalid expiry date'),
+  body('autoRenew').optional().isBoolean(),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to update subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const { planId, status, expiresAt, autoRenew, notes } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+
+    // Build update object
+    const updateData = {
+      updatedAt: new Date(),
+      lastUpdatedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      lastUpdatedByName: adminName
+    };
+
+    const changes = [];
+
+    if (planId && planId !== subscription.planId) {
+      const newPlan = SUBSCRIPTION_PLANS[planId];
+      if (!newPlan) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid plan ID'
+        });
+      }
+      updateData.planId = planId;
+      updateData.planName = newPlan.name;
+      updateData.features = newPlan.features;
+      changes.push(`Plan changed from ${subscription.planName} to ${newPlan.name}`);
+    }
+
+    if (status && status !== subscription.status) {
+      updateData.status = status;
+      changes.push(`Status changed from ${subscription.status} to ${status}`);
+    }
+
+    if (expiresAt) {
+      const newExpiryDate = new Date(expiresAt);
+      updateData.expiresAt = newExpiryDate;
+      changes.push(`Expiry date changed to ${newExpiryDate.toLocaleDateString()}`);
+    }
+
+    if (typeof autoRenew === 'boolean' && autoRenew !== subscription.autoRenew) {
+      updateData.autoRenew = autoRenew;
+      changes.push(`Auto-renewal ${autoRenew ? 'enabled' : 'disabled'}`);
+    }
+
+    if (notes) {
+      updateData.adminNotes = notes;
+    }
+
+    if (changes.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No changes detected'
+      });
+    }
+
+    // Update subscription
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: updateData }
+    );
+
+    // Update user record if plan or status changed
+    if (updateData.planId || updateData.status || updateData.expiresAt) {
+      const userUpdate = { updatedAt: new Date() };
+      
+      if (updateData.planId) {
+        userUpdate.subscriptionPlan = updateData.planId;
+      }
+      if (updateData.status) {
+        userUpdate.subscriptionStatus = updateData.status;
+      }
+      if (updateData.expiresAt) {
+        userUpdate.subscriptionExpiresAt = updateData.expiresAt;
+      }
+
+      await usersCollection.updateOne(
+        { _id: subscription.userId },
+        { $set: userUpdate }
+      );
+    }
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_updated',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        changes: changes,
+        planId: updateData.planId || subscription.planId,
+        planName: updateData.planName || subscription.planName,
+        previousStatus: subscription.status,
+        newStatus: updateData.status || subscription.status,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Subscription updated successfully',
+      data: {
+        subscriptionId: id,
+        changes: changes,
+        updatedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Update subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error updating subscription',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   GET /api/subscriptions/admin/:id/details
+// @desc    Get detailed subscription information
+// @access  Private (Admin only)
+router.get('/admin/:id/details', adminAuth, async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to view subscription details.'
+      });
+    }
+
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+
+    const subscription = await subscriptionsCollection.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(id) } },
+      {
+        $lookup: {
+          from: 'cargo-owners',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $lookup: {
+          from: 'loads',
+          let: { userId: '$userId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$postedBy', '$$userId'] } } },
+            { $sort: { createdAt: -1 } },
+            { $limit: 5 }
+          ],
+          as: 'recentLoads'
+        }
+      }
+    ]).toArray();
+
+    if (!subscription || subscription.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    const subscriptionData = subscription[0];
+    const user = subscriptionData.user[0] || {};
+
+    // Get usage statistics
+    const loadsCollection = db.collection('loads');
+    const currentMonthStart = new Date();
+    currentMonthStart.setDate(1);
+    currentMonthStart.setHours(0, 0, 0, 0);
+
+    const monthlyUsage = await loadsCollection.countDocuments({
+      postedBy: subscriptionData.userId,
+      createdAt: { $gte: currentMonthStart }
+    });
+
+    const totalLoads = await loadsCollection.countDocuments({
+      postedBy: subscriptionData.userId
+    });
+
+    // Calculate subscription metrics
+    const daysActive = subscriptionData.activatedAt ? 
+      Math.floor((new Date() - new Date(subscriptionData.activatedAt)) / (1000 * 60 * 60 * 24)) : 0;
+    
+    const daysRemaining = subscriptionData.expiresAt ? 
+      Math.max(0, Math.floor((new Date(subscriptionData.expiresAt) - new Date()) / (1000 * 60 * 60 * 24))) : null;
+
+    res.json({
+      status: 'success',
+      data: {
+        subscription: {
+          ...subscriptionData,
+          user: user,
+          metrics: {
+            daysActive,
+            daysRemaining,
+            monthlyUsage,
+            totalLoads,
+            utilizationRate: subscriptionData.features?.maxLoads ? 
+              (monthlyUsage / subscriptionData.features.maxLoads * 100).toFixed(1) : 0
+          },
+          recentActivity: subscriptionData.recentLoads || []
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get subscription details error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching subscription details',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// @route   POST /api/subscriptions/admin/:id/extend
+// @desc    Extend subscription by specific duration
+// @access  Private (Admin only)
+router.post('/admin/:id/extend', adminAuth, [
+  body('extensionDays').isInt({ min: 1, max: 365 }).withMessage('Extension days must be between 1 and 365'),
+  body('reason').notEmpty().withMessage('Extension reason is required'),
+  body('compensationType').isIn(['goodwill', 'service_issue', 'promotional', 'other']).withMessage('Invalid compensation type'),
+  body('notes').optional().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    if (!req.admin || !req.admin.permissions?.manageUsers) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to extend subscriptions.'
+      });
+    }
+
+    const { id } = req.params;
+    const { extensionDays, reason, compensationType, notes = '' } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
+    const usersCollection = db.collection('cargo-owners');
+    const notificationsCollection = db.collection('notifications');
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const subscription = await subscriptionsCollection.findOne({
+      _id: new mongoose.Types.ObjectId(id)
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    if (!['active', 'expired'].includes(subscription.status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Only active or expired subscriptions can be extended'
+      });
+    }
+
+    const adminId = req.admin.id || req.admin._id || null;
+    const adminName = req.admin.name || 'Admin';
+
+    // Calculate new expiry date
+    const currentExpiry = subscription.expiresAt ? new Date(subscription.expiresAt) : new Date();
+    const baseDate = subscription.status === 'expired' ? new Date() : currentExpiry;
+    const newExpiry = new Date(baseDate.getTime() + (extensionDays * 24 * 60 * 60 * 1000));
+
+    // Create extension record
+    const extension = {
+      extendedBy: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      extendedAt: new Date(),
+      previousExpiry: currentExpiry,
+      newExpiry: newExpiry,
+      extensionDays: extensionDays,
+      reason: reason,
+      compensationType: compensationType,
+      notes: notes,
+      adminName: adminName
+    };
+
+    // Update subscription
+    const updateData = {
+      expiresAt: newExpiry,
+      status: 'active', // Reactivate if expired
+      updatedAt: new Date()
+    };
+
+    if (!subscription.extensions) {
+      updateData.extensions = [extension];
+    }
+
+    await subscriptionsCollection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      {
+        $set: updateData,
+        $push: subscription.extensions ? { extensions: extension } : {}
+      }
+    );
+
+    // Update user record
+    await usersCollection.updateOne(
+      { _id: subscription.userId },
+      {
+        $set: {
+          subscriptionStatus: 'active',
+          subscriptionExpiresAt: newExpiry,
+          currentSubscription: new mongoose.Types.ObjectId(id),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // Send notification to user
+    await notificationsCollection.insertOne({
+      userId: subscription.userId,
+      userType: 'cargo_owner',
+      type: 'subscription_extended',
+      title: 'Subscription Extended',
+      message: `Great news! Your ${subscription.planName} subscription has been extended by ${extensionDays} days as a ${compensationType}. New expiry: ${newExpiry.toLocaleDateString()}.`,
+      data: {
+        subscriptionId: id,
+        planName: subscription.planName,
+        extensionDays,
+        newExpiry: newExpiry,
+        compensationType,
+        reason,
+        extendedAt: new Date()
+      },
+      isRead: false,
+      priority: 'medium',
+      createdAt: new Date()
+    });
+
+    // Create audit log
+    await auditLogsCollection.insertOne({
+      action: 'subscription_extended',
+      entityType: 'subscription',
+      entityId: new mongoose.Types.ObjectId(id),
+      adminId: adminId ? new mongoose.Types.ObjectId(adminId) : null,
+      adminName,
+      userId: subscription.userId,
+      details: {
+        planId: subscription.planId,
+        planName: subscription.planName,
+        extensionDays,
+        previousExpiry: currentExpiry,
+        newExpiry: newExpiry,
+        compensationType,
+        reason,
+        notes
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: new Date()
+    });
+
+    res.json({
+      status: 'success',
+      message: `Subscription extended by ${extensionDays} days`,
+      data: {
+        subscriptionId: id,
+        previousExpiry: currentExpiry,
+        newExpiry: newExpiry,
+        extensionDays,
+        extendedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Extend subscription error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error extending subscription',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
