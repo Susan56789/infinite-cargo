@@ -164,6 +164,7 @@ const Footer = () => {
           <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
             <div className="text-gray-400">
               <p>© 2025 Infinite Cargo. All rights reserved.</p>
+              Designed By <a href="https://quirkwebstudios.co.ke/" target='_blank' rel='noreferrer' className="text-primary-300 hover:underline">Quirkweb</a>
             </div>
             <div className="flex items-center space-x-4 text-sm">
               <a 

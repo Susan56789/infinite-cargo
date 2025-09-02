@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LogOut, Bell, BellRing, X, Check, Clock } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { LogOut, Bell, BellRing, X, Clock } from 'lucide-react';
 
 const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAuthenticated = false }) => {
   const [notificationCount, setNotificationCount] = useState(0);

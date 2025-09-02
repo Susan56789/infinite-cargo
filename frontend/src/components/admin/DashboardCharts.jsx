@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { useState, useEffect, useCallback } from 'react';
+import { AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { 
-  TrendingUp, DollarSign, Users, Package, Truck, Activity,
-  Download, RefreshCw, Calendar, AlertCircle, CheckCircle, BarChart3, PieChart as PieChartIcon
+  TrendingUp, Package, Activity,
+  Download, RefreshCw, AlertCircle, BarChart3, PieChart as PieChartIcon
 } from 'lucide-react';
 
-const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
 
 // Utility function for formatting currency
 const formatCurrency = (amount) => {
@@ -530,7 +529,7 @@ const LoadStatusChart = ({ apiCall, showError }) => {
           
           <div className="space-y-3">
             <h4 className="font-semibold text-gray-900">Status Breakdown</h4>
-            {data.map((item, index) => (
+            {data.map((item) => (
               <div key={item.status} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3">
                   <div 

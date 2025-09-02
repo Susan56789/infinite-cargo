@@ -704,7 +704,7 @@ const Register = () => {
                     <span className="text-sm text-slate-700 leading-relaxed">
                       I agree to the{' '}
                       <a 
-                        href="/terms" 
+                        href="/terms-of-service" 
                         
                         className="text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200"
                       >
@@ -712,7 +712,7 @@ const Register = () => {
                       </a>{' '}
                       and{' '}
                       <a 
-                        href="/privacy" 
+                        href="/privacy-policy" 
                         
                         className="text-blue-600 hover:text-blue-700 font-semibold underline hover:no-underline transition-all duration-200"
                       >

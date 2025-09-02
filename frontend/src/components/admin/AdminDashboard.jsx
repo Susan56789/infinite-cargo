@@ -928,36 +928,6 @@ const AdminDashboard = () => {
     </div>
   );
 
-  // Analytics Card Component
-  const AnalyticsCard = ({ title, icon: Icon, color, data }) => {
-    const colorClasses = {
-      blue: 'bg-blue-100 text-blue-600',
-      green: 'bg-green-100 text-green-600',
-      purple: 'bg-purple-100 text-purple-600',
-      orange: 'bg-orange-100 text-orange-600',
-    };
-
-    return (
-      <div className="bg-white p-6 border border-gray-200 rounded-xl">
-        <div className="flex items-center gap-3 mb-4">
-          <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
-            <Icon className="w-5 h-5" />
-          </div>
-          <h3 className="font-semibold">{title}</h3>
-        </div>
-        <div className="space-y-3">
-          {data.map((item, index) => (
-            <div key={index} className="flex justify-between">
-              <span className="text-sm text-gray-600">{item.label}</span>
-              <span className={`font-medium ${item.highlight ? `text-${item.highlight}-600` : ''}`}>
-                {item.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
 
   
 
