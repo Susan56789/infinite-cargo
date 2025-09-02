@@ -9,6 +9,7 @@ const Load = require('../models/load');
 const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
 const corsHandler = require('../middleware/corsHandler');
+const auth = require('../middleware/auth');
 
 // Apply CORS middleware
 router.use(corsHandler);
