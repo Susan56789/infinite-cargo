@@ -1021,13 +1021,7 @@ const AdminDashboard = () => {
     </div>
   );
 
-  //Reports Tab Component
-  <ReportsTab 
-  apiCall={apiCall}
-  showError={showError}
-  showSuccess={showSuccess}
-
-  />
+  
 
   // Settings Tab Component
   const SettingsTab = () => (
@@ -1202,7 +1196,12 @@ const AdminDashboard = () => {
         <div className="bg-white rounded-b-xl min-h-[600px]">
           {activeTab === 'overview' && <OverviewSection />}
           {activeTab === 'activity' && <ActivityTab />}
-          {activeTab === 'reports' && <ReportsTab />}
+          {activeTab === 'reports' && <ReportsTab 
+          apiCall={apiCall}
+          showError={showError}
+          showSuccess={showSuccess}
+          
+          />}
           {activeTab === 'settings' && <SettingsTab />}
 
           {/* Table Components */}
