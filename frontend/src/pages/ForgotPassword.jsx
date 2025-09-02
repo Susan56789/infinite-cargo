@@ -187,10 +187,10 @@ const ForgotPassword = () => {
     // Send the clean numeric code, not the formatted display version
     const requestBody = {
       email: formData.email.trim().toLowerCase(),
-      code: formData.verificationCode.trim() // This is already clean numeric
+      code: formData.verificationCode.trim() 
     };
 
-    console.log('Sending verification request:', requestBody); // Debug log
+    
 
     const response = await fetch(`${API_BASE_URL}/users/verify-reset-code`, {
       method: 'POST',
@@ -210,7 +210,7 @@ const ForgotPassword = () => {
       throw new Error('Invalid response from server');
     }
 
-    console.log('Verification response:', { status: response.status, result }); // Debug log
+    
 
     if (!response.ok) {
       if (response.status === 400) {
@@ -253,7 +253,6 @@ const ForgotPassword = () => {
   const handleResend = async () => {
   if (resendTimer > 0 || resendCount >= 3) return;
   
-  console.log('Resending verification code to:', formData.email); // Debug log
   
   setResendCount(prev => prev + 1);
   const success = await sendVerificationCode();

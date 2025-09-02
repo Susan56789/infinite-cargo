@@ -44,7 +44,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       
       // For other errors, retry once after a delay
       if (retryCount < 1) {
-        console.log('Retrying notification fetch after error:', error.message);
+       
         setTimeout(() => {
           if (isAuthenticated && apiCall) {
             fetchNotifications(retryCount + 1);
@@ -193,11 +193,11 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
   // Handle manual refresh with better error handling
   const handleManualRefresh = async () => {
     if (!isAuthenticated || !apiCall || !authReady) {
-      console.log('Cannot refresh notifications: auth not ready');
+      
       return;
     }
 
-    console.log('Manual refresh triggered');
+    
     await fetchNotifications();
   };
 

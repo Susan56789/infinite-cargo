@@ -44,8 +44,7 @@ const LoadFormModal = ({
     };
 
     const cargoOwnerName = getCargoOwnerName();
-    console.log('Form submitting with cargo owner name:', cargoOwnerName);
-
+    
     // Create form data with explicit cargo owner information
     const formDataWithOwner = {
       ...loadForm,
