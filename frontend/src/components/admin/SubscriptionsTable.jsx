@@ -1,10 +1,9 @@
 // components/admin/SubscriptionsTable.jsx
 import React, { useState, useEffect } from 'react';
 import { 
-  Eye, CheckCircle, XCircle, RefreshCw, Edit, Calendar, 
+  Eye, CheckCircle, XCircle, RefreshCw,Calendar, 
   DollarSign, User, Phone, Mail, Building, Clock, 
-  Plus, Minus, Ban, RotateCcw, AlertTriangle, TrendingUp,
-  Search, Filter, Download, MoreVertical, Info
+  Plus, Ban, AlertTriangle,Search, Download, MoreVertical, Info
 } from "lucide-react";
 
 const SubscriptionsTable = ({
@@ -16,10 +15,10 @@ const SubscriptionsTable = ({
   setCurrentPage,
   itemsPerPage
 }) => {
-  // State management
+  // State management - Changed default status filter to 'active'
   const [subscriptions, setSubscriptions] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('pending');
+  const [statusFilter, setStatusFilter] = useState('active'); 
   const [paymentMethodFilter, setPaymentMethodFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('createdAt');
@@ -506,8 +505,8 @@ const SubscriptionsTable = ({
               onChange={(e) => setStatusFilter(e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="pending">Pending</option>
               <option value="active">Active</option>
+              <option value="pending">Pending</option>
               <option value="expired">Expired</option>
               <option value="cancelled">Cancelled</option>
               <option value="rejected">Rejected</option>
@@ -736,191 +735,196 @@ const SubscriptionsTable = ({
         )}
       </div>
 
-      {/* Details Modal */}
+      {/* Details Modal - FIXED FOR MOBILE RESPONSIVENESS */}
       {showDetailsModal && selectedSubscription && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-90vh overflow-y-auto m-4">
-            <div className="flex items-center justify-between mb-6">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header - Fixed */}
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50 flex-shrink-0">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Info className="w-5 h-5" />
-                Subscription Details
+                <span className="hidden sm:inline">Subscription Details</span>
+                <span className="sm:hidden">Details</span>
               </h3>
               <button
                 onClick={() => setShowDetailsModal(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-200"
               >
                 <XCircle className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* User Information */}
-              <div className="space-y-4">
-                <h4 className="font-medium text-gray-900 border-b pb-2">User Information</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Name:</span>
-                    <span className="font-medium">{selectedSubscription.user?.name || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Email:</span>
-                    <span className="font-medium">{selectedSubscription.user?.email || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Phone:</span>
-                    <span className="font-medium">{selectedSubscription.user?.phone || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Company:</span>
-                    <span className="font-medium">{selectedSubscription.user?.companyName || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Member Since:</span>
-                    <span className="font-medium">{formatDate(selectedSubscription.user?.createdAt)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Subscription Information */}
-              <div className="space-y-4">
-                <h4 className="font-medium text-gray-900 border-b pb-2">Subscription Information</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Plan:</span>
-                    <span className="font-medium">{selectedSubscription.planName}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Amount:</span>
-                    <span className="font-medium">{formatCurrency(selectedSubscription.price)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Status:</span>
-                    <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeColor(selectedSubscription.status)}`}>
-                      {selectedSubscription.status}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Billing Cycle:</span>
-                    <span className="font-medium capitalize">{selectedSubscription.billingCycle}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Duration:</span>
-                    <span className="font-medium">{selectedSubscription.duration} days</span>
-                  </div>
-                  {selectedSubscription.activatedAt && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Activated:</span>
-                      <span className="font-medium">{formatDateTime(selectedSubscription.activatedAt)}</span>
-                    </div>
-                  )}
-                  {selectedSubscription.expiresAt && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Expires:</span>
-                      <span className="font-medium">{formatDateTime(selectedSubscription.expiresAt)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Payment Information */}
-              <div className="space-y-4">
-                <h4 className="font-medium text-gray-900 border-b pb-2">Payment Information</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Payment Method:</span>
-                    <span className="font-medium capitalize">{selectedSubscription.paymentMethod?.replace('_', ' ')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Payment Status:</span>
-                    <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeColor(selectedSubscription.paymentStatus)}`}>
-                      {selectedSubscription.paymentStatus}
-                    </span>
-                  </div>
-                  {selectedSubscription.paymentDetails?.mpesaCode && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">M-Pesa Code:</span>
-                      <span className="font-mono text-sm">{selectedSubscription.paymentDetails.mpesaCode}</span>
-                    </div>
-                  )}
-                  {selectedSubscription.paymentDetails?.userInfo?.userPhone && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Payment Phone:</span>
-                      <span className="font-medium">{selectedSubscription.paymentDetails.userInfo.userPhone}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Usage Metrics */}
-              {selectedSubscription.metrics && (
+            {/* Modal Content - Scrollable */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                {/* User Information */}
                 <div className="space-y-4">
-                  <h4 className="font-medium text-gray-900 border-b pb-2">Usage Metrics</h4>
+                  <h4 className="font-medium text-gray-900 border-b pb-2">User Information</h4>
                   <div className="space-y-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Days Active:</span>
-                      <span className="font-medium">{selectedSubscription.metrics.daysActive || 0}</span>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Name:</span>
+                      <span className="font-medium text-sm sm:text-base">{selectedSubscription.user?.name || 'N/A'}</span>
                     </div>
-                    {selectedSubscription.metrics.daysRemaining !== null && (
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Days Remaining:</span>
-                        <span className="font-medium">{selectedSubscription.metrics.daysRemaining}</span>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Email:</span>
+                      <span className="font-medium text-sm sm:text-base break-all">{selectedSubscription.user?.email || 'N/A'}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Phone:</span>
+                      <span className="font-medium text-sm sm:text-base">{selectedSubscription.user?.phone || 'N/A'}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Company:</span>
+                      <span className="font-medium text-sm sm:text-base">{selectedSubscription.user?.companyName || 'N/A'}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Member Since:</span>
+                      <span className="font-medium text-sm sm:text-base">{formatDate(selectedSubscription.user?.createdAt)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Subscription Information */}
+                <div className="space-y-4">
+                  <h4 className="font-medium text-gray-900 border-b pb-2">Subscription Information</h4>
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Plan:</span>
+                      <span className="font-medium text-sm sm:text-base">{selectedSubscription.planName}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Amount:</span>
+                      <span className="font-medium text-sm sm:text-base">{formatCurrency(selectedSubscription.price)}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Status:</span>
+                      <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeColor(selectedSubscription.status)}`}>
+                        {selectedSubscription.status}
+                      </span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Billing Cycle:</span>
+                      <span className="font-medium text-sm sm:text-base capitalize">{selectedSubscription.billingCycle}</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Duration:</span>
+                      <span className="font-medium text-sm sm:text-base">{selectedSubscription.duration} days</span>
+                    </div>
+                    {selectedSubscription.activatedAt && (
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Activated:</span>
+                        <span className="font-medium text-sm sm:text-base">{formatDateTime(selectedSubscription.activatedAt)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Loads This Month:</span>
-                      <span className="font-medium">{selectedSubscription.metrics.monthlyUsage || 0}</span>
+                    {selectedSubscription.expiresAt && (
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Expires:</span>
+                        <span className="font-medium text-sm sm:text-base">{formatDateTime(selectedSubscription.expiresAt)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Payment Information */}
+                <div className="space-y-4">
+                  <h4 className="font-medium text-gray-900 border-b pb-2">Payment Information</h4>
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Payment Method:</span>
+                      <span className="font-medium text-sm sm:text-base capitalize">{selectedSubscription.paymentMethod?.replace('_', ' ')}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Total Loads:</span>
-                      <span className="font-medium">{selectedSubscription.metrics.totalLoads || 0}</span>
+                    <div className="flex flex-col sm:flex-row sm:justify-between">
+                      <span className="text-gray-600 text-sm sm:text-base">Payment Status:</span>
+                      <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeColor(selectedSubscription.paymentStatus)}`}>
+                        {selectedSubscription.paymentStatus}
+                      </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Utilization Rate:</span>
-                      <span className="font-medium">{selectedSubscription.metrics.utilizationRate || 0}%</span>
+                    {selectedSubscription.paymentDetails?.mpesaCode && (
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">M-Pesa Code:</span>
+                        <span className="font-mono text-sm break-all">{selectedSubscription.paymentDetails.mpesaCode}</span>
+                      </div>
+                    )}
+                    {selectedSubscription.paymentDetails?.userInfo?.userPhone && (
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Payment Phone:</span>
+                        <span className="font-medium text-sm sm:text-base">{selectedSubscription.paymentDetails.userInfo.userPhone}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Usage Metrics */}
+                {selectedSubscription.metrics && (
+                  <div className="space-y-4">
+                    <h4 className="font-medium text-gray-900 border-b pb-2">Usage Metrics</h4>
+                    <div className="space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Days Active:</span>
+                        <span className="font-medium text-sm sm:text-base">{selectedSubscription.metrics.daysActive || 0}</span>
+                      </div>
+                      {selectedSubscription.metrics.daysRemaining !== null && (
+                        <div className="flex flex-col sm:flex-row sm:justify-between">
+                          <span className="text-gray-600 text-sm sm:text-base">Days Remaining:</span>
+                          <span className="font-medium text-sm sm:text-base">{selectedSubscription.metrics.daysRemaining}</span>
+                        </div>
+                      )}
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Loads This Month:</span>
+                        <span className="font-medium text-sm sm:text-base">{selectedSubscription.metrics.monthlyUsage || 0}</span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Total Loads:</span>
+                        <span className="font-medium text-sm sm:text-base">{selectedSubscription.metrics.totalLoads || 0}</span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row sm:justify-between">
+                        <span className="text-gray-600 text-sm sm:text-base">Utilization Rate:</span>
+                        <span className="font-medium text-sm sm:text-base">{selectedSubscription.metrics.utilizationRate || 0}%</span>
+                      </div>
                     </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Plan Features */}
+              {selectedSubscription.features && (
+                <div className="mt-6">
+                  <h4 className="font-medium text-gray-900 border-b pb-2 mb-3">Plan Features</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {selectedSubscription.features.map((feature, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                        <span className="text-sm text-gray-700">{feature}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recent Activity */}
+              {selectedSubscription.recentActivity && selectedSubscription.recentActivity.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="font-medium text-gray-900 border-b pb-2 mb-3">Recent Loads</h4>
+                  <div className="space-y-2">
+                    {selectedSubscription.recentActivity.slice(0, 5).map((load, index) => (
+                      <div key={index} className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-2 px-3 bg-gray-50 rounded gap-2">
+                        <span className="text-sm">{load.title || load.description || `Load #${load.loadId}`}</span>
+                        <span className="text-xs text-gray-500">{formatDate(load.createdAt)}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
             </div>
-
-            {/* Plan Features */}
-            {selectedSubscription.features && (
-              <div className="mt-6">
-                <h4 className="font-medium text-gray-900 border-b pb-2 mb-3">Plan Features</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {selectedSubscription.features.map((feature, index) => (
-                    <div key={index} className="flex items-center gap-2">
-                      <CheckCircle className="w-4 h-4 text-green-500" />
-                      <span className="text-sm text-gray-700">{feature}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Recent Activity */}
-            {selectedSubscription.recentActivity && selectedSubscription.recentActivity.length > 0 && (
-              <div className="mt-6">
-                <h4 className="font-medium text-gray-900 border-b pb-2 mb-3">Recent Loads</h4>
-                <div className="space-y-2">
-                  {selectedSubscription.recentActivity.slice(0, 5).map((load, index) => (
-                    <div key={index} className="flex justify-between items-center py-2 px-3 bg-gray-50 rounded">
-                      <span className="text-sm">{load.title || load.description || `Load #${load.loadId}`}</span>
-                      <span className="text-xs text-gray-500">{formatDate(load.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {/* Adjust Duration Modal */}
+      {/* Adjust Duration Modal - Mobile Responsive */}
       {showAdjustModal && selectedSubscription && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md m-4">
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50 flex-shrink-0">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Calendar className="w-5 h-5" />
                 Adjust Duration
@@ -933,75 +937,77 @@ const SubscriptionsTable = ({
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Days to Add/Remove
-                </label>
-                <input
-                  type="number"
-                  value={adjustDays}
-                  onChange={(e) => setAdjustDays(parseInt(e.target.value) || 0)}
-                  placeholder="Enter positive or negative number"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Positive numbers add days, negative numbers remove days
-                </p>
-              </div>
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Days to Add/Remove
+                  </label>
+                  <input
+                    type="number"
+                    value={adjustDays}
+                    onChange={(e) => setAdjustDays(parseInt(e.target.value) || 0)}
+                    placeholder="Enter positive or negative number"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Positive numbers add days, negative numbers remove days
+                  </p>
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Reason for Adjustment *
-                </label>
-                <input
-                  type="text"
-                  value={adjustReason}
-                  onChange={(e) => setAdjustReason(e.target.value)}
-                  placeholder="Enter reason for adjustment"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Reason for Adjustment *
+                  </label>
+                  <input
+                    type="text"
+                    value={adjustReason}
+                    onChange={(e) => setAdjustReason(e.target.value)}
+                    placeholder="Enter reason for adjustment"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Additional Notes
-                </label>
-                <textarea
-                  value={adjustNotes}
-                  onChange={(e) => setAdjustNotes(e.target.value)}
-                  placeholder="Optional additional notes"
-                  rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Additional Notes
+                  </label>
+                  <textarea
+                    value={adjustNotes}
+                    onChange={(e) => setAdjustNotes(e.target.value)}
+                    placeholder="Optional additional notes"
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-              <div className="flex gap-3 pt-4">
-                <button
-                  onClick={() => setShowAdjustModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAdjustDuration}
-                  disabled={loading || !adjustReason.trim()}
-                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {loading ? 'Adjusting...' : 'Adjust Duration'}
-                </button>
+                <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                  <button
+                    onClick={() => setShowAdjustModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleAdjustDuration}
+                    disabled={loading || !adjustReason.trim()}
+                    className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {loading ? 'Adjusting...' : 'Adjust Duration'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Cancel Subscription Modal */}
+      {/* Cancel Subscription Modal - Mobile Responsive */}
       {showCancelModal && selectedSubscription && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md m-4">
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50 flex-shrink-0">
               <h3 className="text-lg font-semibold flex items-center gap-2 text-red-600">
                 <Ban className="w-5 h-5" />
                 Cancel Subscription
@@ -1014,101 +1020,103 @@ const SubscriptionsTable = ({
               </button>
             </div>
 
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600" />
-                <span className="text-sm text-red-800 font-medium">Warning</span>
-              </div>
-              <p className="text-sm text-red-700 mt-1">
-                This will immediately cancel the subscription and downgrade the user to the Basic plan.
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Cancellation Category *
-                </label>
-                <select
-                  value={cancelCategory}
-                  onChange={(e) => setCancelCategory(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="user_request">User Request</option>
-                  <option value="payment_failed">Payment Failed</option>
-                  <option value="policy_violation">Policy Violation</option>
-                  <option value="technical_issue">Technical Issue</option>
-                  <option value="other">Other</option>
-                </select>
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600" />
+                  <span className="text-sm text-red-800 font-medium">Warning</span>
+                </div>
+                <p className="text-sm text-red-700 mt-1">
+                  This will immediately cancel the subscription and downgrade the user to the Basic plan.
+                </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Cancellation Reason *
-                </label>
-                <input
-                  type="text"
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Enter reason for cancellation"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Cancellation Category *
+                  </label>
+                  <select
+                    value={cancelCategory}
+                    onChange={(e) => setCancelCategory(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="user_request">User Request</option>
+                    <option value="payment_failed">Payment Failed</option>
+                    <option value="policy_violation">Policy Violation</option>
+                    <option value="technical_issue">Technical Issue</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Refund Amount (KES)
-                </label>
-                <input
-                  type="number"
-                  value={refundAmount}
-                  onChange={(e) => setRefundAmount(parseFloat(e.target.value) || 0)}
-                  placeholder="0"
-                  min="0"
-                  step="0.01"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Cancellation Reason *
+                  </label>
+                  <input
+                    type="text"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    placeholder="Enter reason for cancellation"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Additional Notes
-                </label>
-                <textarea
-                  value={cancelNotes}
-                  onChange={(e) => setCancelNotes(e.target.value)}
-                  placeholder="Optional additional notes"
-                  rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Refund Amount (KES)
+                  </label>
+                  <input
+                    type="number"
+                    value={refundAmount}
+                    onChange={(e) => setRefundAmount(parseFloat(e.target.value) || 0)}
+                    placeholder="0"
+                    min="0"
+                    step="0.01"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-              <div className="flex gap-3 pt-4">
-                <button
-                  onClick={() => setShowCancelModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCancel}
-                  disabled={loading || !cancelReason.trim()}
-                  className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50"
-                >
-                  {loading ? 'Cancelling...' : 'Cancel Subscription'}
-                </button>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Additional Notes
+                  </label>
+                  <textarea
+                    value={cancelNotes}
+                    onChange={(e) => setCancelNotes(e.target.value)}
+                    placeholder="Optional additional notes"
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                  <button
+                    onClick={() => setShowCancelModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={loading || !cancelReason.trim()}
+                    className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {loading ? 'Cancelling...' : 'Cancel Subscription'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Extend Subscription Modal */}
+      {/* Extend Subscription Modal - Mobile Responsive */}
       {showExtendModal && selectedSubscription && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md m-4">
-            <div className="flex items-center justify-between mb-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50 flex-shrink-0">
               <h3 className="text-lg font-semibold flex items-center gap-2 text-green-600">
                 <Plus className="w-5 h-5" />
                 Extend Subscription
@@ -1121,80 +1129,82 @@ const SubscriptionsTable = ({
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Extension Days *
-                </label>
-                <input
-                  type="number"
-                  value={extendDays}
-                  onChange={(e) => setExtendDays(parseInt(e.target.value) || 0)}
-                  placeholder="Enter number of days to extend"
-                  min="1"
-                  max="365"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Extension Days *
+                  </label>
+                  <input
+                    type="number"
+                    value={extendDays}
+                    onChange={(e) => setExtendDays(parseInt(e.target.value) || 0)}
+                    placeholder="Enter number of days to extend"
+                    min="1"
+                    max="365"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Extension Type *
-                </label>
-                <select
-                  value={extendType}
-                  onChange={(e) => setExtendType(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="goodwill">Goodwill Gesture</option>
-                  <option value="service_issue">Service Issue Compensation</option>
-                  <option value="promotional">Promotional Extension</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Extension Type *
+                  </label>
+                  <select
+                    value={extendType}
+                    onChange={(e) => setExtendType(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="goodwill">Goodwill Gesture</option>
+                    <option value="service_issue">Service Issue Compensation</option>
+                    <option value="promotional">Promotional Extension</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Extension Reason *
-                </label>
-                <input
-                  type="text"
-                  value={extendReason}
-                  onChange={(e) => setExtendReason(e.target.value)}
-                  placeholder="Enter reason for extension"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Extension Reason *
+                  </label>
+                  <input
+                    type="text"
+                    value={extendReason}
+                    onChange={(e) => setExtendReason(e.target.value)}
+                    placeholder="Enter reason for extension"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Additional Notes
-                </label>
-                <textarea
-                  value={extendNotes}
-                  onChange={(e) => setExtendNotes(e.target.value)}
-                  placeholder="Optional additional notes"
-                  rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Additional Notes
+                  </label>
+                  <textarea
+                    value={extendNotes}
+                    onChange={(e) => setExtendNotes(e.target.value)}
+                    placeholder="Optional additional notes"
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-              <div className="flex gap-3 pt-4">
-                <button
-                  onClick={() => setShowExtendModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleExtend}
-                  disabled={loading || !extendReason.trim() || extendDays <= 0}
-                  className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
-                >
-                  {loading ? 'Extending...' : 'Extend Subscription'}
-                </button>
+                <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                  <button
+                    onClick={() => setShowExtendModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleExtend}
+                    disabled={loading || !extendReason.trim() || extendDays <= 0}
+                    className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {loading ? 'Extending...' : 'Extend Subscription'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
