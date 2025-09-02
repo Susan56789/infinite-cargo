@@ -8,10 +8,13 @@ import SubscriptionsTable from './SubscriptionsTable';
 import AdminNotifications from './AdminNotifications';
 import AdminHeader from './AdminHeader';
 import AddAdminModal from './AddAdminModal';
+import ReportsTab from './ReportsTab';
+
+
 import { 
   Users, Package, Truck, DollarSign, RefreshCw, TrendingUp,
   Clock, CheckCircle, AlertCircle, Activity, MapPin, Shield,
-  Settings, Bell, Search, Download, BarChart3, PieChart, LineChart
+  Settings, Bell, Search, Download, BarChart3
 } from 'lucide-react';
 import { authManager, isAuthenticated, getAuthHeader } from '../../utils/auth';
 
@@ -956,109 +959,7 @@ const AdminDashboard = () => {
     );
   };
 
-  // Chart Placeholder Component
-  const ChartPlaceholder = ({ title, icon: Icon, description }) => (
-    <div className="bg-white p-6 border border-gray-200 rounded-xl">
-      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <Icon className="w-5 h-5" />
-        {title}
-      </h3>
-      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
-        <div className="text-center text-gray-500">
-          <BarChart3 className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-          <p>Chart integration coming soon</p>
-          <p className="text-sm">{description}</p>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Reports/Analytics Tab Component
-  const ReportsTab = () => (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <BarChart3 className="w-6 h-6" />
-          Analytics & Reports
-        </h2>
-        <div className="flex items-center gap-3">
-          <select className="border border-gray-300 rounded-lg px-3 py-2">
-            <option>Last 30 Days</option>
-            <option>Last 3 Months</option>
-            <option>Last Year</option>
-          </select>
-          <button
-            onClick={() => exportData('analytics')}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-          >
-            <Download className="w-4 h-4" />
-            Export Report
-          </button>
-        </div>
-      </div>
-
-      {/* Analytics Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <AnalyticsCard
-          title="User Analytics"
-          icon={Users}
-          color="blue"
-          data={[
-            { label: 'Active Users', value: formatNumber(dashboardStats.activeUsers || 0) },
-            { label: 'New This Month', value: `+${dashboardStats.newUsersThisMonth || 0}`, highlight: 'green' },
-            { label: 'Growth Rate', value: `${dashboardStats.userGrowthRate || '0.0'}%` }
-          ]}
-        />
-        
-        <AnalyticsCard
-          title="Load Analytics"
-          icon={Package}
-          color="green"
-          data={[
-            { label: 'Total Loads', value: formatNumber(dashboardStats.totalLoads || 0) },
-            { label: 'Active', value: formatNumber(dashboardStats.activeLoads || 0), highlight: 'blue' },
-            { label: 'Completion Rate', value: `${dashboardStats.loadCompletionRate || '0.0'}%` }
-          ]}
-        />
-        
-        <AnalyticsCard
-          title="Revenue Analytics"
-          icon={DollarSign}
-          color="purple"
-          data={[
-            { label: 'Monthly Revenue', value: formatCurrency(dashboardStats.monthlyRevenue || 0) },
-            { label: 'New Subscriptions', value: `+${dashboardStats.newSubscriptionsThisMonth || 0}`, highlight: 'green' },
-            { label: 'Subscription Rate', value: `${dashboardStats.subscriptionRate || '0.0'}%` }
-          ]}
-        />
-        
-        <AnalyticsCard
-          title="Pending Items"
-          icon={Clock}
-          color="orange"
-          data={[
-            { label: 'Pending Subscriptions', value: formatNumber(dashboardStats.pendingSubscriptions || 0), highlight: 'orange' },
-            { label: 'Total Subscriptions', value: formatNumber(dashboardStats.totalSubscriptions || 0) },
-            { label: 'Active Subscriptions', value: formatNumber(dashboardStats.activeSubscriptions || 0) }
-          ]}
-        />
-      </div>
-
-      {/* Chart Placeholders */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChartPlaceholder
-          title="User Growth Trend"
-          icon={LineChart}
-          description="User registration trends over time"
-        />
-        <ChartPlaceholder
-          title="Revenue Distribution"
-          icon={PieChart}
-          description="Revenue breakdown by subscription type"
-        />
-      </div>
-    </div>
-  );
+  
 
   // Settings Card Component
   const SettingsCard = ({ title, icon: Icon, fields = [], toggles = [], actions = [] }) => (
@@ -1119,6 +1020,14 @@ const AdminDashboard = () => {
       )}
     </div>
   );
+
+  //Reports Tab Component
+  <ReportsTab 
+  apiCall={apiCall}
+  showError={showError}
+  showSuccess={showSuccess}
+
+  />
 
   // Settings Tab Component
   const SettingsTab = () => (

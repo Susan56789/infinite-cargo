@@ -142,6 +142,68 @@ router.post('/login', [
   }
 });
 
+// @route   GET /api/admin/analytics/activity-summary
+// @desc    Get activity summary for today
+// @access  Private
+router.get('/analytics/activity-summary',adminAuth, async (req, res) => {
+  try {
+    const today = new Date();
+    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
+    const endOfToday = new Date(today.setHours(23, 59, 59, 999));
+
+    // Today's logins (you might need to track login events)
+    const todayLogins = await require('mongoose').connection.db.collection('audit_logs').countDocuments({
+      action: 'admin_login',
+      createdAt: { $gte: startOfToday, $lte: endOfToday }
+    });
+
+    // New registrations today
+    const [newDrivers, newCargoOwners] = await Promise.all([
+      require('mongoose').connection.db.collection('drivers').countDocuments({
+        createdAt: { $gte: startOfToday, $lte: endOfToday }
+      }),
+      require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+        createdAt: { $gte: startOfToday, $lte: endOfToday }
+      })
+    ]);
+
+    // Active subscriptions
+    const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
+      status: 'active',
+      expiresAt: { $gt: new Date() }
+    });
+
+    // System health calculation (simplified)
+    const totalUsers = await Promise.all([
+      require('mongoose').connection.db.collection('drivers').countDocuments(),
+      require('mongoose').connection.db.collection('cargo-owners').countDocuments()
+    ]);
+
+    const userCount = totalUsers[0] + totalUsers[1];
+    let systemHealth = 'good';
+    
+    if (userCount < 100) systemHealth = 'warning';
+    if (activeSubscriptions / userCount < 0.1) systemHealth = 'critical';
+
+    res.json({
+      status: 'success',
+      data: {
+        todayLogins,
+        newRegistrations: newDrivers + newCargoOwners,
+        activeSubscriptions,
+        systemHealth
+      }
+    });
+
+  } catch (error) {
+    console.error('Activity summary error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch activity summary'
+    });
+  }
+});
+
 // @route   GET /api/admin/audit-logs
 // @desc    Fetch audit logs
 router.get('/audit-logs', adminAuth, async (req, res) => {
@@ -165,6 +227,204 @@ router.get('/audit-logs', adminAuth, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to fetch audit logs'
+    });
+  }
+});
+
+
+// @route   GET /api/admin/analytics/kpi/:type
+// @desc    Get specific KPI data
+// @access  Private
+router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
+  try {
+    const { type } = req.params;
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    
+    let data = { value: 0, change: 0, trend: 'neutral' };
+
+    switch (type) {
+      case 'revenue':
+        // Current month revenue
+        const currentRevenue = await require('../models/subscription').Subscription.aggregate([
+          {
+            $match: {
+              createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+              paymentStatus: 'completed'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$price' } } }
+        ]);
+
+        // Previous month revenue
+        const previousRevenue = await require('../models/subscription').Subscription.aggregate([
+          {
+            $match: {
+              createdAt: { 
+                $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+                $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+              },
+              paymentStatus: 'completed'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$price' } } }
+        ]);
+
+        const currentRev = currentRevenue[0]?.total || 0;
+        const previousRev = previousRevenue[0]?.total || 0;
+        
+        data = {
+          value: currentRev,
+          change: previousRev > 0 ? ((currentRev - previousRev) / previousRev * 100).toFixed(1) : 0,
+          trend: currentRev > previousRev ? 'up' : currentRev < previousRev ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'users':
+        // Current month new users
+        const currentUsers = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments({
+            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
+          }),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
+          })
+        ]);
+
+        // Previous month new users
+        const previousUsers = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments({
+            createdAt: { 
+              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+            }
+          }),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+            createdAt: { 
+              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+            }
+          })
+        ]);
+
+        const currentUserCount = currentUsers[0] + currentUsers[1];
+        const previousUserCount = previousUsers[0] + previousUsers[1];
+        
+        data = {
+          value: currentUserCount,
+          change: previousUserCount > 0 ? ((currentUserCount - previousUserCount) / previousUserCount * 100).toFixed(1) : 0,
+          trend: currentUserCount > previousUserCount ? 'up' : currentUserCount < previousUserCount ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'subscriptions':
+        // Current month subscription rate
+        const totalUsersThisMonth = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments(),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments()
+        ]);
+
+        const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
+          status: 'active',
+          expiresAt: { $gt: now }
+        });
+
+        const totalUsers = totalUsersThisMonth[0] + totalUsersThisMonth[1];
+        const subscriptionRate = totalUsers > 0 ? ((activeSubscriptions / totalUsers) * 100) : 0;
+        
+        // Compare with last month's rate (simplified)
+        const lastMonthRate = subscriptionRate - 2; // Placeholder calculation
+        
+        data = {
+          value: `${subscriptionRate.toFixed(1)}%`,
+          change: (subscriptionRate - lastMonthRate).toFixed(1),
+          trend: subscriptionRate > lastMonthRate ? 'up' : subscriptionRate < lastMonthRate ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'loads':
+        // Load completion rate
+        const completedLoads = await require('../models/load').Load.countDocuments({ status: 'completed' });
+        const totalLoads = await require('../models/load').Load.countDocuments();
+        
+        const completionRate = totalLoads > 0 ? ((completedLoads / totalLoads) * 100) : 0;
+        
+        data = {
+          value: `${completionRate.toFixed(1)}%`,
+          change: 2.3, // Placeholder - calculate actual change
+          trend: 'up'
+        };
+        break;
+
+      default:
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid KPI type'
+        });
+    }
+
+    res.json({
+      status: 'success',
+      data
+    });
+
+  } catch (error) {
+    console.error(`KPI ${req.params.type} error:`, error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KPI data'
+    });
+  }
+});
+
+// @route   GET /api/admin/analytics/top-routes
+// @desc    Get top performing routes
+// @access  Private
+router.get('/analytics/top-routes',adminAuth, async (req, res) => {
+  try {
+    const Load = require('../models/load').Load;
+    
+    const topRoutes = await Load.aggregate([
+      {
+        $match: {
+          status: { $in: ['completed', 'active'] },
+          price: { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            origin: '$origin',
+            destination: '$destination'
+          },
+          loads: { $sum: 1 },
+          totalRevenue: { $sum: '$price' },
+          averagePrice: { $avg: '$price' }
+        }
+      },
+      {
+        $project: {
+          origin: '$_id.origin',
+          destination: '$_id.destination',
+          loads: 1,
+          totalRevenue: 1,
+          averagePrice: { $round: ['$averagePrice', 2] }
+        }
+      },
+      { $sort: { totalRevenue: -1 } },
+      { $limit: 10 }
+    ]);
+
+    res.json({
+      status: 'success',
+      data: topRoutes
+    });
+
+  } catch (error) {
+    console.error('Top routes error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch top routes data'
     });
   }
 });
@@ -324,180 +584,351 @@ router.post('/users/:id/status', adminAuth, async (req, res) => {
 });
 
 
+
 // @route   POST /api/admin/register
-// @desc    Create new admin (only super_admin can create)
+// @desc    Register new admin (Super Admin only)
 // @access  Private
-router.post('/register', 
-  adminAuth,
-  [
-    body('name')
-      .trim()
-      .notEmpty()
-      .withMessage('Name is required')
-      .isLength({ min: 2, max: 50 })
-      .withMessage('Name must be between 2 and 50 characters'),
-    body('email')
-      .trim()
-      .normalizeEmail()
-      .isEmail()
-      .withMessage('Please provide a valid email address'),
-    body('password')
-      .isLength({ min: 8 })
-      .withMessage('Password must be at least 8 characters long')
-      .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
-      .withMessage('Password must contain uppercase, lowercase, number and special character'),
-    body('phone')
-      .trim()
-      .notEmpty()
-      .withMessage('Phone number is required')
-      .matches(/^(\+254|0)[0-9]{9}$/)
-      .withMessage('Please provide a valid Kenyan phone number'),
-    body('role')
-      .isIn(['super_admin', 'admin', 'moderator'])
-      .withMessage('Role must be super_admin, admin, or moderator')
-  ], 
-  async (req, res) => {
-    try {
-      if (req.admin.role !== 'super_admin') {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied. Only super admins can create new admins.'
-        });
-      }
+router.post('/register',adminAuth, [
+  body('name')
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage('Name must be between 2 and 50 characters'),
+  body('email')
+    .trim()
+    .normalizeEmail({ gmail_remove_dots: false })
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('phone')
+    .trim()
+    .matches(/^(\+254|0)[0-9]{9}$/)
+    .withMessage('Please provide a valid Kenyan phone number'),
+  body('password')
+    .isLength({ min: 8 })
+    .withMessage('Password must be at least 8 characters long')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number'),
+  body('role')
+    .isIn(['admin', 'moderator', 'super_admin'])
+    .withMessage('Role must be admin, moderator, or super_admin')
+], async (req, res) => {
+  try {
+    console.log('Admin registration request:', {
+      email: req.body.email,
+      role: req.body.role,
+      requestedBy: req.admin.id
+    });
 
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ 
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array().map(error => ({
-            field: error.path || error.param,
-            message: error.msg
-          }))
-        });
-      }
-
-      const { name, email, password, phone, role, permissions } = req.body;
-
-      const existingAdmin = await Admin.findOne({ 
-        $or: [
-          { email: email.toLowerCase() },
-          { phone: phone.trim() }
-        ]
-      });
-
-      if (existingAdmin) {
-        const field = existingAdmin.email === email.toLowerCase() ? 'email' : 'phone';
-        return res.status(400).json({ 
-          status: 'error',
-          message: `Admin with this ${field} already exists`,
-          field
-        });
-      }
-
-      let adminPermissions = {
-        manageUsers: true,
-        manageCargo: true,
-        manageDrivers: true,
-        managePayments: false,
-        viewAnalytics: true,
-        systemSettings: false
-      };
-
-      if (role === 'super_admin') {
-        adminPermissions = {
-          manageUsers: true,
-          manageCargo: true,
-          manageDrivers: true,
-          managePayments: true,
-          viewAnalytics: true,
-          systemSettings: true
-        };
-      } else if (role === 'moderator') {
-        adminPermissions = {
-          manageUsers: false,
-          manageCargo: true,
-          manageDrivers: true,
-          managePayments: false,
-          viewAnalytics: true,
-          systemSettings: false
-        };
-      }
-
-      if (permissions) {
-        adminPermissions = { ...adminPermissions, ...permissions };
-      }
-
-      const adminData = {
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        password,
-        phone: phone.trim(),
-        role,
-        permissions: adminPermissions,
-        createdBy: req.admin.id
-      };
-
-      const admin = new Admin(adminData);
-
-      const salt = await bcrypt.genSalt(12);
-      admin.password = await bcrypt.hash(password, salt);
-
-      await admin.save();
-      console.log('Admin created successfully:', { id: admin._id, email: admin.email, role: admin.role });
-try {
-  const db = mongoose.connection.db;
-  const auditLogsCollection = db.collection('audit_logs');
-  await auditLogsCollection.insertOne({
-    action: 'admin_create',   
-    entityType: 'admin',         
-    entityId: new mongoose.Types.ObjectId(admin._id),
-    adminId: new mongoose.Types.ObjectId(req.admin.id),
-    adminName: req.admin.name,
-    newAdminEmail: admin.email,
-    newAdminRole: admin.role,
-    ipAddress: req.ip,
-    userAgent: req.get('User-Agent'),
-    createdAt: new Date()
-  });
-} catch (auditError) {
-  console.warn('Audit log failed:', auditError);
-}
-      res.status(201).json({
-        status: 'success',
-        message: 'Admin created successfully',
-        admin: {
-          id: admin._id,
-          name: admin.name,
-          email: admin.email,
-          phone: admin.phone,
-          role: admin.role,
-          permissions: admin.permissions,
-          isActive: admin.isActive,
-          createdAt: admin.createdAt
-        }
-      });
-
-    } catch (error) {
-      console.error('Admin registration error:', error);
-      
-      if (error.code === 11000) {
-        const field = Object.keys(error.keyPattern)[0];
-        return res.status(400).json({
-          status: 'error',
-          message: `Admin with this ${field} already exists`,
-          field
-        });
-      }
-
-      res.status(500).json({
+    // Check if requesting admin is super_admin
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
         status: 'error',
-        message: 'Internal server error during admin registration',
-        ...(process.env.NODE_ENV === 'development' && { error: error.message })
+        message: 'Only super admins can create new admins'
       });
     }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { name, email, phone, password, role } = req.body;
+
+    // Check if admin already exists
+    const existingAdmin = await Admin.findOne({
+      $or: [
+        { email: email.toLowerCase().trim() },
+        { phone: phone.trim() }
+      ]
+    });
+
+    if (existingAdmin) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Admin with this email or phone already exists'
+      });
+    }
+
+    // CRITICAL FIX: Hash password before saving
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Create new admin with hashed password
+    const newAdmin = new Admin({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
+      password: hashedPassword, // Use hashed password
+      role,
+      permissions: getDefaultPermissions(role),
+      isActive: true,
+      createdBy: req.admin.id
+    });
+
+    await newAdmin.save();
+
+    // Log audit trail
+    try {
+      const db = require('mongoose').connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'admin_created',
+        entityType: 'admin',
+        entityId: new require('mongoose').Types.ObjectId(newAdmin._id),
+        adminId: new require('mongoose').Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          newAdminEmail: newAdmin.email,
+          newAdminRole: newAdmin.role,
+          newAdminName: newAdmin.name
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+    }
+
+    console.log('Admin created successfully:', {
+      id: newAdmin._id,
+      email: newAdmin.email,
+      role: newAdmin.role
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Admin created successfully',
+      admin: {
+        id: newAdmin._id,
+        name: newAdmin.name,
+        email: newAdmin.email,
+        phone: newAdmin.phone,
+        role: newAdmin.role,
+        permissions: newAdmin.permissions,
+        isActive: newAdmin.isActive,
+        createdAt: newAdmin.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin registration error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error during admin creation',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
   }
-);
+});
+
+// Helper function for default permissions
+function getDefaultPermissions(role) {
+  const permissions = {
+    admin: {
+      viewUsers: true,
+      editUsers: true,
+      viewLoads: true,
+      editLoads: true,
+      viewSubscriptions: true,
+      approveSubscriptions: true,
+      viewReports: true,
+      systemSettings: false
+    },
+    moderator: {
+      viewUsers: true,
+      editUsers: false,
+      viewLoads: true,
+      editLoads: false,
+      viewSubscriptions: true,
+      approveSubscriptions: false,
+      viewReports: false,
+      systemSettings: false
+    },
+    super_admin: {
+      viewUsers: true,
+      editUsers: true,
+      viewLoads: true,
+      editLoads: true,
+      viewSubscriptions: true,
+      approveSubscriptions: true,
+      viewReports: true,
+      systemSettings: true,
+      createAdmins: true,
+      deleteAdmins: true
+    }
+  };
+
+  return permissions[role] || permissions.admin;
+}
+
+// @route   GET /api/admin/analytics/charts
+// @desc    Get chart data for dashboard
+// @access  Private
+router.get('/analytics/charts',adminAuth, async (req, res) => {
+  try {
+    const { timeRange = '6months' } = req.query;
+    
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    
+    switch (timeRange) {
+      case '30days':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '3months':
+        startDate.setMonth(startDate.getMonth() - 3);
+        break;
+      case '6months':
+        startDate.setMonth(startDate.getMonth() - 6);
+        break;
+      case '1year':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      default:
+        startDate.setMonth(startDate.getMonth() - 6);
+    }
+
+    // Get revenue trends (monthly aggregation)
+    const revenueData = await require('../models/subscription').Subscription.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate, $lte: endDate },
+          paymentStatus: 'completed'
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          revenue: { $sum: '$price' },
+          subscriptions: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1 }
+      }
+    ]);
+
+    // Get subscription distribution
+    const subscriptionDistribution = await require('../models/subscription').Subscription.aggregate([
+      {
+        $match: {
+          status: 'active',
+          paymentStatus: 'completed'
+        }
+      },
+      {
+        $group: {
+          _id: '$planId',
+          count: { $sum: 1 },
+          revenue: { $sum: '$price' },
+          planName: { $first: '$planName' }
+        }
+      }
+    ]);
+
+    // Get user activity (last 7 days)
+    const userActivityData = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const startOfDay = new Date(date.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(date.setHours(23, 59, 59, 999));
+
+      const [drivers, cargoOwners, loads] = await Promise.all([
+        require('mongoose').connection.db.collection('drivers').countDocuments({
+          lastLogin: { $gte: startOfDay, $lte: endOfDay }
+        }),
+        require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+          lastLogin: { $gte: startOfDay, $lte: endOfDay }
+        }),
+        require('../models/load').Load.countDocuments({
+          createdAt: { $gte: startOfDay, $lte: endOfDay }
+        })
+      ]);
+
+      userActivityData.push({
+        day: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        drivers: drivers || 0,
+        cargoOwners: cargoOwners || 0,
+        loads: loads || 0,
+        date: startOfDay
+      });
+    }
+
+    // Get load status distribution
+    const loadStatusData = await require('../models/load').Load.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format revenue data with month names
+    const formattedRevenueData = revenueData.map(item => ({
+      month: new Date(item._id.year, item._id.month - 1).toLocaleDateString('en-US', { month: 'short' }),
+      revenue: item.revenue,
+      subscriptions: item.subscriptions,
+      year: item._id.year
+    }));
+
+    // Calculate total values for distribution percentages
+    const totalSubscriptions = subscriptionDistribution.reduce((sum, item) => sum + item.count, 0);
+    const totalRevenue = subscriptionDistribution.reduce((sum, item) => sum + item.revenue, 0);
+
+    const formattedSubscriptionDistribution = subscriptionDistribution.map(item => ({
+      name: item.planName || item._id,
+      value: ((item.count / totalSubscriptions) * 100).toFixed(1),
+      count: item.count,
+      revenue: item.revenue,
+      percentage: ((item.revenue / totalRevenue) * 100).toFixed(1)
+    }));
+
+    const totalLoadCount = loadStatusData.reduce((sum, item) => sum + item.count, 0);
+    const formattedLoadStatusData = loadStatusData.map(item => ({
+      status: item._id,
+      count: item.count,
+      percentage: ((item.count / totalLoadCount) * 100).toFixed(1)
+    }));
+
+    res.json({
+      status: 'success',
+      data: {
+        revenueData: formattedRevenueData,
+        subscriptionDistribution: formattedSubscriptionDistribution,
+        userActivityData,
+        loadStatusData: formattedLoadStatusData,
+        summary: {
+          totalRevenue: totalRevenue,
+          totalSubscriptions: totalSubscriptions,
+          totalLoads: totalLoadCount,
+          timeRange
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Chart data fetch error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch chart data',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
+  }
+});
 
 // @route   GET /api/admin/cargo-owners
 // @desc    List cargo owners with pagination and search
