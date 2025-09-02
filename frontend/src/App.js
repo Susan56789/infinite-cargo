@@ -300,6 +300,20 @@ function App() {
                     </>
                   }
                 />
+                 <Route 
+                  path="/driver/trips/:id"
+                  element={
+                    <>
+                      <SEOHelmet 
+                        title="My Bids"
+                        description="Manage your driver profile, update personal details, vehicle information, and contact preferences. Ensure your profile is complete for better job opportunities."
+                        keywords="driver profile, update details, vehicle information, contact preferences"
+                        canonicalUrl="https://infinitecargo.co.ke/bids/:id"
+                      />
+                      <BidDetails />
+                    </>
+                  }
+                />
 <Route
 path="/loads/:id/bids"
 element={

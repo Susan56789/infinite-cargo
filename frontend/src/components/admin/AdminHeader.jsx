@@ -8,24 +8,43 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
   const [loading, setLoading] = useState(false);
   const [hasInitialized, setHasInitialized] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const [error, setError] = useState(null);
   const dropdownRef = useRef(null);
   const fetchTimeoutRef = useRef(null);
+  const initTimeoutRef = useRef(null);
 
   // Fetch notification count and recent notifications
   const fetchNotifications = async (retryCount = 0) => {
-   
+    // Clear any existing error
+    setError(null);
+    
     if (!isAuthenticated || !apiCall || loading || !authReady) {
+      console.log('Fetch blocked:', { isAuthenticated, hasApiCall: !!apiCall, loading, authReady });
       return;
     }
     
     try {
       setLoading(true);
+      console.log('Fetching notifications...');
+      
       const response = await apiCall('/admin/notifications/summary');
+      console.log('Notification response:', response);
+      
       if (response && response.status === 'success') {
-        setNotificationCount(response.data?.summary?.unread || 0);
-        setRecentNotifications(response.data?.recentNotifications || []);
+        const count = response.data?.summary?.unread || 0;
+        const notifications = response.data?.recentNotifications || [];
+        
+        setNotificationCount(count);
+        setRecentNotifications(notifications);
+        console.log('Notifications loaded:', { count, notifications: notifications.length });
+      } else {
+        console.warn('Unexpected response format:', response);
+        setNotificationCount(0);
+        setRecentNotifications([]);
       }
     } catch (error) {
+      console.error('Notification fetch error:', error);
+      
       // Handle different types of errors
       if (error.message && (
         error.message.includes('Session expired') || 
@@ -33,28 +52,27 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         error.message.includes('401') ||
         error.message.includes('Unauthorized')
       )) {
-       
-        // Clear notification state on auth errors
+        console.log('Auth error detected, clearing notification state');
         setNotificationCount(0);
         setRecentNotifications([]);
         setAuthReady(false);
         setHasInitialized(false);
+        setError('Authentication required');
         return;
       }
       
       // For other errors, retry once after a delay
       if (retryCount < 1) {
-       
+        console.log('Retrying notification fetch...');
         setTimeout(() => {
-          if (isAuthenticated && apiCall) {
+          if (isAuthenticated && apiCall && authReady) {
             fetchNotifications(retryCount + 1);
           }
         }, 2000);
         return;
       }
       
-      console.error('Failed to fetch notifications after retry:', error);
-      // Reset on persistent errors
+      setError('Failed to load notifications');
       setNotificationCount(0);
       setRecentNotifications([]);
     } finally {
@@ -81,7 +99,6 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       setNotificationCount(prev => Math.max(0, prev - 1));
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
-      // Don't show user errors for individual notification actions
     }
   };
 
@@ -97,8 +114,22 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle authentication state changes
+  // Handle authentication state changes with improved logic
   useEffect(() => {
+    console.log('Auth state changed:', { isAuthenticated, hasApiCall: !!apiCall });
+    
+    // Clear timeouts on cleanup
+    const cleanup = () => {
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+        fetchTimeoutRef.current = null;
+      }
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+        initTimeoutRef.current = null;
+      }
+    };
+
     if (!isAuthenticated || !apiCall) {
       // Clear everything when not authenticated
       setNotificationCount(0);
@@ -106,76 +137,76 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       setHasInitialized(false);
       setAuthReady(false);
       setShowDropdown(false);
-      
-      // Clear any pending fetch timeout
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-        fetchTimeoutRef.current = null;
-      }
+      setError(null);
+      cleanup();
       return;
     }
 
-    // When authentication becomes available, set up delayed initialization
-    if (!authReady) {
-      // Clear any existing timeout
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-      }
+    // When authentication becomes available, set up initialization
+    if (!authReady && isAuthenticated && apiCall) {
+      cleanup();
       
-      // Delay to allow auth to fully establish
-      fetchTimeoutRef.current = setTimeout(() => {
+      console.log('Setting up auth initialization...');
+      // Shorter delay for better UX
+      initTimeoutRef.current = setTimeout(() => {
+        console.log('Auth ready, initializing notifications...');
         setAuthReady(true);
         setHasInitialized(true);
-      }, 2000); // 2 second delay for auth to stabilize
+      }, 1000); // Reduced from 2000ms to 1000ms
     }
 
-    return () => {
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-        fetchTimeoutRef.current = null;
-      }
-    };
+    return cleanup;
   }, [isAuthenticated, apiCall]);
 
   // Fetch notifications when auth is ready
   useEffect(() => {
     if (authReady && hasInitialized && isAuthenticated && apiCall) {
+      console.log('Initial notification fetch...');
       fetchNotifications();
     }
   }, [authReady, hasInitialized, isAuthenticated, apiCall]);
 
-  // Set up polling for real-time updates only after successful initialization
+  // Set up polling for real-time updates with better conditions
   useEffect(() => {
-    if (!authReady || !hasInitialized || !isAuthenticated || !apiCall || notificationCount === null) {
+    if (!authReady || !hasInitialized || !isAuthenticated || !apiCall) {
       return;
     }
 
-    // Set up polling for real-time updates (every 60 seconds to reduce load)
+    console.log('Setting up notification polling...');
+    // Set up polling for real-time updates (every 30 seconds for better responsiveness)
     const interval = setInterval(() => {
-      if (isAuthenticated && apiCall && authReady) {
+      if (isAuthenticated && apiCall && authReady && !loading) {
+        console.log('Polling notifications...');
         fetchNotifications();
       }
-    }, 60000);
+    }, 30000); // Reduced from 60000ms to 30000ms
 
-    return () => clearInterval(interval);
-  }, [authReady, hasInitialized, isAuthenticated, apiCall, notificationCount]);
+    return () => {
+      console.log('Clearing notification polling...');
+      clearInterval(interval);
+    };
+  }, [authReady, hasInitialized, isAuthenticated, apiCall]);
 
   // Format timestamp
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return 'Unknown time';
     
-    const date = new Date(timestamp);
-    if (isNaN(date.getTime())) return 'Invalid date';
-    
-    const now = new Date();
-    const diff = now - date;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return 'Invalid date';
+      
+      const now = new Date();
+      const diff = now - date;
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(diff / 3600000);
 
-    if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    return date.toLocaleDateString();
+      if (minutes < 1) return 'Just now';
+      if (minutes < 60) return `${minutes}m ago`;
+      if (hours < 24) return `${hours}h ago`;
+      return date.toLocaleDateString();
+    } catch (error) {
+      return 'Invalid date';
+    }
   };
 
   // Get notification icon based on type
@@ -185,6 +216,10 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         return <div className="w-2 h-2 bg-red-500 rounded-full"></div>;
       case 'system_maintenance':
         return <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>;
+      case 'user_action':
+        return <div className="w-2 h-2 bg-blue-500 rounded-full"></div>;
+      case 'subscription':
+        return <div className="w-2 h-2 bg-green-500 rounded-full"></div>;
       default:
         return <div className="w-2 h-2 bg-blue-500 rounded-full"></div>;
     }
@@ -192,20 +227,28 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
 
   // Handle manual refresh with better error handling
   const handleManualRefresh = async () => {
-    if (!isAuthenticated || !apiCall || !authReady) {
-      
+    if (!isAuthenticated || !apiCall) {
+      console.log('Manual refresh blocked - not authenticated');
       return;
     }
 
-    
+    if (!authReady) {
+      console.log('Manual refresh blocked - auth not ready');
+      return;
+    }
+
+    console.log('Manual refresh triggered');
     await fetchNotifications();
   };
 
   // Handle dropdown toggle with refresh
   const handleDropdownToggle = () => {
-    setShowDropdown(!showDropdown);
+    const newShowState = !showDropdown;
+    setShowDropdown(newShowState);
+    
     // Only refresh if opening dropdown and auth is ready
-    if (!showDropdown && isAuthenticated && apiCall && authReady && !loading) {
+    if (newShowState && isAuthenticated && apiCall && authReady && !loading) {
+      console.log('Dropdown opened, refreshing notifications...');
       handleManualRefresh();
     }
   };
@@ -227,6 +270,17 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     }
   };
 
+  // Debug info (remove in production)
+  console.log('AdminHeader render state:', {
+    isAuthenticated,
+    authReady,
+    hasInitialized,
+    loading,
+    notificationCount,
+    recentNotifications: recentNotifications.length,
+    error
+  });
+
   return (
     <div className="bg-white shadow-sm border-b px-6 py-3 flex justify-between items-center mb-6">
       <div>
@@ -240,8 +294,13 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
           <button
             onClick={handleDropdownToggle}
             className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={!isAuthenticated || !authReady}
-            title={!isAuthenticated ? 'Authentication required' : !authReady ? 'Loading...' : 'Notifications'}
+            disabled={!isAuthenticated}
+            title={
+              !isAuthenticated ? 'Authentication required' : 
+              !authReady ? 'Setting up notifications...' : 
+              error ? `Error: ${error}` :
+              'Notifications'
+            }
           >
             {notificationCount > 0 ? (
               <BellRing className="w-6 h-6" />
@@ -261,6 +320,11 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
               <div className="absolute -top-1 -right-1 w-3 h-3">
                 <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
               </div>
+            )}
+
+            {/* Error indicator */}
+            {error && !loading && (
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"></div>
             )}
           </button>
 
@@ -306,6 +370,17 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
                   <div className="text-center py-8 text-gray-500">
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto mb-2"></div>
                     <p className="text-sm">Setting up notifications...</p>
+                  </div>
+                ) : error ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Bell className="w-8 h-8 mx-auto mb-2 text-red-300" />
+                    <p className="text-sm text-red-600">Error: {error}</p>
+                    <button
+                      onClick={handleManualRefresh}
+                      className="text-xs text-blue-600 hover:text-blue-800 mt-2"
+                    >
+                      Try again
+                    </button>
                   </div>
                 ) : loading ? (
                   <div className="flex items-center justify-center py-8">
