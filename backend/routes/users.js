@@ -1060,11 +1060,7 @@ router.post('/verify-reset-code', corsHandler, [
 
 //@ruoute POST /api/users/fogot-password-code
 // @desc send verification codes instead of links
-router.post(
-  '/forgot-password-code',
-  corsHandler,
-  resetPasswordLimiter,
-  [
+router.post(  '/forgot-password-code',corsHandler,resetPasswordLimiter,[
     body('email')
       .trim()
       .normalizeEmail()
@@ -1112,14 +1108,14 @@ router.post(
         const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
         const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        // Update user record -  Use correct field name and actual Date value
+        // Update user record
         const collection = db.collection(userType === 'driver' ? 'drivers' : 'cargo-owners');
         await collection.updateOne(
           { _id: user._id },
           {
             $set: {
               passwordResetCode: resetCode,
-              passwordResetCodeExpires: resetCodeExpiry, //  Store actual Date, not query
+              passwordResetCodeExpires: resetCodeExpiry,
               passwordResetRequestedAt: new Date(),
               resetCodeVerified: false,
               updatedAt: new Date()
@@ -1145,15 +1141,22 @@ router.post(
         } catch (mailErr) {
           console.error('Email sending failed:', mailErr);
         }
+
+        res.json({
+          status: 'success',
+          message: 'A 6-digit verification code has been sent to your email address.',
+          expiresIn: '10 minutes'
+        });
       } else {
         console.log('Password reset requested for non-existent email:', email);
+        
+        // Return alert instead of generic success message
+        return res.status(404).json({
+          status: 'alert',
+          message: 'No account found with this email address. Please check your email or create a new account.',
+          suggestion: 'Double-check your email address or sign up for a new account.'
+        });
       }
-
-      res.json({
-        status: 'success',
-        message: 'If an account with that email exists, a 6-digit verification code has been sent.',
-        expiresIn: '10 minutes'
-      });
     } catch (error) {
       console.error('Forgot password code error:', {
         error: error.message,

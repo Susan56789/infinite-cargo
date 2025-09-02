@@ -23,8 +23,6 @@ const ResetPassword = () => {
    const navigate = useNavigate();
 
   useEffect(() => {
-    // Simulate extracting token and email from URL parameters
-    // In real implementation, you would use useLocation from react-router-dom
     const urlParams = new URLSearchParams(window.location.search);
     const tokenParam = urlParams.get('token');
     const emailParam = urlParams.get('email');
@@ -37,8 +35,7 @@ const ResetPassword = () => {
       setEmail(decodeURIComponent(emailParam));
       setIsValidToken(true);
       
-      // Set a 15-minute countdown timer
-      setTimeRemaining(15 * 60); // 15 minutes in seconds
+      setTimeRemaining(15 * 60);
     }
   }, []);
 
@@ -59,6 +56,7 @@ const ResetPassword = () => {
       return () => clearInterval(timer);
     }
   }, [timeRemaining]);
+
 
   const handleChange = (e) => {
     setFormData({
@@ -261,8 +259,8 @@ const ResetPassword = () => {
     return { strength: 100, label: 'Strong', color: 'bg-green-500' };
   };
 
-  const formatTimeRemaining = (seconds) => {
-    if (!seconds) return '';
+const formatTimeRemaining = (seconds) => {
+    if (!seconds || seconds <= 0) return '';
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
@@ -435,13 +433,13 @@ const ResetPassword = () => {
                 
                 {/* Timer */}
                 {timeRemaining > 0 && (
-                  <div className="flex items-center justify-center gap-2 mt-4 text-orange-600 bg-orange-50 p-3 rounded-xl">
-                    <RefreshCw size={16} className="animate-spin" />
-                    <span className="text-sm font-medium">
-                      Link expires in {formatTimeRemaining(timeRemaining)}
-                    </span>
-                  </div>
-                )}
+        <div className="flex items-center justify-center gap-2 mt-4 text-orange-600 bg-orange-50 p-3 rounded-xl">
+          <RefreshCw size={16} className="animate-spin" />
+          <span className="text-sm font-medium">
+            Link expires in {formatTimeRemaining(timeRemaining)}
+          </span>
+        </div>
+      )}
               </div>
 
               <div className="space-y-7">

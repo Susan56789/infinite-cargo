@@ -99,64 +99,69 @@ const ForgotPassword = () => {
   };
 
   const sendVerificationCode = async () => {
-    if (!validateEmail()) return false;
+  if (!validateEmail()) return false;
 
-    setLoading(true);
-    setError('');
-    setSuccess('');
+  setLoading(true);
+  setError('');
+  setSuccess('');
 
+  try {
+    const response = await fetch(`${API_BASE_URL}/users/forgot-password-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      mode: 'cors',
+      body: JSON.stringify({ email: formData.email.trim().toLowerCase() })
+    });
+
+    let result;
     try {
-      const response = await fetch(`${API_BASE_URL}/users/forgot-password-code`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        credentials: 'include',
-        mode: 'cors',
-        body: JSON.stringify({ email: formData.email.trim().toLowerCase() })
-      });
-
-      let result;
-      try {
-        result = await response.json();
-      } catch (parseError) {
-        throw new Error('Invalid response from server');
-      }
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          throw new Error('Too many password reset requests. Please try again later.');
-        } else if (response.status === 400 && result.errors) {
-          const errorMessages = result.errors.map(err => err.message).join('. ');
-          throw new Error(errorMessages);
-        } else if (response.status === 500) {
-          throw new Error('Server error. Please try again later');
-        } else {
-          throw new Error(result.message || `Request failed (${response.status})`);
-        }
-      }
-
-      return true;
-
-    } catch (error) {
-      console.error('Send verification code error:', error);
-      
-      // Handle specific network errors
-      if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        setError('🌐 Network error: Unable to connect to server. Please check your internet connection and try again.');
-      } else if (error.message.includes('CORS')) {
-        setError('🔒 Connection error: Unable to communicate with server. Please try again.');
-      } else if (error.message.includes('Failed to fetch')) {
-        setError('🌐 Connection failed: Please check your internet connection and try again.');
-      } else {
-        setError(error.message || '❌ Failed to send verification code. Please try again.');
-      }
-      return false;
-    } finally {
-      setLoading(false);
+      result = await response.json();
+    } catch (parseError) {
+      throw new Error('Invalid response from server');
     }
-  };
+
+    if (!response.ok) {
+      if (response.status === 404 && result.status === 'alert') {
+        // Handle account not found - show alert message
+        setError(`⚠️ ${result.message}`);
+        return false;
+      } else if (response.status === 429) {
+        throw new Error('Too many password reset requests. Please try again later.');
+      } else if (response.status === 400 && result.errors) {
+        const errorMessages = result.errors.map(err => err.message).join('. ');
+        throw new Error(errorMessages);
+      } else if (response.status === 500) {
+        throw new Error('Server error. Please try again later');
+      } else {
+        throw new Error(result.message || `Request failed (${response.status})`);
+      }
+    }
+
+    // Success - account exists and code sent
+    return true;
+
+  } catch (error) {
+    console.error('Send verification code error:', error);
+    
+    // Handle specific network errors
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      setError('🌐 Network error: Unable to connect to server. Please check your internet connection and try again.');
+    } else if (error.message.includes('CORS')) {
+      setError('🔒 Connection error: Unable to communicate with server. Please try again.');
+    } else if (error.message.includes('Failed to fetch')) {
+      setError('🌐 Connection failed: Please check your internet connection and try again.');
+    } else {
+      setError(error.message || '❌ Failed to send verification code. Please try again.');
+    }
+    return false;
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
