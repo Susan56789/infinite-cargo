@@ -344,8 +344,8 @@ router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
 
       case 'loads':
         // Load completion rate
-        const completedLoads = await require('../models/load').Load.countDocuments({ status: 'completed' });
-        const totalLoads = await require('../models/load').Load.countDocuments();
+        const completedLoads = await require('../models/load').countDocuments({ status: 'completed' });
+        const totalLoads = await require('../models/load').countDocuments();
         
         const completionRate = totalLoads > 0 ? ((completedLoads / totalLoads) * 100) : 0;
         
@@ -382,7 +382,7 @@ router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
 // @access  Private
 router.get('/analytics/top-routes',adminAuth, async (req, res) => {
   try {
-    const Load = require('../models/load').Load;
+    const Load = require('../models/load');
     
     const topRoutes = await Load.aggregate([
       {
@@ -853,7 +853,7 @@ router.get('/analytics/charts',adminAuth, async (req, res) => {
         require('mongoose').connection.db.collection('cargo-owners').countDocuments({
           lastLogin: { $gte: startOfDay, $lte: endOfDay }
         }),
-        require('../models/load').Load.countDocuments({
+        require('../models/load').countDocuments({
           createdAt: { $gte: startOfDay, $lte: endOfDay }
         })
       ]);
@@ -868,7 +868,7 @@ router.get('/analytics/charts',adminAuth, async (req, res) => {
     }
 
     // Get load status distribution
-    const loadStatusData = await require('../models/load').Load.aggregate([
+    const loadStatusData = await require('../models/load').aggregate([
       {
         $group: {
           _id: '$status',
@@ -2202,7 +2202,7 @@ router.get('/analytics/export', adminAuth, async (req, res) => {
         break;
 
       case 'loads':
-        exportData.loads = await Load.find({
+        exportDatas = await Load.find({
           createdAt: { $gte: startDate }
         }).select({
           title: 1, pickupLocation: 1, deliveryLocation: 1, weight: 1, 
