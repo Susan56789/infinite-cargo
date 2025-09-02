@@ -2699,6 +2699,79 @@ router.get('/notifications', adminAuth, [
   }
 });
 
+// @route   POST /api/admin/notifications
+// @desc    Create notification for admins (from drivers/users)
+// @access  Private
+router.post('/notifications', auth, [
+  body('type').notEmpty().withMessage('Notification type is required'),
+  body('title').notEmpty().isLength({ max: 200 }).withMessage('Title is required and cannot exceed 200 characters'),
+  body('message').notEmpty().isLength({ max: 1000 }).withMessage('Message is required and cannot exceed 1000 characters'),
+  body('priority').optional().isIn(['low', 'medium', 'high']).withMessage('Priority must be low, medium, or high'),
+  body('data').optional().isObject().withMessage('Data must be an object')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const {
+      type,
+      title,
+      message,
+      priority = 'medium',
+      data = {},
+      icon,
+      actionUrl,
+      expiresAt
+    } = req.body;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection.db;
+    const notificationsCollection = db.collection('notifications');
+
+    // Create notification for all admins
+    const notification = {
+      userType: 'admin',
+      type,
+      title,
+      message,
+      priority,
+      data,
+      icon: icon || 'alert-triangle',
+      actionUrl,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      sentBy: new mongoose.Types.ObjectId(req.user.id),
+      sentByType: req.user.userType,
+      isRead: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await notificationsCollection.insertOne(notification);
+
+    res.status(201).json({
+      status: 'success',
+      message: 'Admin notification created successfully',
+      data: {
+        notificationId: result.insertedId
+      }
+    });
+
+  } catch (error) {
+    console.error('Create admin notification error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error creating admin notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Helper function to determine available actions for each notification type
 function getAvailableActions(notificationType, notificationData) {
   switch (notificationType) {
