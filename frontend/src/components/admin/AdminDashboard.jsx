@@ -153,6 +153,7 @@ const AdminDashboard = () => {
           email: user?.email || '',
           role: user?.role || 'admin' 
         });
+        
       }
     } catch (error) {
       console.error('Failed to fetch admin data:', error);
@@ -166,6 +167,9 @@ const AdminDashboard = () => {
       }
     }
   }, [apiCall]);
+
+
+
 
   const fetchDashboardStats = useCallback(async () => {
     try {
@@ -1345,6 +1349,7 @@ const AdminDashboard = () => {
                 apiCall={apiCall}
                 showError={showError}
                 showSuccess={showSuccess}
+                adminData={adminData}
               />
             </div>
           )}

@@ -21,7 +21,7 @@ import {
   EyeOff
 } from 'lucide-react';
 
-const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
+const AdminNotifications = ({ apiCall, showError, showSuccess, adminData }) => {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedNotifications, setSelectedNotifications] = useState([]);
@@ -43,13 +43,13 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     read: 0
   });
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
-  const [broadcastForm, setBroadcastForm] = useState({
-    userType: 'all',
-    title: '',
-    message: '',
-    priority: 'medium',
-    type: 'system_announcement'
-  });
+const [broadcastForm, setBroadcastForm] = useState({
+  userType: 'all',           
+  title: '',                 // This will map to notification.title
+  message: '',               // This will map to notification.message
+  priority: 'medium',        
+  type: 'system_announcement' 
+});
 
   // Fetch notifications - Use admin route
   const fetchNotifications = async (page = 1) => {
@@ -139,7 +139,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
       if (response.status === 'success') {
         setNotifications(prev => prev.map(n => ({ ...n, isRead: true, readAt: new Date() })));
         fetchNotificationSummary();
-        showSuccess(`${response.data.updatedCount} notifications marked as read`);
+        showSuccess(`${response.data?.updatedCount || 0} notifications marked as read`);
       }
     } catch (error) {
       showError('Failed to mark all as read');
@@ -182,7 +182,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         });
         
         if (response.status === 'success') {
-          showSuccess(`${response.data.updatedCount} notifications marked as read`);
+          showSuccess(`${response.data?.updatedCount || selectedNotifications.length} notifications marked as read`);
           
           setNotifications(prev => prev.map(notif => 
             selectedNotifications.includes(notif._id) 
@@ -200,7 +200,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         });
         
         if (response.status === 'success') {
-          showSuccess(`${response.data.deletedCount} notifications deleted`);
+          showSuccess(`${response.data?.deletedCount || selectedNotifications.length} notifications deleted`);
           
           setNotifications(prev => 
             prev.filter(notif => !selectedNotifications.includes(notif._id))
@@ -215,60 +215,71 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
     }
   };
 
-  // Send broadcast notification - Use admin route
+  // Send broadcast notification with enhanced error handling
   const sendBroadcastNotification = async (e) => {
-    e.preventDefault();
-    try {
-      setLoading(true);
-      
-      // Debug: Log the request details
-      console.log('Sending broadcast request:', {
-        path: '/admin/notifications/broadcast',
-        body: broadcastForm
-      });
-      
-      const response = await apiCall('/admin/notifications/broadcast', {
-        method: 'POST',
-        body: JSON.stringify(broadcastForm),
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      console.log('Broadcast response:', response);
-      
-      if (response.status === 'success') {
-        showSuccess(`Notification sent to ${response.data.sentCount} users`);
-        setShowBroadcastModal(false);
-        setBroadcastForm({
-          userType: 'all',
-          title: '',
-          message: '',
-          priority: 'medium',
-          type: 'system_announcement'
-        });
-        fetchNotifications();
-        fetchNotificationSummary();
-      } else {
-        // Handle error response
-        showError(response.message || 'Failed to broadcast notification');
-      }
-    } catch (error) {
-      console.error('Broadcast notification error:', error);
-      // Show specific error message if available
-      if (error.status === 401) {
-        showError('Unauthorized: Admin access required');
-      } else if (error.status === 403) {
-        showError('Access denied: Admin privileges required');
-      } else {
-        showError(error.message || 'Failed to broadcast notification');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  e.preventDefault();
+  
+  if (!broadcastForm.title?.trim() || !broadcastForm.message?.trim()) {
+    showError('Please fill in both title and message');
+    return;
+  }
 
-  // Rest of the component remains the same...
+  try {
+    setLoading(true);
+    
+    // Create correct structure for backend
+    const requestData = {
+      recipients: {
+        type: broadcastForm.userType === 'all' ? 'all' : 'user_type',
+        ...(broadcastForm.userType !== 'all' && { userType: broadcastForm.userType })
+      },
+      notification: {
+        type: broadcastForm.type,
+        title: broadcastForm.title.trim(),
+        message: broadcastForm.message.trim(),
+        priority: broadcastForm.priority
+      },
+      scheduling: {
+        sendNow: true
+      }
+    };
+    
+    
+    const response = await apiCall('/admin/notifications/broadcast', {
+      method: 'POST',
+      body: JSON.stringify(requestData)
+    });
+    
+    if (response.status === 'success') {
+      showSuccess(`Notification sent to ${response.data?.sentCount || 0} users`);
+      setShowBroadcastModal(false);
+      setBroadcastForm({
+        userType: 'all',
+        title: '',
+        message: '',
+        priority: 'medium',
+        type: 'system_announcement'
+      });
+      fetchNotifications();
+    } else {
+      if (response.errors) {
+        const errors = response.errors.map(err => `${err.param}: ${err.msg}`).join('\n');
+        showError(`Validation errors:\n${errors}`);
+      } else {
+        showError(response.message || 'Failed to send notification');
+      }
+    }
+  } catch (error) {
+    console.error('Broadcast error:', error);
+    showError(error.message || 'Failed to send broadcast notification');
+  } finally {
+    setLoading(false);
+  }
+};
+
+  // Check if user can broadcast
+  const canBroadcast = adminData?.role === 'super_admin' || adminData?.permissions?.broadcast_notifications;
+
   // Get notification icon
   const getNotificationIcon = (type, icon) => {
     const iconMap = {
@@ -342,13 +353,15 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
         </div>
         
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowBroadcastModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
-          >
-            <Send className="w-4 h-4" />
-            Send Broadcast
-          </button>
+          {canBroadcast && (
+            <button
+              onClick={() => setShowBroadcastModal(true)}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+            >
+              <Send className="w-4 h-4" />
+              Send Broadcast
+            </button>
+          )}
           
           <button
             onClick={() => fetchNotifications(pagination.currentPage)}
@@ -360,6 +373,17 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
           </button>
         </div>
       </div>
+
+      {/* Show permissions notice if user can't broadcast */}
+      {!canBroadcast && (
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 p-4 rounded-lg flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5" />
+          <span>
+            Super admin privileges required to send broadcast notifications. 
+            Current role: {adminData?.role || 'Unknown'}
+          </span>
+        </div>
+      )}
 
       {/* Filters and Actions */}
       <div className="bg-white p-4 border border-gray-200 rounded-lg">
@@ -679,7 +703,7 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
       )}
 
       {/* Broadcast Notification Modal */}
-      {showBroadcastModal && (
+      {showBroadcastModal && canBroadcast && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <div className="flex items-center justify-between mb-4">
@@ -698,15 +722,15 @@ const AdminNotifications = ({ apiCall, showError, showSuccess }) => {
                   Send To
                 </label>
                 <select
-                  value={broadcastForm.userType}
-                  onChange={(e) => setBroadcastForm(prev => ({ ...prev, userType: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                >
-                  <option value="all">All Users</option>
-                  <option value="driver">All Drivers</option>
-                  <option value="cargo_owner">All Cargo Owners</option>
-                </select>
+  value={broadcastForm.userType}
+  onChange={(e) => setBroadcastForm(prev => ({ ...prev, userType: e.target.value }))}
+  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+  required
+>
+  <option value="all">All Users</option>
+  <option value="driver">All Drivers</option>
+  <option value="cargo_owner">All Cargo Owners</option>
+</select>
               </div>
 
               <div>
