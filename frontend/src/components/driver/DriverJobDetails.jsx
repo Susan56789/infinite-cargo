@@ -222,64 +222,67 @@ const DriverJobDetails = () => {
   };
 
   const submitIssueReport = async () => {
-    if (!reportForm.type || !reportForm.description.trim()) {
-      alert('Please fill in all required fields');
-      return;
-    }
+  if (!reportForm.type || !reportForm.description.trim()) {
+    alert('Please fill in all required fields');
+    return;
+  }
 
-    setSubmittingReport(true);
+  setSubmittingReport(true);
+  
+  try {
     
-    try {
-      const reportData = {
-        userType: 'admin',
-        type: 'driver_issue_report',
-        title: `Driver Issue Report: ${reportForm.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`,
-        message: `Driver ${getUser()?.name} reported an issue with job "${job.title}": ${reportForm.description}`,
-        priority: reportForm.priority,
-        data: {
-          reportId: Date.now().toString(),
-          jobId: job._id,
-          driverId: getUser()?.id,
-          driverName: getUser()?.name,
-          driverPhone: getUser()?.phone,
-          issueType: reportForm.type,
-          description: reportForm.description,
-          location: currentLocation,
-          jobDetails: {
-            title: job.title,
-            status: job.status,
-            pickupLocation: job.pickupLocation,
-            deliveryLocation: job.deliveryLocation
-          }
-        },
-        actionUrl: `/admin/jobs/${job._id}`
-      };
+    const reportData = {
+      type: 'driver_issue_report',
+      title: `Driver Issue Report: ${reportForm.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`,
+      message: `Driver ${getUser()?.name} reported an issue with job "${job.title}": ${reportForm.description}`,
+      priority: reportForm.priority,
+      userType: 'admin', 
+      isRead: false,
+      data: {
+        reportId: Date.now().toString(),
+        jobId: job._id,
+        driverId: getUser()?.id,
+        driverName: getUser()?.name,
+        driverPhone: getUser()?.phone,
+        issueType: reportForm.type,
+        description: reportForm.description,
+        location: currentLocation,
+        jobDetails: {
+          title: job.title,
+          status: job.status,
+          pickupLocation: job.pickupLocation,
+          deliveryLocation: job.deliveryLocation
+        }
+      },
+      createdAt: new Date()
+    };
 
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/admin/notifications', {
-        method: 'POST',
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(reportData)
-      });
+    // Use the general notifications endpoint instead of admin-specific one
+    const response = await fetch('https://infinite-cargo-api.onrender.com/api/notifications/create-admin', {
+      method: 'POST',
+      headers: {
+        ...getAuthHeader(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(reportData)
+    });
 
-      if (!response.ok) {
-        throw new Error('Failed to submit issue report');
-      }
-
-      // Reset form and close modal
-      setReportForm({ type: '', description: '', priority: 'medium' });
-      setShowReportForm(false);
-      alert('Issue report submitted successfully. Support will contact you soon.');
-
-    } catch (err) {
-      console.error('Submit report error:', err);
-      alert('Failed to submit issue report. Please try again.');
-    } finally {
-      setSubmittingReport(false);
+    if (!response.ok) {
+      throw new Error('Failed to submit issue report');
     }
-  };
+
+    // Reset form and close modal
+    setReportForm({ type: '', description: '', priority: 'medium' });
+    setShowReportForm(false);
+    alert('Issue report submitted successfully. Support will contact you soon.');
+
+  } catch (err) {
+    console.error('Submit report error:', err);
+    alert('Failed to submit issue report. Please try again.');
+  } finally {
+    setSubmittingReport(false);
+  }
+};
 
   const getCurrentLocation = () => {
     if (navigator.geolocation) {
