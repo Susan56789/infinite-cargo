@@ -152,65 +152,74 @@ const AdminForgotPassword = () => {
   };
 
   const handleCodeSubmit = async (e) => {
-    e.preventDefault();
+  e.preventDefault();
+  
+  if (!validateCode()) return;
+
+  setLoading(true);
+  setMessage({ type: '', text: '' });
+
+  try {
+    const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
     
-    if (!validateCode()) return;
+    // Enhanced request preparation
+    const requestData = {
+      email: formData.email.trim().toLowerCase(),
+      code: formData.code.trim() 
+    };
 
-    setLoading(true);
-    setMessage({ type: '', text: '' });
+    
 
-    try {
-      const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
-      
-      const response = await fetch(`${API_BASE_URL}/admin/verify-reset-code`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: formData.email.trim().toLowerCase(),
-          code: formData.code.trim()
-        })
-      });
+    const response = await fetch(`${API_BASE_URL}/admin/verify-reset-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestData)
+    });
 
-      const data = await response.json();
-
-      if (response.ok && data.status === 'success' && data.resetToken) {
-        setFormData(prev => ({
-          ...prev,
-          resetToken: data.resetToken
-        }));
-        setMessage({
-          type: 'success',
-          text: 'Verification code confirmed! Please set your new password.'
-        });
-        setCurrentStep('reset');
-      } else {
-        if (data.errors && Array.isArray(data.errors)) {
-          const fieldErrors = {};
-          data.errors.forEach(error => {
-            if (error.field) {
-              fieldErrors[error.field] = error.message;
-            }
-          });
-          setErrors(fieldErrors);
-        } else {
-          setMessage({
-            type: 'error',
-            text: data.message || 'Invalid or expired verification code.'
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Code verification error:', error);
+    
+    const data = await response.json();
+ 
+    if (response.ok && data.status === 'success' && data.resetToken) {
+      setFormData(prev => ({
+        ...prev,
+        resetToken: data.resetToken
+      }));
       setMessage({
-        type: 'error',
-        text: 'Unable to verify code. Please try again.'
+        type: 'success',
+        text: 'Verification code confirmed! Please set your new password.'
       });
-    } finally {
-      setLoading(false);
+      setCurrentStep('reset');
+    } else {
+      console.error('Verification failed:', data);
+      
+      if (data.errors && Array.isArray(data.errors)) {
+        const fieldErrors = {};
+        data.errors.forEach(error => {
+          if (error.field) {
+            fieldErrors[error.field] = error.message;
+          }
+        });
+        setErrors(fieldErrors);
+      } else {
+        setMessage({
+          type: 'error',
+          text: data.message || 'Invalid or expired verification code.'
+        });
+      }
     }
-  };
+  } catch (error) {
+    console.error('Code verification error:', error);
+    setMessage({
+      type: 'error',
+      text: 'Unable to verify code. Please try again.'
+    });
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();
