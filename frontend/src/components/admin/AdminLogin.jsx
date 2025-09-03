@@ -340,10 +340,19 @@ const AdminLogin = () => {
               <ArrowLeft className="w-4 h-4" />
               Back to Main Site
             </button>
+            <div className="mt-4"></div>
+              <button
+                type="button"
+                onClick={() => navigate('/admin/forgot-password')}
+                className="text-sm text-blue-300 hover:text-white transition-colors duration-200 underline"
+              >
+                Forgot Password?
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+   
   );
 };
 

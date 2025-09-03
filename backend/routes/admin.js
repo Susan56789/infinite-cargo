@@ -10,581 +10,66 @@ const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
 const corsHandler = require('../middleware/corsHandler');
 const auth = require('../middleware/auth');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+
 
 // Apply CORS middleware
 router.use(corsHandler);
 
-
-
-// @route   POST /api/admin/login
-// @desc    Admin login
-// @access  Public
-router.post('/login', [
-  body('email')
-  .trim()
-  .normalizeEmail({ gmail_remove_dots: false })
-    .isEmail()
-    .withMessage('Please provide a valid email address'),
-  body('password')
-    .notEmpty()
-    .withMessage('Password is required')
-], async (req, res) => {
-  try {
-    console.log('Admin login request received:', { 
-      email: req.body.email,
-      origin: req.headers.origin,
-      userAgent: req.headers['user-agent']
-    });
-
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ 
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array().map(error => ({
-          field: error.path || error.param,
-          message: error.msg
-        }))
-      });
+// Gmail transporter configuration
+const createEmailTransporter = () => {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.GMAIL_EMAIL, 
+      pass: process.env.GMAIL_APP_PASSWORD 
+    },
+    tls: {
+      rejectUnauthorized: false
     }
+  });
+};
 
-    const { email, password } = req.body;
-
-    // Check if admin exists
-    const admin = await Admin.findOne({ 
-      email: email.toLowerCase().trim(),
-      isActive: true 
-    }).select('+password');
-
-    console.log("ADMIN = ", admin);
-    
-    if (!admin) {
-      console.log('Admin login failed: Admin not found or inactive for email:', email);
-      return res.status(400).json({ 
-        status: 'error',
-        message: 'Invalid credentials or account is disabled' 
-      });
+// Helper function for default permissions
+function getDefaultPermissions(role) {
+  const permissions = {
+    admin: {
+      viewUsers: true,
+      editUsers: true,
+      viewLoads: true,
+      editLoads: true,
+      viewSubscriptions: true,
+      approveSubscriptions: true,
+      viewReports: true,
+      systemSettings: false
+    },
+    moderator: {
+      viewUsers: true,
+      editUsers: false,
+      viewLoads: true,
+      editLoads: false,
+      viewSubscriptions: true,
+      approveSubscriptions: false,
+      viewReports: false,
+      systemSettings: false
+    },
+    super_admin: {
+      viewUsers: true,
+      editUsers: true,
+      viewLoads: true,
+      editLoads: true,
+      viewSubscriptions: true,
+      approveSubscriptions: true,
+      viewReports: true,
+      systemSettings: true,
+      createAdmins: true,
+      deleteAdmins: true
     }
+  };
 
-    // Check password
-    const isMatch = await bcrypt.compare(password, admin.password);
-    if (!isMatch) {
-      console.log('Admin login failed: Invalid password for admin:', email);
-      return res.status(400).json({ 
-        status: 'error',
-        message: 'Invalid credentials' 
-      });
-    }
-
-    // Update last login
-    admin.lastLogin = new Date();
-    await admin.save();
-
-    console.log('Admin login successful:', { id: admin._id, email: admin.email, role: admin.role });
-    try {
-      const db = mongoose.connection.db;
-      const auditLogsCollection = db.collection('audit_logs');
-
-      await auditLogsCollection.insertOne({
-        action: 'admin_login',   
-        entityType: 'admin',         
-        entityId: new mongoose.Types.ObjectId(admin._id),
-        adminId: new mongoose.Types.ObjectId(admin._id),
-        adminName: admin.name,
-        adminEmail: admin.email,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        createdAt: new Date()
-      });
-    } catch (auditError) {
-      console.warn('Audit log failed:', auditError);
-      // Don't fail login if audit log fails
-    }
-
-    // Create JWT payload
-    const payload = {
-      admin: {
-        id: admin._id,
-        role: admin.role,
-        permissions: admin.permissions
-      }
-    };
-
-    // Sign JWT with admin secret (use different secret for admin)
-    const token = jwt.sign(
-      payload, 
-      process.env.JWT_ADMIN_SECRET || process.env.JWT_SECRET, 
-      { expiresIn: '8h' } // Shorter expiry for admin sessions
-    );
-
-    res.json({
-      status: 'success',
-      message: 'Admin login successful',
-      token,
-      admin: {
-        id: admin._id,
-        name: admin.name,
-        email: admin.email,
-        phone: admin.phone,
-        role: admin.role,
-        permissions: admin.permissions,
-        lastLogin: admin.lastLogin,
-        createdAt: admin.createdAt
-      }
-    });
-
-  } catch (error) {
-    console.error('Admin login error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Internal server error during admin login',
-      ...(process.env.NODE_ENV === 'development' && { error: error.message })
-    });
-  }
-});
-
-// @route   GET /api/admin/analytics/activity-summary
-// @desc    Get activity summary for today
-// @access  Private
-router.get('/analytics/activity-summary',adminAuth, async (req, res) => {
-  try {
-    const today = new Date();
-    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
-    const endOfToday = new Date(today.setHours(23, 59, 59, 999));
-
-    // Today's logins (you might need to track login events)
-    const todayLogins = await require('mongoose').connection.db.collection('audit_logs').countDocuments({
-      action: 'admin_login',
-      createdAt: { $gte: startOfToday, $lte: endOfToday }
-    });
-
-    // New registrations today
-    const [newDrivers, newCargoOwners] = await Promise.all([
-      require('mongoose').connection.db.collection('drivers').countDocuments({
-        createdAt: { $gte: startOfToday, $lte: endOfToday }
-      }),
-      require('mongoose').connection.db.collection('cargo-owners').countDocuments({
-        createdAt: { $gte: startOfToday, $lte: endOfToday }
-      })
-    ]);
-
-    // Active subscriptions
-    const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
-      status: 'active',
-      expiresAt: { $gt: new Date() }
-    });
-
-    // System health calculation (simplified)
-    const totalUsers = await Promise.all([
-      require('mongoose').connection.db.collection('drivers').countDocuments(),
-      require('mongoose').connection.db.collection('cargo-owners').countDocuments()
-    ]);
-
-    const userCount = totalUsers[0] + totalUsers[1];
-    let systemHealth = 'good';
-    
-    if (userCount < 100) systemHealth = 'warning';
-    if (activeSubscriptions / userCount < 0.1) systemHealth = 'critical';
-
-    res.json({
-      status: 'success',
-      data: {
-        todayLogins,
-        newRegistrations: newDrivers + newCargoOwners,
-        activeSubscriptions,
-        systemHealth
-      }
-    });
-
-  } catch (error) {
-    console.error('Activity summary error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch activity summary'
-    });
-  }
-});
-
-// @route   GET /api/admin/audit-logs
-// @desc    Fetch audit logs
-router.get('/audit-logs', adminAuth, async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const auditLogsCollection = db.collection('audit_logs');
-
-    const { limit = 10 } = req.query;
-    const logs = await auditLogsCollection
-      .find({})
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .toArray();
-
-    res.json({
-      status: 'success',
-      data: logs
-    });
-  } catch (error) {
-    console.error('Audit logs fetch error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch audit logs'
-    });
-  }
-});
-
-
-// @route   GET /api/admin/analytics/kpi/:type
-// @desc    Get specific KPI data
-// @access  Private
-router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
-  try {
-    const { type } = req.params;
-    const now = new Date();
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-    
-    let data = { value: 0, change: 0, trend: 'neutral' };
-
-    switch (type) {
-      case 'revenue':
-        // Current month revenue
-        const currentRevenue = await require('../models/subscription').Subscription.aggregate([
-          {
-            $match: {
-              createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) },
-              paymentStatus: 'completed'
-            }
-          },
-          { $group: { _id: null, total: { $sum: '$price' } } }
-        ]);
-
-        // Previous month revenue
-        const previousRevenue = await require('../models/subscription').Subscription.aggregate([
-          {
-            $match: {
-              createdAt: { 
-                $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-                $lt: new Date(now.getFullYear(), now.getMonth(), 1)
-              },
-              paymentStatus: 'completed'
-            }
-          },
-          { $group: { _id: null, total: { $sum: '$price' } } }
-        ]);
-
-        const currentRev = currentRevenue[0]?.total || 0;
-        const previousRev = previousRevenue[0]?.total || 0;
-        
-        data = {
-          value: currentRev,
-          change: previousRev > 0 ? ((currentRev - previousRev) / previousRev * 100).toFixed(1) : 0,
-          trend: currentRev > previousRev ? 'up' : currentRev < previousRev ? 'down' : 'neutral'
-        };
-        break;
-
-      case 'users':
-        // Current month new users
-        const currentUsers = await Promise.all([
-          require('mongoose').connection.db.collection('drivers').countDocuments({
-            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
-          }),
-          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
-            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
-          })
-        ]);
-
-        // Previous month new users
-        const previousUsers = await Promise.all([
-          require('mongoose').connection.db.collection('drivers').countDocuments({
-            createdAt: { 
-              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
-            }
-          }),
-          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
-            createdAt: { 
-              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
-            }
-          })
-        ]);
-
-        const currentUserCount = currentUsers[0] + currentUsers[1];
-        const previousUserCount = previousUsers[0] + previousUsers[1];
-        
-        data = {
-          value: currentUserCount,
-          change: previousUserCount > 0 ? ((currentUserCount - previousUserCount) / previousUserCount * 100).toFixed(1) : 0,
-          trend: currentUserCount > previousUserCount ? 'up' : currentUserCount < previousUserCount ? 'down' : 'neutral'
-        };
-        break;
-
-      case 'subscriptions':
-        // Current month subscription rate
-        const totalUsersThisMonth = await Promise.all([
-          require('mongoose').connection.db.collection('drivers').countDocuments(),
-          require('mongoose').connection.db.collection('cargo-owners').countDocuments()
-        ]);
-
-        const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
-          status: 'active',
-          expiresAt: { $gt: now }
-        });
-
-        const totalUsers = totalUsersThisMonth[0] + totalUsersThisMonth[1];
-        const subscriptionRate = totalUsers > 0 ? ((activeSubscriptions / totalUsers) * 100) : 0;
-        
-        // Compare with last month's rate (simplified)
-        const lastMonthRate = subscriptionRate - 2; // Placeholder calculation
-        
-        data = {
-          value: `${subscriptionRate.toFixed(1)}%`,
-          change: (subscriptionRate - lastMonthRate).toFixed(1),
-          trend: subscriptionRate > lastMonthRate ? 'up' : subscriptionRate < lastMonthRate ? 'down' : 'neutral'
-        };
-        break;
-
-      case 'loads':
-        // Load completion rate
-        const completedLoads = await require('../models/load').countDocuments({ status: 'completed' });
-        const totalLoads = await require('../models/load').countDocuments();
-        
-        const completionRate = totalLoads > 0 ? ((completedLoads / totalLoads) * 100) : 0;
-        
-        data = {
-          value: `${completionRate.toFixed(1)}%`,
-          change: 2.3, // Placeholder - calculate actual change
-          trend: 'up'
-        };
-        break;
-
-      default:
-        return res.status(400).json({
-          status: 'error',
-          message: 'Invalid KPI type'
-        });
-    }
-
-    res.json({
-      status: 'success',
-      data
-    });
-
-  } catch (error) {
-    console.error(`KPI ${req.params.type} error:`, error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch KPI data'
-    });
-  }
-});
-
-// @route   GET /api/admin/analytics/top-routes
-// @desc    Get top performing routes
-// @access  Private
-router.get('/analytics/top-routes',adminAuth, async (req, res) => {
-  try {
-    const Load = require('../models/load');
-    
-    const topRoutes = await Load.aggregate([
-      {
-        $match: {
-          status: { $in: ['completed', 'active'] },
-          price: { $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            origin: '$origin',
-            destination: '$destination'
-          },
-          loads: { $sum: 1 },
-          totalRevenue: { $sum: '$price' },
-          averagePrice: { $avg: '$price' }
-        }
-      },
-      {
-        $project: {
-          origin: '$_id.origin',
-          destination: '$_id.destination',
-          loads: 1,
-          totalRevenue: 1,
-          averagePrice: { $round: ['$averagePrice', 2] }
-        }
-      },
-      { $sort: { totalRevenue: -1 } },
-      { $limit: 10 }
-    ]);
-
-    res.json({
-      status: 'success',
-      data: topRoutes
-    });
-
-  } catch (error) {
-    console.error('Top routes error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch top routes data'
-    });
-  }
-});
-
-
-// @route   POST /api/admin/users/:id/verify
-// @desc    Verify a cargo owner or driver
-// POST /api/admin/users/:id/verify
-router.post('/users/:id/verify', adminAuth, async (req, res) => {
-  const { id } = req.params;
-  const { verified = true } = req.body;
-
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Invalid user ID'
-    });
-  }
-
-  if (!req.admin.permissions?.manageUsers) {
-    return res.status(403).json({
-      status: 'error',
-      message: 'Access denied'
-    });
-  }
-
-  try {
-    const db = mongoose.connection.db;
-    const collections = ['drivers', 'cargo-owners'];
-    let updated = null;
-    let userType = null;
-
-    for (const col of collections) {
-      const result = await db.collection(col).findOneAndUpdate(
-        { _id: new mongoose.Types.ObjectId(id) },
-        {
-          $set: {
-            isVerified: verified,
-            updatedAt: new Date(),
-            ...(col === 'drivers'
-              ? { 'driverProfile.verified': verified }
-              : { 'cargoOwnerProfile.verified': verified })
-          }
-        },
-        { returnDocument: 'after' }
-      );
-      if (result.value) {
-        updated = result.value;
-        userType = col === 'drivers' ? 'driver' : 'cargo_owner';
-        break;
-      }
-    }
-
-    if (!updated) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found'
-      });
-    }
-
-    //  Correct audit log
-    try {
-      const auditLogsCollection = db.collection('audit_logs');
-      await auditLogsCollection.insertOne({
-        action: 'user_verify',   
-        entityType: 'user',         
-        entityId: new mongoose.Types.ObjectId(id),
-        adminId: new mongoose.Types.ObjectId(req.admin.id),
-        adminName: req.admin.name,
-        userId: id,    
-        userType: userType,
-        verified: verified,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        createdAt: new Date()
-      });
-    } catch (auditError) {
-      console.warn('Audit log failed:', auditError);
-    }
-
-    return res.json({
-      status: 'success',
-      message: verified ? 'User verified' : 'User unverified',
-      data: updated
-    });
-  } catch (err) {
-    console.error('Verify toggle error:', err);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error'
-    });
-  }
-});
-
-
-
-
-// @route   POST /api/admin/users/:id/status
-// @desc    Update user status (active/suspended)
-router.post('/users/:id/status', adminAuth, async (req, res) => {
-  const { id } = req.params;
-  const { newStatus } = req.body;
-
-  try {
-    const db = mongoose.connection.db;
-    const collections = ['drivers', 'cargo-owners'];
-    let updated = null;
-    let userType = null;
-
-    for (const collectionName of collections) {
-      const result = await db.collection(collectionName).findOneAndUpdate(
-        { _id: new mongoose.Types.ObjectId(id) },
-        { $set: { accountStatus: newStatus, updatedAt: new Date() } },
-        { returnDocument: 'after' }
-      );
-      if (result.value) {
-        updated = result;
-        userType = collectionName === 'drivers' ? 'driver' : 'cargo_owner';
-        break;
-      }
-    }
-
-    if (!updated.value) {
-      return res.status(404).json({ status: 'error', message: 'User not found' });
-    }
-
-    //  Correct audit log
-    try {
-      const auditLogsCollection = db.collection('audit_logs');
-      await auditLogsCollection.insertOne({
-        action: 'user_status_update',   
-        entityType: 'user',         
-        entityId: new mongoose.Types.ObjectId(id),
-        adminId: new mongoose.Types.ObjectId(req.admin.id),
-        adminName: req.admin.name,
-        userId: id,    
-        userType: userType,
-        newStatus: newStatus,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        createdAt: new Date()
-      });
-    } catch (auditError) {
-      console.warn('Audit log failed:', auditError);
-    }
-
-    res.json({
-      status: 'success',
-      message: 'Status updated',
-      data: { user: updated.value }
-    });
-
-  } catch (err) {
-    console.error('Status update error:', err);
-    res.status(500).json({ status: 'error', message: 'Server error updating status' });
-  }
-});
-
-
+  return permissions[role] || permissions.admin;
+}
 
 // @route   POST /api/admin/register
 // @desc    Register new admin (Super Admin only)
@@ -726,45 +211,905 @@ await newAdmin.save();
   }
 });
 
-// Helper function for default permissions
-function getDefaultPermissions(role) {
-  const permissions = {
-    admin: {
-      viewUsers: true,
-      editUsers: true,
-      viewLoads: true,
-      editLoads: true,
-      viewSubscriptions: true,
-      approveSubscriptions: true,
-      viewReports: true,
-      systemSettings: false
-    },
-    moderator: {
-      viewUsers: true,
-      editUsers: false,
-      viewLoads: true,
-      editLoads: false,
-      viewSubscriptions: true,
-      approveSubscriptions: false,
-      viewReports: false,
-      systemSettings: false
-    },
-    super_admin: {
-      viewUsers: true,
-      editUsers: true,
-      viewLoads: true,
-      editLoads: true,
-      viewSubscriptions: true,
-      approveSubscriptions: true,
-      viewReports: true,
-      systemSettings: true,
-      createAdmins: true,
-      deleteAdmins: true
-    }
-  };
 
-  return permissions[role] || permissions.admin;
+// @route   POST /api/admin/login
+// @desc    Admin login
+// @access  Public
+router.post('/login', [
+  body('email')
+  .trim()
+  .normalizeEmail({ gmail_remove_dots: false })
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required')
+], async (req, res) => {
+  try {
+    console.log('Admin login request received:', { 
+      email: req.body.email,
+      origin: req.headers.origin,
+      userAgent: req.headers['user-agent']
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { email, password } = req.body;
+
+    // Check if admin exists
+    const admin = await Admin.findOne({ 
+      email: email.toLowerCase().trim(),
+      isActive: true 
+    }).select('+password');
+
+    console.log("ADMIN = ", admin);
+    
+    if (!admin) {
+      console.log('Admin login failed: Admin not found or inactive for email:', email);
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid credentials or account is disabled' 
+      });
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, admin.password);
+    if (!isMatch) {
+      console.log('Admin login failed: Invalid password for admin:', email);
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid credentials' 
+      });
+    }
+
+    // Update last login
+    admin.lastLogin = new Date();
+    await admin.save();
+
+    console.log('Admin login successful:', { id: admin._id, email: admin.email, role: admin.role });
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+
+      await auditLogsCollection.insertOne({
+        action: 'admin_login',   
+        entityType: 'admin',         
+        entityId: new mongoose.Types.ObjectId(admin._id),
+        adminId: new mongoose.Types.ObjectId(admin._id),
+        adminName: admin.name,
+        adminEmail: admin.email,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+      // Don't fail login if audit log fails
+    }
+
+    // Create JWT payload
+    const payload = {
+      admin: {
+        id: admin._id,
+        role: admin.role,
+        permissions: admin.permissions
+      }
+    };
+
+    // Sign JWT with admin secret (use different secret for admin)
+    const token = jwt.sign(
+      payload, 
+      process.env.JWT_ADMIN_SECRET || process.env.JWT_SECRET, 
+      { expiresIn: '8h' } // Shorter expiry for admin sessions
+    );
+
+    res.json({
+      status: 'success',
+      message: 'Admin login successful',
+      token,
+      admin: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email,
+        phone: admin.phone,
+        role: admin.role,
+        permissions: admin.permissions,
+        lastLogin: admin.lastLogin,
+        createdAt: admin.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Admin login error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error during admin login',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
+  }
+});
+
+// @route   POST /api/admin/forgot-password
+// @desc    Send password reset code to admin email
+// @access  Public
+router.post('/forgot-password', [
+  body('email')
+    .trim()
+    .normalizeEmail({ gmail_remove_dots: false })
+    .isEmail()
+    .withMessage('Please provide a valid email address')
+], async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('Admin password reset request received:', {
+      email: req.body.email,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { email } = req.body;
+
+    // Find admin by email (only active admins)
+    const admin = await Admin.findOne({ 
+      email: email.toLowerCase().trim(),
+      isActive: true 
+    });
+
+    if (admin) {
+      // Generate 6-digit code
+      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      // Update admin record with reset code
+      await Admin.updateOne(
+        { _id: admin._id },
+        {
+          $set: {
+            passwordResetCode: resetCode,
+            passwordResetCodeExpires: resetCodeExpiry,
+            passwordResetRequestedAt: new Date(),
+            resetCodeVerified: false,
+            updatedAt: new Date()
+          },
+          $unset: {
+            passwordResetToken: '',
+            passwordResetExpires: '',
+            resetCodeVerifiedAt: ''
+          }
+        }
+      );
+
+      console.log('Admin reset code stored:', {
+        adminId: admin._id,
+        code: resetCode,
+        expiresAt: resetCodeExpiry,
+        email: admin.email
+      });
+
+      // Send email
+      try {
+        await sendAdminPasswordResetCodeEmail(admin.email, admin.name, resetCode);
+        console.log('Admin password reset email sent successfully');
+      } catch (mailErr) {
+        console.error('Failed to send admin password reset email:', mailErr);
+        // Continue execution - don't fail the request if email fails
+      }
+
+      // Log audit trail
+      try {
+        const db = mongoose.connection.db;
+        const auditLogsCollection = db.collection('audit_logs');
+
+        await auditLogsCollection.insertOne({
+          action: 'admin_password_reset_requested',
+          entityType: 'admin',
+          entityId: new mongoose.Types.ObjectId(admin._id),
+          adminId: new mongoose.Types.ObjectId(admin._id),
+          adminName: admin.name,
+          adminEmail: admin.email,
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          createdAt: new Date()
+        });
+      } catch (auditError) {
+        console.warn('Audit log failed for admin password reset:', auditError);
+      }
+
+      res.json({
+        status: 'success',
+        message: 'A 6-digit verification code has been sent to your email address.',
+        expiresIn: '10 minutes'
+      });
+    } else {
+      console.log('Admin password reset requested for non-existent/inactive email:', email);
+      
+      // Return specific message for non-existent admin
+      return res.status(404).json({
+        status: 'error',
+        message: 'No active admin account found with this email address.',
+        suggestion: 'Please verify your email address or contact a super admin.'
+      });
+    }
+  } catch (error) {
+    console.error('Admin forgot password error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to process password reset request. Please try again later.'
+    });
+  }
+});
+
+// @route   POST /api/admin/verify-reset-code
+// @desc    Verify admin password reset code
+// @access  Public
+router.post('/verify-reset-code', [
+  body('email')
+    .trim()
+    .normalizeEmail({ gmail_remove_dots: false })
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('code')
+    .trim()
+    .isLength({ min: 6, max: 6 })
+    .isNumeric()
+    .withMessage('Please provide a valid 6-digit verification code')
+], async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('Admin reset code verification request received:', {
+      email: req.body.email,
+      code: req.body.code,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { email, code } = req.body;
+
+    // Find admin with valid reset code
+    const admin = await Admin.findOne({
+      email: email.toLowerCase().trim(),
+      passwordResetCode: code.toString(),
+      passwordResetCodeExpires: { $gt: new Date() },
+      isActive: true
+    });
+
+    console.log('Admin database query results:', {
+      email: email.toLowerCase().trim(),
+      code: code.toString(),
+      adminFound: !!admin,
+      currentTime: new Date()
+    });
+
+    // Debug logging for failed verification
+    if (!admin) {
+      const adminAny = await Admin.findOne({ email: email.toLowerCase().trim() });
+      if (adminAny) {
+        console.log('Admin found but code verification failed:', {
+          storedCode: adminAny.passwordResetCode,
+          submittedCode: code.toString(),
+          codeMatch: adminAny.passwordResetCode === code.toString(),
+          storedExpiry: adminAny.passwordResetCodeExpires,
+          currentTime: new Date(),
+          isExpired: adminAny.passwordResetCodeExpires ? new Date() > adminAny.passwordResetCodeExpires : 'no expiry set',
+          isActive: adminAny.isActive
+        });
+      }
+    }
+
+    if (!admin) {
+      console.log('Invalid admin reset code verification attempt:', {
+        email,
+        code,
+        processingTime: `${Date.now() - startTime}ms`
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or expired verification code'
+      });
+    }
+
+    // Generate secure reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const hashedResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    // Update admin with reset token and mark code as verified
+    await Admin.updateOne(
+      { _id: admin._id },
+      {
+        $set: {
+          passwordResetToken: hashedResetToken,
+          passwordResetExpires: resetTokenExpiry,
+          resetCodeVerified: true,
+          resetCodeVerifiedAt: new Date(),
+          updatedAt: new Date()
+        },
+        $unset: {
+          passwordResetCode: "",
+          passwordResetCodeExpires: ""
+        }
+      }
+    );
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+
+      await auditLogsCollection.insertOne({
+        action: 'admin_reset_code_verified',
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(admin._id),
+        adminId: new mongoose.Types.ObjectId(admin._id),
+        adminName: admin.name,
+        adminEmail: admin.email,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin code verification:', auditError);
+    }
+
+    console.log('Admin reset code verified successfully:', {
+      adminId: admin._id,
+      email: admin.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Verification code confirmed successfully',
+      resetToken: resetToken, // Send unhashed token to client
+      email: admin.email,
+      expiresIn: '15 minutes'
+    });
+
+  } catch (error) {
+    console.error('Admin verify reset code error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body.email,
+      code: req.body.code,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to verify reset code. Please try again later.'
+    });
+  }
+});
+
+// @route   POST /api/admin/reset-password
+// @desc    Reset admin password with token
+// @access  Public
+router.post('/reset-password', [
+  body('token')
+    .notEmpty()
+    .withMessage('Reset token is required'),
+  body('email')
+    .trim()
+    .normalizeEmail({ gmail_remove_dots: false })
+    .isEmail()
+    .withMessage('Please provide a valid email address'),
+  body('password')
+    .isLength({ min: 8, max: 128 })
+    .withMessage('Password must be between 8 and 128 characters long')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character')
+], async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('Admin password reset submission received:', {
+      email: req.body.email,
+      hasToken: !!req.body.token,
+      hasPassword: !!req.body.password,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log('Validation errors in admin reset-password:', errors.array());
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array().map(error => ({
+          field: error.path || error.param,
+          message: error.msg
+        }))
+      });
+    }
+
+    const { token, email, password } = req.body;
+    
+    // Hash the provided token to match stored hash
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    console.log('Searching for admin with reset token:', {
+      email: email.toLowerCase().trim(),
+      hashedTokenLength: hashedToken.length,
+      currentTime: new Date()
+    });
+
+    // Find admin with valid reset token and verified code
+    const admin = await Admin.findOne({
+      email: email.toLowerCase().trim(),
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: new Date() },
+      resetCodeVerified: true,
+      isActive: true
+    });
+
+    console.log('Admin search results:', {
+      adminFound: !!admin
+    });
+
+    // Debug logging for failed reset
+    if (!admin) {
+      const adminAny = await Admin.findOne({ email: email.toLowerCase().trim() });
+      if (adminAny) {
+        console.log('Admin exists but reset conditions not met:', {
+          hasResetToken: !!adminAny.passwordResetToken,
+          storedToken: adminAny.passwordResetToken?.substring(0, 10) + '...',
+          submittedHashedToken: hashedToken.substring(0, 10) + '...',
+          tokenMatch: adminAny.passwordResetToken === hashedToken,
+          resetExpires: adminAny.passwordResetExpires,
+          currentTime: new Date(),
+          isExpired: adminAny.passwordResetExpires ? new Date() > adminAny.passwordResetExpires : 'no expiry set',
+          resetCodeVerified: adminAny.resetCodeVerified,
+          isActive: adminAny.isActive
+        });
+      }
+    }
+
+    if (!admin) {
+      console.log('No admin found matching reset criteria:', {
+        email: email.toLowerCase().trim(),
+        processingTime: `${Date.now() - startTime}ms`
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or expired reset token, or verification code not confirmed'
+      });
+    }
+
+    // Hash new password with higher salt rounds for admin
+    console.log('Hashing new admin password...');
+    const saltRounds = process.env.NODE_ENV === 'production' ? 14 : 12;
+    const salt = await bcrypt.genSalt(saltRounds);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    console.log('Updating admin password in database...');
+    
+    // Update admin with new password and clear all reset-related fields
+    const updateResult = await Admin.updateOne(
+      { _id: admin._id },
+      {
+        $set: {
+          password: hashedPassword,
+          updatedAt: new Date(),
+          passwordChangedAt: new Date()
+        },
+        $unset: {
+          passwordResetToken: "",
+          passwordResetExpires: "",
+          passwordResetRequestedAt: "",
+          resetCodeVerified: "",
+          resetCodeVerifiedAt: "",
+          passwordResetCode: "",
+          passwordResetCodeExpires: ""
+        }
+      }
+    );
+
+    console.log('Admin password update result:', {
+      matchedCount: updateResult.matchedCount,
+      modifiedCount: updateResult.modifiedCount,
+      acknowledged: updateResult.acknowledged
+    });
+
+    if (updateResult.matchedCount === 0) {
+      throw new Error('Failed to update admin password - admin not found during update');
+    }
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+
+      await auditLogsCollection.insertOne({
+        action: 'admin_password_reset_completed',
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(admin._id),
+        adminId: new mongoose.Types.ObjectId(admin._id),
+        adminName: admin.name,
+        adminEmail: admin.email,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin password reset completion:', auditError);
+    }
+
+    // Send password change confirmation email
+    try {
+      await sendAdminPasswordChangeConfirmationEmail(admin.email, admin.name);
+    } catch (emailError) {
+      console.error('Failed to send admin confirmation email:', emailError);
+      // Continue - don't fail the request for email issues
+    }
+
+    console.log('Admin password reset completed successfully:', {
+      adminId: admin._id,
+      email: admin.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    res.json({
+      status: 'success',
+      message: 'Password has been reset successfully. You can now sign in with your new password.'
+    });
+
+  } catch (error) {
+    console.error('Admin reset password error:', {
+      error: error.message,
+      stack: error.stack,
+      email: req.body?.email,
+      processingTime: `${Date.now() - startTime}ms`
+    });
+
+    // Handle specific error types
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Password validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+
+    if (error.message.includes('Database')) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Database service temporarily unavailable. Please try again later.'
+      });
+    }
+
+    if (error.message.includes('Failed to update admin password')) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Failed to update password. Please try the reset process again.'
+      });
+    }
+
+    // Generic server error
+    const errorId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'Unable to reset password. Please try again later.',
+      errorId,
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message,
+        stack: error.stack 
+      })
+    });
+  }
+});
+
+// Helper function to send admin password reset code email
+async function sendAdminPasswordResetCodeEmail(email, name, code) {
+  try {
+    const transporter = createEmailTransporter();
+    
+    const mailOptions = {
+      from: `"Infinite Cargo Admin" <${process.env.GMAIL_EMAIL}>`,
+      to: email,
+      subject: '🔐 Admin Password Reset Code - Infinite Cargo',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Admin Password Reset</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 40px 30px; text-align: center;">
+              <div style="background-color: rgba(255, 255, 255, 0.2); width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                <div style="color: white; font-size: 36px; font-weight: bold;">🛡️</div>
+              </div>
+              <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Admin Password Reset</h1>
+              <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0; font-size: 16px;">Secure Admin Portal Access</p>
+            </div>
+
+            <!-- Content -->
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #1e293b; margin: 0 0 20px; font-size: 24px; font-weight: 600;">Hello ${name}!</h2>
+              
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 25px; font-size: 16px;">
+                A password reset has been requested for your Infinite Cargo Admin account.
+              </p>
+
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 30px; font-size: 16px;">
+                Use the verification code below to proceed with your password reset:
+              </p>
+
+              <!-- Verification Code -->
+              <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 12px; padding: 30px; text-align: center; margin: 30px 0; border: 2px dashed #f59e0b;">
+                <p style="color: #92400e; margin: 0 0 15px; font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">Admin Verification Code</p>
+                <div style="background-color: #ffffff; border-radius: 8px; padding: 20px; display: inline-block; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+                  <span style="font-family: 'Courier New', monospace; font-size: 36px; font-weight: 700; color: #dc2626; letter-spacing: 8px;">${code}</span>
+                </div>
+                <p style="color: #92400e; margin: 15px 0 0; font-size: 12px;">This code expires in 10 minutes</p>
+              </div>
+
+              <!-- Instructions -->
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
+                <h3 style="color: #92400e; margin: 0 0 10px; font-size: 16px; font-weight: 600;">Next Steps:</h3>
+                <ol style="color: #92400e; margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6;">
+                  <li>Go back to the admin password reset page</li>
+                  <li>Enter this 6-digit verification code</li>
+                  <li>Create your new secure password</li>
+                  <li>Sign in to the admin portal</li>
+                </ol>
+              </div>
+
+              <!-- Security Notice -->
+              <div style="background-color: #fee2e2; border: 1px solid #fecaca; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                <h3 style="color: #dc2626; margin: 0 0 10px; font-size: 16px; font-weight: 600;">🚨 Security Alert</h3>
+                <p style="color: #dc2626; margin: 0; font-size: 14px; line-height: 1.5;">
+                  This is an admin account password reset. If you did not request this, please contact the super admin immediately. 
+                  All admin activities are logged and monitored.
+                </p>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+              <h3 style="color: #1e293b; margin: 0 0 10px; font-size: 18px; font-weight: 700;">Infinite Cargo - Admin Portal</h3>
+              <p style="color: #64748b; margin: 0; font-size: 14px;">Secure Administrative Access</p>
+              <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0; line-height: 1.5;">
+                This is an automated security message. Do not reply to this email.<br>
+                © 2024 Infinite Cargo. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Admin password reset code email sent successfully to:', email);
+    
+  } catch (error) {
+    console.error('Failed to send admin password reset code email:', error);
+    throw error;
+  }
 }
+
+// Helper function to send admin password change confirmation email
+async function sendAdminPasswordChangeConfirmationEmail(email, name) {
+  try {
+    const transporter = createEmailTransporter();
+    
+    const mailOptions = {
+      from: `"Infinite Cargo Admin" <${process.env.GMAIL_EMAIL}>`,
+      to: email,
+      subject: '✅ Admin Password Successfully Changed - Infinite Cargo',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Admin Password Changed</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center;">
+              <div style="background-color: rgba(255, 255, 255, 0.2); width: 80px; height: 80px; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                <div style="color: white; font-size: 36px; font-weight: bold;">🛡️</div>
+              </div>
+              <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Admin Password Changed</h1>
+              <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0; font-size: 16px;">Your admin account is now secure</p>
+            </div>
+
+            <!-- Content -->
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #1e293b; margin: 0 0 20px; font-size: 24px; font-weight: 600;">Hello ${name}!</h2>
+              
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 25px; font-size: 16px;">
+                Your admin password has been successfully changed for your Infinite Cargo Admin Portal account.
+              </p>
+
+              <p style="color: #64748b; line-height: 1.6; margin: 0 0 30px; font-size: 16px;">
+                You can now sign in to the admin portal with your new password.
+              </p>
+
+              <!-- Security Notice -->
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
+                <h3 style="color: #92400e; margin: 0 0 10px; font-size: 16px; font-weight: 600;">🔒 Security Notice</h3>
+                <p style="color: #92400e; margin: 0; font-size: 14px; line-height: 1.5;">
+                  If you did not make this change, please contact the super admin immediately. This action has been logged for security purposes.
+                </p>
+              </div>
+
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="https://infinitecargo.co.ke/admin/login" style="display: inline-block; padding: 15px 30px; background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                  Access Admin Portal
+                </a>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+              <h3 style="color: #1e293b; margin: 0 0 10px; font-size: 18px; font-weight: 700;">Infinite Cargo - Admin Portal</h3>
+              <p style="color: #64748b; margin: 0; font-size: 14px;">Secure Administrative Access</p>
+              <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0; line-height: 1.5;">
+                © 2024 Infinite Cargo. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Admin password change confirmation email sent successfully to:', email);
+    
+  } catch (error) {
+    console.error('Failed to send admin password change confirmation email:', error);
+    // Don't throw error - email failure shouldn't fail password reset
+  }
+}
+
+// @route   GET /api/admin/analytics/activity-summary
+// @desc    Get activity summary for today
+// @access  Private
+router.get('/analytics/activity-summary',adminAuth, async (req, res) => {
+  try {
+    const today = new Date();
+    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
+    const endOfToday = new Date(today.setHours(23, 59, 59, 999));
+
+    // Today's logins (you might need to track login events)
+    const todayLogins = await require('mongoose').connection.db.collection('audit_logs').countDocuments({
+      action: 'admin_login',
+      createdAt: { $gte: startOfToday, $lte: endOfToday }
+    });
+
+    // New registrations today
+    const [newDrivers, newCargoOwners] = await Promise.all([
+      require('mongoose').connection.db.collection('drivers').countDocuments({
+        createdAt: { $gte: startOfToday, $lte: endOfToday }
+      }),
+      require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+        createdAt: { $gte: startOfToday, $lte: endOfToday }
+      })
+    ]);
+
+    // Active subscriptions
+    const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
+      status: 'active',
+      expiresAt: { $gt: new Date() }
+    });
+
+    // System health calculation (simplified)
+    const totalUsers = await Promise.all([
+      require('mongoose').connection.db.collection('drivers').countDocuments(),
+      require('mongoose').connection.db.collection('cargo-owners').countDocuments()
+    ]);
+
+    const userCount = totalUsers[0] + totalUsers[1];
+    let systemHealth = 'good';
+    
+    if (userCount < 100) systemHealth = 'warning';
+    if (activeSubscriptions / userCount < 0.1) systemHealth = 'critical';
+
+    res.json({
+      status: 'success',
+      data: {
+        todayLogins,
+        newRegistrations: newDrivers + newCargoOwners,
+        activeSubscriptions,
+        systemHealth
+      }
+    });
+
+  } catch (error) {
+    console.error('Activity summary error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch activity summary'
+    });
+  }
+});
+
+// @route   GET /api/admin/audit-logs
+// @desc    Fetch audit logs
+router.get('/audit-logs', adminAuth, async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const auditLogsCollection = db.collection('audit_logs');
+
+    const { limit = 10 } = req.query;
+    const logs = await auditLogsCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .toArray();
+
+    res.json({
+      status: 'success',
+      data: logs
+    });
+  } catch (error) {
+    console.error('Audit logs fetch error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch audit logs'
+    });
+  }
+});
+
 
 // @route   GET /api/admin/analytics/charts
 // @desc    Get chart data for dashboard
@@ -2149,6 +2494,58 @@ router.get('/analytics/performance', adminAuth, async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/analytics/top-routes
+// @desc    Get top performing routes
+// @access  Private
+router.get('/analytics/top-routes',adminAuth, async (req, res) => {
+  try {
+    const Load = require('../models/load');
+    
+    const topRoutes = await Load.aggregate([
+      {
+        $match: {
+          status: { $in: ['completed', 'active'] },
+          price: { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            origin: '$origin',
+            destination: '$destination'
+          },
+          loads: { $sum: 1 },
+          totalRevenue: { $sum: '$price' },
+          averagePrice: { $avg: '$price' }
+        }
+      },
+      {
+        $project: {
+          origin: '$_id.origin',
+          destination: '$_id.destination',
+          loads: 1,
+          totalRevenue: 1,
+          averagePrice: { $round: ['$averagePrice', 2] }
+        }
+      },
+      { $sort: { totalRevenue: -1 } },
+      { $limit: 10 }
+    ]);
+
+    res.json({
+      status: 'success',
+      data: topRoutes
+    });
+
+  } catch (error) {
+    console.error('Top routes error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch top routes data'
+    });
+  }
+});
+
 // @route   GET /api/admin/analytics/export
 // @desc    Export analytics data in various formats
 // @access  Private
@@ -2320,8 +2717,6 @@ router.post('/dashboard-stats/refresh', adminAuth, async (req, res) => {
     });
   }
 });
-
-
 
 // @route   GET /api/admin/users
 // @desc    Get users with pagination and search
@@ -3899,6 +4294,212 @@ router.get('/subscriptions',
     }
   }
 );
+
+// @route   GET /api/admin/analytics/kpi/:type
+// @desc    Get specific KPI data
+// @access  Private
+router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
+  try {
+    const { type } = req.params;
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    
+    let data = { value: 0, change: 0, trend: 'neutral' };
+
+    switch (type) {
+      case 'revenue':
+        // Current month revenue
+        const currentRevenue = await require('../models/subscription').Subscription.aggregate([
+          {
+            $match: {
+              createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) },
+              paymentStatus: 'completed'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$price' } } }
+        ]);
+
+        // Previous month revenue
+        const previousRevenue = await require('../models/subscription').Subscription.aggregate([
+          {
+            $match: {
+              createdAt: { 
+                $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+                $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+              },
+              paymentStatus: 'completed'
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$price' } } }
+        ]);
+
+        const currentRev = currentRevenue[0]?.total || 0;
+        const previousRev = previousRevenue[0]?.total || 0;
+        
+        data = {
+          value: currentRev,
+          change: previousRev > 0 ? ((currentRev - previousRev) / previousRev * 100).toFixed(1) : 0,
+          trend: currentRev > previousRev ? 'up' : currentRev < previousRev ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'users':
+        // Current month new users
+        const currentUsers = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments({
+            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
+          }),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+            createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }
+          })
+        ]);
+
+        // Previous month new users
+        const previousUsers = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments({
+            createdAt: { 
+              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+            }
+          }),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments({
+            createdAt: { 
+              $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+              $lt: new Date(now.getFullYear(), now.getMonth(), 1)
+            }
+          })
+        ]);
+
+        const currentUserCount = currentUsers[0] + currentUsers[1];
+        const previousUserCount = previousUsers[0] + previousUsers[1];
+        
+        data = {
+          value: currentUserCount,
+          change: previousUserCount > 0 ? ((currentUserCount - previousUserCount) / previousUserCount * 100).toFixed(1) : 0,
+          trend: currentUserCount > previousUserCount ? 'up' : currentUserCount < previousUserCount ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'subscriptions':
+        // Current month subscription rate
+        const totalUsersThisMonth = await Promise.all([
+          require('mongoose').connection.db.collection('drivers').countDocuments(),
+          require('mongoose').connection.db.collection('cargo-owners').countDocuments()
+        ]);
+
+        const activeSubscriptions = await require('../models/subscription').Subscription.countDocuments({
+          status: 'active',
+          expiresAt: { $gt: now }
+        });
+
+        const totalUsers = totalUsersThisMonth[0] + totalUsersThisMonth[1];
+        const subscriptionRate = totalUsers > 0 ? ((activeSubscriptions / totalUsers) * 100) : 0;
+        
+        // Compare with last month's rate (simplified)
+        const lastMonthRate = subscriptionRate - 2; // Placeholder calculation
+        
+        data = {
+          value: `${subscriptionRate.toFixed(1)}%`,
+          change: (subscriptionRate - lastMonthRate).toFixed(1),
+          trend: subscriptionRate > lastMonthRate ? 'up' : subscriptionRate < lastMonthRate ? 'down' : 'neutral'
+        };
+        break;
+
+      case 'loads':
+        // Load completion rate
+        const completedLoads = await require('../models/load').countDocuments({ status: 'completed' });
+        const totalLoads = await require('../models/load').countDocuments();
+        
+        const completionRate = totalLoads > 0 ? ((completedLoads / totalLoads) * 100) : 0;
+        
+        data = {
+          value: `${completionRate.toFixed(1)}%`,
+          change: 2.3, // Placeholder - calculate actual change
+          trend: 'up'
+        };
+        break;
+
+      default:
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid KPI type'
+        });
+    }
+
+    res.json({
+      status: 'success',
+      data
+    });
+
+  } catch (error) {
+    console.error(`KPI ${req.params.type} error:`, error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch KPI data'
+    });
+  }
+});
+
+// @route   POST /api/admin/users/:id/status
+// @desc    Update user status (active/suspended)
+router.post('/users/:id/status', adminAuth, async (req, res) => {
+  const { id } = req.params;
+  const { newStatus } = req.body;
+
+  try {
+    const db = mongoose.connection.db;
+    const collections = ['drivers', 'cargo-owners'];
+    let updated = null;
+    let userType = null;
+
+    for (const collectionName of collections) {
+      const result = await db.collection(collectionName).findOneAndUpdate(
+        { _id: new mongoose.Types.ObjectId(id) },
+        { $set: { accountStatus: newStatus, updatedAt: new Date() } },
+        { returnDocument: 'after' }
+      );
+      if (result.value) {
+        updated = result;
+        userType = collectionName === 'drivers' ? 'driver' : 'cargo_owner';
+        break;
+      }
+    }
+
+    if (!updated.value) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    //  Correct audit log
+    try {
+      const auditLogsCollection = db.collection('audit_logs');
+      await auditLogsCollection.insertOne({
+        action: 'user_status_update',   
+        entityType: 'user',         
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        userId: id,    
+        userType: userType,
+        newStatus: newStatus,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Status updated',
+      data: { user: updated.value }
+    });
+
+  } catch (err) {
+    console.error('Status update error:', err);
+    res.status(500).json({ status: 'error', message: 'Server error updating status' });
+  }
+});
 
 
 // @route   POST /api/admin/users/:id/suspend

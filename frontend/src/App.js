@@ -31,6 +31,7 @@ const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 // Admin Pages
 const AdminLogin = lazy(() => import('./components/admin/AdminLogin'));
 const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'));
+const AdminForgotPassword = lazy(() => import('./components/admin/AdminForgotPassword'));
 
 // Dashboard Pages
 const DriverDashboard = lazy(() => import('./components/driver/DriverDashboard'));
@@ -225,6 +226,21 @@ function App() {
                       <AdminLogin />
                     </>
                   } 
+                />
+
+                <Route
+                  path="/admin/forgot-password"
+                  element={
+                    <>  
+                      <SEOHelmet
+                        title="Admin Forgot Password"
+                        description="Reset your Infinite Cargo admin account password. Enter your email to receive instructions for resetting your password securely."
+                        keywords="admin forgot password, admin reset password, admin account recovery"  
+                        canonicalUrl="https://infinitecargo.co.ke/admin/forgot-password"
+                      />
+                      <AdminForgotPassword />
+                    </>
+                  }
                 />
                 
                 <Route 
