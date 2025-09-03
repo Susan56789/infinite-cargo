@@ -19,16 +19,15 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     setError(null);
     
     if (!isAuthenticated || !apiCall || loading || !authReady) {
-      console.log('Fetch blocked:', { isAuthenticated, hasApiCall: !!apiCall, loading, authReady });
       return;
     }
     
     try {
       setLoading(true);
-      console.log('Fetching notifications...');
+     
       
       const response = await apiCall('/admin/notifications/summary');
-      console.log('Notification response:', response);
+     
       
       if (response && response.status === 'success') {
         const count = response.data?.summary?.unread || 0;
@@ -36,7 +35,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         
         setNotificationCount(count);
         setRecentNotifications(notifications);
-        console.log('Notifications loaded:', { count, notifications: notifications.length });
+        
       } else {
         console.warn('Unexpected response format:', response);
         setNotificationCount(0);
@@ -52,7 +51,6 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         error.message.includes('401') ||
         error.message.includes('Unauthorized')
       )) {
-        console.log('Auth error detected, clearing notification state');
         setNotificationCount(0);
         setRecentNotifications([]);
         setAuthReady(false);
@@ -61,7 +59,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         return;
       }
       
-      // For other errors, retry once after a delay
+      
       if (retryCount < 1) {
         console.log('Retrying notification fetch...');
         setTimeout(() => {
@@ -114,9 +112,9 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle authentication state changes with improved logic
+  
   useEffect(() => {
-    console.log('Auth state changed:', { isAuthenticated, hasApiCall: !!apiCall });
+   
     
     // Clear timeouts on cleanup
     const cleanup = () => {
@@ -142,47 +140,43 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       return;
     }
 
-    // When authentication becomes available, set up initialization
+    
     if (!authReady && isAuthenticated && apiCall) {
       cleanup();
       
-      console.log('Setting up auth initialization...');
-      // Shorter delay for better UX
+  
       initTimeoutRef.current = setTimeout(() => {
-        console.log('Auth ready, initializing notifications...');
+        
         setAuthReady(true);
         setHasInitialized(true);
-      }, 1000); // Reduced from 2000ms to 1000ms
+      }, 1000);
     }
 
     return cleanup;
   }, [isAuthenticated, apiCall]);
 
-  // Fetch notifications when auth is ready
+  
   useEffect(() => {
     if (authReady && hasInitialized && isAuthenticated && apiCall) {
-      console.log('Initial notification fetch...');
+      
       fetchNotifications();
     }
   }, [authReady, hasInitialized, isAuthenticated, apiCall]);
 
-  // Set up polling for real-time updates with better conditions
   useEffect(() => {
     if (!authReady || !hasInitialized || !isAuthenticated || !apiCall) {
       return;
     }
 
-    console.log('Setting up notification polling...');
-    // Set up polling for real-time updates (every 30 seconds for better responsiveness)
+  
     const interval = setInterval(() => {
       if (isAuthenticated && apiCall && authReady && !loading) {
-        console.log('Polling notifications...');
+        
         fetchNotifications();
       }
-    }, 30000); // Reduced from 60000ms to 30000ms
-
+    }, 30000); 
     return () => {
-      console.log('Clearing notification polling...');
+     
       clearInterval(interval);
     };
   }, [authReady, hasInitialized, isAuthenticated, apiCall]);
@@ -225,30 +219,25 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     }
   };
 
-  // Handle manual refresh with better error handling
+  
   const handleManualRefresh = async () => {
     if (!isAuthenticated || !apiCall) {
-      console.log('Manual refresh blocked - not authenticated');
+     
       return;
     }
 
     if (!authReady) {
-      console.log('Manual refresh blocked - auth not ready');
       return;
     }
-
-    console.log('Manual refresh triggered');
     await fetchNotifications();
   };
 
-  // Handle dropdown toggle with refresh
+ 
   const handleDropdownToggle = () => {
     const newShowState = !showDropdown;
     setShowDropdown(newShowState);
     
-    // Only refresh if opening dropdown and auth is ready
     if (newShowState && isAuthenticated && apiCall && authReady && !loading) {
-      console.log('Dropdown opened, refreshing notifications...');
       handleManualRefresh();
     }
   };
@@ -269,17 +258,6 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       console.error('Failed to mark all as read:', error);
     }
   };
-
-  // Debug info (remove in production)
-  console.log('AdminHeader render state:', {
-    isAuthenticated,
-    authReady,
-    hasInitialized,
-    loading,
-    notificationCount,
-    recentNotifications: recentNotifications.length,
-    error
-  });
 
   return (
     <div className="bg-white shadow-sm border-b px-6 py-3 flex justify-between items-center mb-6">

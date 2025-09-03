@@ -656,23 +656,19 @@ router.post('/register',adminAuth, [
       });
     }
 
-    // CRITICAL FIX: Hash password before saving
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
     // Create new admin with hashed password
     const newAdmin = new Admin({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      phone: phone.trim(),
-      password: hashedPassword, // Use hashed password
-      role,
-      permissions: getDefaultPermissions(role),
-      isActive: true,
-      createdBy: req.admin.id
-    });
+  name: name.trim(),
+  email: email.toLowerCase().trim(),
+  phone: phone.trim(),
+  password: password, 
+  role,
+  permissions: getDefaultPermissions(role),
+  isActive: true,
+  createdBy: req.admin.id
+});
 
-    await newAdmin.save();
+await newAdmin.save();
 
     // Log audit trail
     try {
