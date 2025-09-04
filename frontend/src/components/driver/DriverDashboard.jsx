@@ -605,7 +605,7 @@ const DriverDashboard = () => {
     fetchUserProfile,
     fetchDriverStats,
     fetchActiveJobs,
-    fetchAvailableLoads,  // Now correctly ordered
+    fetchAvailableLoads,  
     fetchDriverBids,
     fetchNotifications
   ]); 
@@ -862,7 +862,7 @@ const DriverDashboard = () => {
 
       // Refresh data and show success message
       await fetchDriverBids();
-      await fetchAvailableLoads();
+      await fetchAvailableLoads(); // Don't pass user data here since it's not location-dependent
       
       setSuccessMessage('Bid placed successfully!');
       setTimeout(() => {
