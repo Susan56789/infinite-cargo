@@ -37,7 +37,7 @@ const useOutsideClick = (ref, callback) => {
   }, [ref, callback]);
 };
 
-// BidForm Component - Updated to match the structure expected by DriverDashboard
+// BidForm Component 
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   const [bidData, setBidData] = useState({
     bidAmount: '',
@@ -366,7 +366,7 @@ const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDat
   );
 };
 
-// LoadCard Component - Updated to use modal for details
+// LoadCard Component
 const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate, isAuthenticated }) => {
   const [showBidForm, setShowBidForm] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
