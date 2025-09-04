@@ -346,23 +346,21 @@ const DriverDashboard = () => {
       status: 'active'
     });
 
+    // Create stable references for user data to prevent infinite re-renders
+    const currentUser = user; // Capture current user state
+    
     // Add location if available - use stable references
-    const userLocation = user?.location;
-    const userLat = user?.coordinates?.latitude;
-    const userLng = user?.coordinates?.longitude;
-    const userVehicleType = user?.vehicleType;
-
-    if (userLocation) {
-      params.append('location', userLocation);
-    } else if (userLat && userLng) {
-      params.append('lat', userLat.toString());
-      params.append('lng', userLng.toString());
+    if (currentUser?.location) {
+      params.append('location', currentUser.location);
+    } else if (currentUser?.coordinates?.latitude && currentUser?.coordinates?.longitude) {
+      params.append('lat', currentUser.coordinates.latitude.toString());
+      params.append('lng', currentUser.coordinates.longitude.toString());
       params.append('radius', '50'); // 50km radius
     }
 
     // Add vehicle type filter
-    if (userVehicleType) {
-      params.append('vehicleType', userVehicleType);
+    if (currentUser?.vehicleType) {
+      params.append('vehicleType', currentUser.vehicleType);
     }
 
     const response = await fetch(
@@ -406,13 +404,111 @@ const DriverDashboard = () => {
   } finally {
     setLoadingStates(prev => ({ ...prev, loads: false }));
   }
+}, [getAuthHeaders, handleApiError]); 
+
+  // Fetch all dashboard data
+const fetchDashboardData = useCallback(async (showLoader = true) => {
+  if (showLoader) {
+    setLoading(true);
+  } else {
+    setRefreshing(true);
+  }
+  
+  setError('');
+  
+  try {
+    // OPTION 1: Try the comprehensive dashboard endpoint first
+    try {
+      const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
+        headers: getAuthHeaders()
+      });
+
+      if (dashboardResponse.ok && !(await handleApiError(dashboardResponse, 'fetchDashboardData'))) {
+        const dashboardResult = await dashboardResponse.json();
+        const data = dashboardResult.data;
+        
+        // Update user info
+        if (data.driver) {
+          setUser(data.driver);
+          authManager.setAuth(
+            authManager.getToken(), 
+            data.driver, 
+            localStorage.getItem('infiniteCargoRememberMe') === 'true'
+          );
+        }
+
+        let myBidsFromDashboard = [];
+        if (data.myBids && Array.isArray(data.myBids)) {
+          myBidsFromDashboard = data.myBids;
+        } else if (data.bids && Array.isArray(data.bids)) {
+          myBidsFromDashboard = data.bids;
+        }
+
+        
+        setDashboardData(prev => ({
+          ...prev,
+          activeBookings: data.activeBookings || [],
+          availableLoads: data.availableLoads || [],
+          completedBookings: data.completedBookings || [],
+          myBids: myBidsFromDashboard,
+          stats: {
+            totalJobs: data.stats?.totalJobs || 0,
+            activeJobs: data.stats?.activeJobs || 0,
+            completedJobs: data.stats?.completedJobs || 0,
+            completionRate: data.stats?.completionRate || data.stats?.successRate || 0,
+            successRate: data.stats?.successRate || data.stats?.completionRate || 0,
+            rating: Math.round((data.stats?.rating || data.stats?.averageRating || 0) * 10) / 10,
+            totalBids: data.stats?.totalBids || 0,
+            acceptedBids: data.stats?.acceptedBids || 0,
+            monthlyEarnings: data.stats?.monthlyEarnings || data.earnings?.thisMonth || 0
+          },
+          earnings: {
+            thisMonth: data.earnings?.thisMonth || 0,
+            lastMonth: data.earnings?.lastMonth || 0,
+            total: data.earnings?.total || 0
+          }
+        }));
+
+        setNotifications(data.notifications || []);
+        
+        if (myBidsFromDashboard.length === 0) {
+          await fetchDriverBids();
+        }
+        
+        return; 
+
+      } else {
+        console.log('[DEBUG] Dashboard endpoint failed or auth error, falling back...');
+      }
+    } catch (dashboardError) {
+      console.log('[DEBUG] Dashboard endpoint error:', dashboardError);
+    }
+
+  
+    await Promise.all([
+      fetchUserProfile(),
+      fetchDriverStats(),
+      fetchActiveJobs(),
+      fetchAvailableLoads(), 
+      fetchDriverBids(),
+      fetchNotifications()
+    ]);
+
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    setError('Failed to load dashboard data');
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
 }, [
   getAuthHeaders, 
-  handleApiError, 
-  user?.location, 
-  user?.coordinates?.latitude,
-  user?.coordinates?.longitude,
-  user?.vehicleType
+  handleApiError,
+  fetchUserProfile,
+  fetchDriverStats,
+  fetchActiveJobs,
+  fetchDriverBids,
+  fetchNotifications
 ]); 
 
   const fetchDriverBids = useCallback(async () => {
@@ -429,7 +525,7 @@ const DriverDashboard = () => {
     if (response.ok) {
       const bidsData = await response.json();
       
-      //  Extract bids exactly like BidsPage does
+   
       let bids = [];
       if (bidsData.data?.bids) {
         bids = bidsData.data.bids;
@@ -442,7 +538,7 @@ const DriverDashboard = () => {
       }
 
     
-      // Format bids to ensure consistent structure (matching BidsPage format)
+      // Format bids for consistent display
       const formattedBids = bids.map(bid => ({
         _id: bid._id,
         loadId: bid.loadId,
@@ -462,7 +558,7 @@ const DriverDashboard = () => {
         acceptedAt: bid.acceptedAt,
         expiresAt: bid.expiresAt,
         
-        // Load information - handle multiple possible structures
+        // Load information 
         load: bid.load,
         loadInfo: bid.loadInfo || bid.load,
         loadDetails: bid.loadDetails,
@@ -478,7 +574,7 @@ const DriverDashboard = () => {
       
       setDashboardData(prev => ({
         ...prev,
-        myBids: formattedBids // This should now match what BidsPage gets
+        myBids: formattedBids 
       }));
       
     } else {
@@ -525,119 +621,6 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-const fetchDashboardData = useCallback(async (showLoader = true) => {
-  if (showLoader) {
-    setLoading(true);
-  } else {
-    setRefreshing(true);
-  }
-  
-  setError('');
-  
-  try {
-    
-    // OPTION 1: Try the comprehensive dashboard endpoint first
-    try {
-      const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
-        headers: getAuthHeaders()
-      });
-
-      if (dashboardResponse.ok && !(await handleApiError(dashboardResponse, 'fetchDashboardData'))) {
-        const dashboardResult = await dashboardResponse.json();
-       
-        
-        const data = dashboardResult.data;
-        
-        // Update user info
-        if (data.driver) {
-          setUser(data.driver);
-          authManager.setAuth(
-            authManager.getToken(), 
-            data.driver, 
-            localStorage.getItem('infiniteCargoRememberMe') === 'true'
-          );
-        }
-
-        //  Better bids extraction from dashboard endpoint
-        let myBidsFromDashboard = [];
-        if (data.myBids && Array.isArray(data.myBids)) {
-          myBidsFromDashboard = data.myBids;
-        } else if (data.bids && Array.isArray(data.bids)) {
-          myBidsFromDashboard = data.bids;
-        }
-
-      
-
-        // Update dashboard data with the comprehensive response
-        setDashboardData(prev => ({
-          ...prev,
-          activeBookings: data.activeBookings || [],
-          availableLoads: data.availableLoads || [],
-          completedBookings: data.completedBookings || [],
-          myBids: myBidsFromDashboard, // Use dashboard bids if available
-          stats: {
-            totalJobs: data.stats?.totalJobs || 0,
-            activeJobs: data.stats?.activeJobs || 0,
-            completedJobs: data.stats?.completedJobs || 0,
-            completionRate: data.stats?.completionRate || data.stats?.successRate || 0,
-            successRate: data.stats?.successRate || data.stats?.completionRate || 0,
-            rating: Math.round((data.stats?.rating || data.stats?.averageRating || 0) * 10) / 10,
-            totalBids: data.stats?.totalBids || 0,
-            acceptedBids: data.stats?.acceptedBids || 0,
-            monthlyEarnings: data.stats?.monthlyEarnings || data.earnings?.thisMonth || 0
-          },
-          earnings: {
-            thisMonth: data.earnings?.thisMonth || 0,
-            lastMonth: data.earnings?.lastMonth || 0,
-            total: data.earnings?.total || 0
-          }
-        }));
-
-        setNotifications(data.notifications || []);
-        
-        
-        if (myBidsFromDashboard.length === 0) {
-          
-          await fetchDriverBids();
-        }
-        
-       
-        return; 
-
-      } else {
-        console.log('[DEBUG] Dashboard endpoint failed or auth error, falling back...');
-      }
-    } catch (dashboardError) {
-      console.log('[DEBUG] Dashboard endpoint error:', dashboardError);
-    }
-
-    
-    await Promise.all([
-      fetchUserProfile(),
-      fetchDriverStats(),
-      fetchActiveJobs(),
-      fetchAvailableLoads(),
-      fetchDriverBids(), // Use the fixed bids fetch
-      fetchNotifications()
-    ]);
-
-  } catch (error) {
-    console.error('Error fetching dashboard data:', error);
-    setError('Failed to load dashboard data');
-  } finally {
-    setLoading(false);
-    setRefreshing(false);
-  }
-}, [
-  getAuthHeaders, 
-  handleApiError,
-  fetchUserProfile,
-  fetchDriverStats,
-  fetchActiveJobs,
-  fetchAvailableLoads,
-  fetchDriverBids, // Updated dependency
-  fetchNotifications
-]);
 
   // Initial load and auth setup
   useEffect(() => {
