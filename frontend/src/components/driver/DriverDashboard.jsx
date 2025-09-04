@@ -598,16 +598,7 @@ const fetchAvailableLoads = useCallback(async () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [
-    getAuthHeaders, 
-    handleApiError,
-    fetchUserProfile,
-    fetchDriverStats,
-    fetchActiveJobs,
-    fetchAvailableLoads,  
-    fetchDriverBids,
-    fetchNotifications
-  ]); 
+  }, [getAuthHeaders, handleApiError]); 
 
   // Initial load and auth setup
   useEffect(() => {
