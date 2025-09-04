@@ -414,76 +414,75 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // Fetch available loads with better filtering - NOW AFTER fetchDriverBids
-  const fetchAvailableLoads = useCallback(async () => {
-    setLoadingStates(prev => ({ ...prev, loads: true }));
+  // Fetch available loads with better filtering 
+const fetchAvailableLoads = useCallback(async () => {
+  setLoadingStates(prev => ({ ...prev, loads: true }));
+  
+  try {
+    // Build query parameters
+    const params = new URLSearchParams({
+      limit: '5',
+      status: 'active'
+    });
+
+    const currentUser = getUser(); 
     
-    try {
-      // Build query parameters
-      const params = new URLSearchParams({
-        limit: '20',
-        status: 'active'
-      });
-
-      // Create stable references for user data to prevent infinite re-renders
-      const currentUser = user; // Capture current user state
-      
-      // Add location if available - use stable references
-      if (currentUser?.location) {
-        params.append('location', currentUser.location);
-      } else if (currentUser?.coordinates?.latitude && currentUser?.coordinates?.longitude) {
-        params.append('lat', currentUser.coordinates.latitude.toString());
-        params.append('lng', currentUser.coordinates.longitude.toString());
-        params.append('radius', '50'); // 50km radius
-      }
-
-      // Add vehicle type filter
-      if (currentUser?.vehicleType) {
-        params.append('vehicleType', currentUser.vehicleType);
-      }
-
-      const response = await fetch(
-        `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`, 
-        { headers: getAuthHeaders() }
-      );
-
-      if (await handleApiError(response, 'fetchAvailableLoads')) return;
-
-      if (response.ok) {
-        const loadsData = await response.json();
-        const loads = loadsData.data?.loads || loadsData.loads || [];
-        
-        // Format loads for consistent display
-        const formattedLoads = loads.slice(0, 10).map(load => ({
-          _id: load._id,
-          title: load.title || 'Transport Required',
-          pickupLocation: load.pickupLocation || load.origin || 'Pickup Location',
-          deliveryLocation: load.deliveryLocation || load.destination || 'Delivery Location',
-          cargoType: load.cargoType || load.loadType || 'General Cargo',
-          weight: load.weight || load.estimatedWeight || 0,
-          estimatedAmount: load.estimatedAmount || load.budget || 0,
-          pickupDate: load.pickupDate || load.scheduledPickupDate,
-          deliveryDate: load.deliveryDate || load.scheduledDeliveryDate,
-          description: load.description,
-          urgency: load.urgency || 'normal',
-          bidCount: load.bidCount || 0,
-          createdAt: load.createdAt,
-          cargoOwnerId: load.cargoOwnerId || load.postedBy
-        }));
-        
-        setDashboardData(prev => ({
-          ...prev,
-          availableLoads: formattedLoads
-        }));
-      } else {
-        console.error('Failed to fetch available loads:', response.status);
-      }
-    } catch (error) {
-      console.error('Error fetching available loads:', error);
-    } finally {
-      setLoadingStates(prev => ({ ...prev, loads: false }));
+    // Add location if available 
+    if (currentUser?.location) {
+      params.append('location', currentUser.location);
+    } else if (currentUser?.coordinates?.latitude && currentUser?.coordinates?.longitude) {
+      params.append('lat', currentUser.coordinates.latitude.toString());
+      params.append('lng', currentUser.coordinates.longitude.toString());
+      params.append('radius', '50'); 
     }
-  }, [getAuthHeaders, handleApiError, user]); // Added user to dependencies
+
+    // Add vehicle type filter
+    if (currentUser?.vehicleType) {
+      params.append('vehicleType', currentUser.vehicleType);
+    }
+
+    const response = await fetch(
+      `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`, 
+      { headers: getAuthHeaders() }
+    );
+
+    if (await handleApiError(response, 'fetchAvailableLoads')) return;
+
+    if (response.ok) {
+      const loadsData = await response.json();
+      const loads = loadsData.data?.loads || loadsData.loads || [];
+      
+      // Format loads for consistent display
+      const formattedLoads = loads.slice(0, 10).map(load => ({
+        _id: load._id,
+        title: load.title || 'Transport Required',
+        pickupLocation: load.pickupLocation || load.origin || 'Pickup Location',
+        deliveryLocation: load.deliveryLocation || load.destination || 'Delivery Location',
+        cargoType: load.cargoType || load.loadType || 'General Cargo',
+        weight: load.weight || load.estimatedWeight || 0,
+        estimatedAmount: load.estimatedAmount || load.budget || 0,
+        pickupDate: load.pickupDate || load.scheduledPickupDate,
+        deliveryDate: load.deliveryDate || load.scheduledDeliveryDate,
+        description: load.description,
+        urgency: load.urgency || 'normal',
+        bidCount: load.bidCount || 0,
+        createdAt: load.createdAt,
+        cargoOwnerId: load.cargoOwnerId || load.postedBy
+      }));
+      
+      setDashboardData(prev => ({
+        ...prev,
+        availableLoads: formattedLoads
+      }));
+    } else {
+      console.error('Failed to fetch available loads:', response.status);
+    }
+  } catch (error) {
+    console.error('Error fetching available loads:', error);
+  } finally {
+    setLoadingStates(prev => ({ ...prev, loads: false }));
+  }
+}, [getAuthHeaders, handleApiError]);
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
