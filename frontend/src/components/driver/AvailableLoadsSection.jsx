@@ -13,12 +13,8 @@ import {
   X,
   Clock,
   User,
-  TrendingUp,
-  CheckCircle,
   Loader,
-  Truck,
-  MessageSquare,
-  AlertCircle
+  MessageSquare
 } from 'lucide-react';
 
 // Hook for outside click detection
@@ -244,10 +240,7 @@ const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDat
     return type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
-  const getVehicleTypeLabel = (type) => {
-    if (!type) return 'N/A';
-    return type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-  };
+  
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

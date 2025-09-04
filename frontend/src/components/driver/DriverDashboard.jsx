@@ -871,30 +871,7 @@ const fetchAvailableLoads = useCallback(async () => {
     }
   };
 
-  // Helper function to validate bid data before calling placeBid
-  const validateBidData = (bidData) => {
-    const errors = [];
-
-    if (!bidData._id) {
-      errors.push('Load ID is required');
-    }
-
-    if (!bidData.bidAmount || isNaN(bidData.bidAmount) || bidData.bidAmount < 1) {
-      errors.push('Bid amount must be a number greater than 0');
-    }
-
-    // Validate ObjectId format
-    const objectIdRegex = /^[0-9a-fA-F]{24}$/;
-    if (bidData._id && !objectIdRegex.test(bidData._id)) {
-      errors.push('Invalid load ID format');
-    }
-
-    if (bidData.message && bidData.message.length > 500) {
-      errors.push('Message cannot exceed 500 characters');
-    }
-
-    return errors;
-  };
+  
 
   // Update driver location
   const updateDriverLocation = async (latitude, longitude) => {
