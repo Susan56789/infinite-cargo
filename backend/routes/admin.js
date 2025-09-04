@@ -371,24 +371,25 @@ router.post('/forgot-password', [
     }
 
     const { email } = req.body;
+    const cleanEmail = email.toLowerCase().trim();
 
     // Find admin by email (only active admins)
     const admin = await Admin.findOne({ 
-      email: email.toLowerCase().trim(),
+      email: cleanEmail,
       isActive: true 
     });
 
     if (admin) {
-      // Generate 6-digit code
+      // Generate 6-digit code and ensure it's stored as string
       const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minute
 
       // Update admin record with reset code
-      await Admin.updateOne(
+      const updateResult = await Admin.updateOne(
         { _id: admin._id },
         {
           $set: {
-            passwordResetCode: resetCode,
+            passwordResetCode: resetCode, // Ensure it's stored as string
             passwordResetCodeExpires: resetCodeExpiry,
             passwordResetRequestedAt: new Date(),
             resetCodeVerified: false,
@@ -402,17 +403,12 @@ router.post('/forgot-password', [
         }
       );
 
-      console.log('Admin reset code stored:', {
-        adminId: admin._id,
-        code: resetCode,
-        expiresAt: resetCodeExpiry,
-        email: admin.email
-      });
-
+      // Verify the code was stored correctly
+      const verifyAdmin = await Admin.findById(admin._id);
       // Send email
       try {
         await sendAdminPasswordResetCodeEmail(admin.email, admin.name, resetCode);
-        console.log('Admin password reset email sent successfully');
+       
       } catch (mailErr) {
         console.error('Failed to send admin password reset email:', mailErr);
         // Continue execution - don't fail the request if email fails
@@ -444,8 +440,6 @@ router.post('/forgot-password', [
         expiresIn: '10 minutes'
       });
     } else {
-      console.log('Admin password reset requested for non-existent/inactive email:', email);
-      
       // Return specific message for non-existent admin
       return res.status(404).json({
         status: 'error',
@@ -480,7 +474,7 @@ router.post('/verify-reset-code', [
   body('code')
     .trim()
     .isLength({ min: 6, max: 6 })
-    .isNumeric()
+    .matches(/^\d{6}$/)
     .withMessage('Please provide a valid 6-digit verification code')
 ], async (req, res) => {
   const startTime = Date.now();
@@ -488,7 +482,6 @@ router.post('/verify-reset-code', [
   try {
     console.log('=== VERIFICATION REQUEST DEBUG ===');
     console.log('Raw request body:', JSON.stringify(req.body, null, 2));
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Content-Type:', req.get('Content-Type'));
 
     const errors = validationResult(req);
@@ -508,30 +501,28 @@ router.post('/verify-reset-code', [
     const { email, code } = req.body;
 
     // Enhanced input cleaning and validation
-    const cleanEmail = email?.toLowerCase().trim();
+    const cleanEmail = email?.toString().toLowerCase().trim();
     const cleanCode = code?.toString().trim();
 
     console.log('=== PROCESSED INPUT ===');
-    console.log('Original email:', email);
     console.log('Clean email:', cleanEmail);
-    console.log('Original code:', code, 'Type:', typeof code);
-    console.log('Clean code:', cleanCode, 'Type:', typeof cleanCode);
-    console.log('Code length:', cleanCode?.length);
+    console.log('Clean code:', cleanCode, 'Type:', typeof cleanCode, 'Length:', cleanCode?.length);
 
-    // Additional validation
+    // Additional server-side validation
     if (!cleanEmail || !cleanCode) {
       console.log('Missing required fields after cleaning');
       return res.status(400).json({
         status: 'error',
-        message: 'Email and code are required'
+        message: 'Email and verification code are required'
       });
     }
 
     if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
-      console.log('Invalid code format after cleaning');
+      console.log('Invalid code format:', { code: cleanCode, length: cleanCode.length });
       return res.status(400).json({
         status: 'error',
-        message: 'Code must be exactly 6 digits'
+        message: 'Verification code must be exactly 6 digits',
+        errors: [{ field: 'code', message: 'Code must be exactly 6 digits' }]
       });
     }
 
@@ -542,57 +533,86 @@ router.post('/verify-reset-code', [
       currentTime: new Date()
     });
 
-    // Find admin with valid reset code
-    const admin = await Admin.findOne({
+    // Step 1: First find admin by email to check if they exist
+    const adminByEmail = await Admin.findOne({ 
       email: cleanEmail,
-      passwordResetCode: cleanCode,
-      passwordResetCodeExpires: { $gt: new Date() },
-      isActive: true
+      isActive: true 
     });
 
-    console.log('=== QUERY RESULTS ===');
-    console.log('Admin found:', !!admin);
+    console.log('=== ADMIN EMAIL LOOKUP ===');
+    console.log('Admin found by email:', !!adminByEmail);
 
-    // Enhanced debug logging for failed verification
-    if (!admin) {
-      console.log('=== DETAILED DEBUG FOR FAILED VERIFICATION ===');
-      
-      // Check if admin exists at all
-      const adminAny = await Admin.findOne({ email: cleanEmail });
-      console.log('Admin exists with email:', !!adminAny);
-      
-      if (adminAny) {
-        console.log('Admin debug info:', {
-          adminId: adminAny._id,
-          email: adminAny.email,
-          isActive: adminAny.isActive,
-          storedCode: adminAny.passwordResetCode,
-          storedCodeType: typeof adminAny.passwordResetCode,
-          storedCodeLength: adminAny.passwordResetCode?.length,
-          submittedCode: cleanCode,
-          submittedCodeType: typeof cleanCode,
-          submittedCodeLength: cleanCode.length,
-          codeMatch: adminAny.passwordResetCode === cleanCode,
-          strictEqual: adminAny.passwordResetCode === cleanCode,
-          looseEqual: adminAny.passwordResetCode == cleanCode,
-          storedExpiry: adminAny.passwordResetCodeExpires,
-          currentTime: new Date(),
-          isExpired: adminAny.passwordResetCodeExpires ? 
-            new Date() > adminAny.passwordResetCodeExpires : 'no expiry set',
-          expiryDiff: adminAny.passwordResetCodeExpires ? 
-            adminAny.passwordResetCodeExpires - new Date() : 'no expiry',
-          hasResetCode: !!adminAny.passwordResetCode,
-          hasExpiry: !!adminAny.passwordResetCodeExpires
-        });
-      } else {
-        console.log('No admin found with email:', cleanEmail);
-      }
-
-      return res.status(400).json({
+    if (!adminByEmail) {
+      console.log('No active admin found with email:', cleanEmail);
+      return res.status(404).json({
         status: 'error',
-        message: 'Invalid or expired verification code'
+        message: 'No active admin account found with this email address'
       });
     }
+
+    // Step 2: Check if admin has a reset code
+    if (!adminByEmail.passwordResetCode) {
+      console.log('Admin has no reset code:', {
+        email: cleanEmail,
+        hasResetCode: !!adminByEmail.passwordResetCode
+      });
+      return res.status(400).json({
+        status: 'error',
+        message: 'No password reset request found. Please start the reset process again.'
+      });
+    }
+
+    // Step 3: Check if the reset code has expired
+    if (!adminByEmail.passwordResetCodeExpires || new Date() > adminByEmail.passwordResetCodeExpires) {
+      console.log('Reset code expired:', {
+        email: cleanEmail,
+        expiryTime: adminByEmail.passwordResetCodeExpires,
+        currentTime: new Date(),
+        expired: !adminByEmail.passwordResetCodeExpires || new Date() > adminByEmail.passwordResetCodeExpires
+      });
+      
+      // Clear expired reset data
+      await Admin.updateOne(
+        { _id: adminByEmail._id },
+        {
+          $unset: {
+            passwordResetCode: "",
+            passwordResetCodeExpires: "",
+            passwordResetRequestedAt: ""
+          }
+        }
+      );
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Verification code has expired. Please request a new one.'
+      });
+    }
+
+    // Step 4: Check if the code matches (with type conversion handling)
+    const storedCode = adminByEmail.passwordResetCode?.toString().trim();
+    console.log('=== CODE COMPARISON ===');
+    console.log('Stored code:', storedCode, 'Type:', typeof storedCode);
+    console.log('Submitted code:', cleanCode, 'Type:', typeof cleanCode);
+    console.log('Codes match (strict):', storedCode === cleanCode);
+    console.log('Codes match (loose):', storedCode == cleanCode);
+
+    if (storedCode !== cleanCode) {
+      console.log('Code mismatch:', {
+        stored: storedCode,
+        submitted: cleanCode,
+        storedLength: storedCode?.length,
+        submittedLength: cleanCode.length
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid verification code. Please check and try again.',
+        errors: [{ field: 'code', message: 'Invalid verification code' }]
+      });
+    }
+
+    console.log('=== CODE VERIFIED SUCCESSFULLY ===');
 
     // Generate secure reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
@@ -605,7 +625,7 @@ router.post('/verify-reset-code', [
 
     // Update admin with reset token and mark code as verified
     const updateResult = await Admin.updateOne(
-      { _id: admin._id },
+      { _id: adminByEmail._id },
       {
         $set: {
           passwordResetToken: hashedResetToken,
@@ -622,14 +642,42 @@ router.post('/verify-reset-code', [
     );
 
     console.log('=== UPDATE RESULTS ===');
-    console.log('Update result:', updateResult);
+    console.log('Update acknowledged:', updateResult.acknowledged);
+    console.log('Matched count:', updateResult.matchedCount);
+    console.log('Modified count:', updateResult.modifiedCount);
 
-    // Log audit trail (existing code)...
+    if (updateResult.matchedCount === 0) {
+      console.error('Failed to update admin - no match found');
+      return res.status(500).json({
+        status: 'error',
+        message: 'Failed to process verification. Please try again.'
+      });
+    }
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+
+      await auditLogsCollection.insertOne({
+        action: 'admin_password_reset_code_verified',
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(adminByEmail._id),
+        adminId: new mongoose.Types.ObjectId(adminByEmail._id),
+        adminName: adminByEmail.name,
+        adminEmail: adminByEmail.email,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin code verification:', auditError);
+    }
 
     console.log('=== SUCCESS ===');
     console.log('Admin reset code verified successfully:', {
-      adminId: admin._id,
-      email: admin.email,
+      adminId: adminByEmail._id,
+      email: adminByEmail.email,
       processingTime: `${Date.now() - startTime}ms`
     });
 
@@ -637,12 +685,12 @@ router.post('/verify-reset-code', [
       status: 'success',
       message: 'Verification code confirmed successfully',
       resetToken: resetToken, // Send unhashed token to client
-      email: admin.email,
+      email: adminByEmail.email,
       expiresIn: '15 minutes'
     });
 
   } catch (error) {
-    console.error('=== ERROR ===');
+    console.error('=== VERIFICATION ERROR ===');
     console.error('Admin verify reset code error:', {
       error: error.message,
       stack: error.stack,

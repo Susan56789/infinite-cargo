@@ -30,10 +30,20 @@ const AdminForgotPassword = () => {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    
+    // Special handling for verification code - only allow digits
+    if (name === 'code') {
+      const numericValue = value.replace(/\D/g, '').slice(0, 6);
+      setFormData(prev => ({
+        ...prev,
+        [name]: numericValue
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value
+      }));
+    }
     
     if (errors[name]) {
       setErrors(prev => ({
@@ -62,10 +72,11 @@ const AdminForgotPassword = () => {
 
   const validateCode = () => {
     const newErrors = {};
+    const cleanCode = formData.code.trim();
 
-    if (!formData.code.trim()) {
+    if (!cleanCode) {
       newErrors.code = 'Verification code is required';
-    } else if (formData.code.length !== 6 || !/^\d{6}$/.test(formData.code)) {
+    } else if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
       newErrors.code = 'Please enter a valid 6-digit code';
     }
 
@@ -123,7 +134,9 @@ const AdminForgotPassword = () => {
           text: 'A 6-digit verification code has been sent to your email address.'
         });
         setCurrentStep('verify');
-        setCountdown(60); // Start 60-second countdown for resend
+        setCountdown(60);
+        // Clear any existing code when moving to verify step
+        setFormData(prev => ({ ...prev, code: '' }));
       } else {
         if (data.errors && Array.isArray(data.errors)) {
           const fieldErrors = {};
@@ -152,74 +165,87 @@ const AdminForgotPassword = () => {
   };
 
   const handleCodeSubmit = async (e) => {
-  e.preventDefault();
-  
-  if (!validateCode()) return;
-
-  setLoading(true);
-  setMessage({ type: '', text: '' });
-
-  try {
-    const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
+    e.preventDefault();
     
-    // Enhanced request preparation
-    const requestData = {
-      email: formData.email.trim().toLowerCase(),
-      code: formData.code.trim() 
-    };
+    if (!validateCode()) return;
 
-    
+    setLoading(true);
+    setMessage({ type: '', text: '' });
 
-    const response = await fetch(`${API_BASE_URL}/admin/verify-reset-code`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(requestData)
-    });
-
-    
-    const data = await response.json();
- 
-    if (response.ok && data.status === 'success' && data.resetToken) {
-      setFormData(prev => ({
-        ...prev,
-        resetToken: data.resetToken
-      }));
-      setMessage({
-        type: 'success',
-        text: 'Verification code confirmed! Please set your new password.'
-      });
-      setCurrentStep('reset');
-    } else {
-      console.error('Verification failed:', data);
+    try {
+      const API_BASE_URL = 'https://infinite-cargo-api.onrender.com/api';
       
-      if (data.errors && Array.isArray(data.errors)) {
-        const fieldErrors = {};
-        data.errors.forEach(error => {
-          if (error.field) {
-            fieldErrors[error.field] = error.message;
-          }
-        });
-        setErrors(fieldErrors);
-      } else {
+      // Clean and prepare data
+      const cleanEmail = formData.email.trim().toLowerCase();
+      const cleanCode = formData.code.trim();
+      
+
+      const requestData = {
+        email: cleanEmail,
+        code: cleanCode
+      };
+
+      const response = await fetch(`${API_BASE_URL}/admin/verify-reset-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(requestData)
+      });
+
+      const data = await response.json();
+      
+
+      if (response.ok && data.status === 'success' && data.resetToken) {
+        setFormData(prev => ({
+          ...prev,
+          resetToken: data.resetToken
+        }));
         setMessage({
-          type: 'error',
-          text: data.message || 'Invalid or expired verification code.'
+          type: 'success',
+          text: 'Verification code confirmed! Please set your new password.'
         });
+        setCurrentStep('reset');
+      } else {
+        console.error('Verification failed:', data);
+        
+        if (data.errors && Array.isArray(data.errors)) {
+          const fieldErrors = {};
+          data.errors.forEach(error => {
+            if (error.field) {
+              fieldErrors[error.field] = error.message;
+            }
+          });
+          setErrors(fieldErrors);
+        } else {
+          // More specific error messages
+          let errorMessage = data.message || 'Invalid or expired verification code.';
+          
+          if (response.status === 400) {
+            errorMessage = 'The verification code is invalid. Please check and try again.';
+          } else if (response.status === 404) {
+            errorMessage = 'No password reset request found. Please start over.';
+          } else if (response.status >= 500) {
+            errorMessage = 'Server error. Please try again in a moment.';
+          }
+          
+          setMessage({
+            type: 'error',
+            text: errorMessage
+          });
+        }
       }
+    } catch (error) {
+      console.error('Code verification error:', error);
+      setMessage({
+        type: 'error',
+        text: 'Unable to verify code. Please check your connection and try again.'
+      });
+    } finally {
+      setLoading(false);
     }
-  } catch (error) {
-    console.error('Code verification error:', error);
-    setMessage({
-      type: 'error',
-      text: 'Unable to verify code. Please try again.'
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();
@@ -454,20 +480,25 @@ const AdminForgotPassword = () => {
             placeholder="000000"
             disabled={loading}
             maxLength={6}
+            inputMode="numeric"
             pattern="[0-9]{6}"
+            autoComplete="one-time-code"
             required
           />
         </div>
         {errors.code && (
           <p className="mt-2 text-sm text-red-400">{errors.code}</p>
         )}
+        <p className="mt-2 text-xs text-slate-400">
+          Code expires in 10 minutes. Entered: {formData.code.length}/6 digits
+        </p>
       </div>
 
       <div className="flex gap-3">
         <button
           type="submit"
           className="flex-1 bg-gradient-to-r from-purple-500 to-blue-600 text-white font-semibold py-3 px-4 rounded-lg hover:from-purple-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transform transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
-          disabled={loading}
+          disabled={loading || formData.code.length !== 6}
         >
           {loading ? (
             <div className="flex items-center justify-center gap-2">

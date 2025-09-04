@@ -120,6 +120,22 @@ const adminSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
   }
 ],
+passwordResetCode: {
+  type: String,
+  default: null
+},
+passwordResetCodeExpires: {
+  type: Date,
+  default: null
+},
+resetCodeVerified: {
+  type: Boolean,
+  default: false
+},
+resetCodeVerifiedAt: {
+  type: Date,
+  default: null
+},
   profile: {
     avatar: {
       type: String,
@@ -379,7 +395,7 @@ adminSchema.statics.createSuperAdmin = async function(adminData) {
     });
 
     await superAdmin.save();
-    console.log('Super admin created successfully:', superAdmin.email);
+    
     return superAdmin;
   } catch (error) {
     console.error('Failed to create super admin:', error);
@@ -472,7 +488,7 @@ adminSchema.statics.getDashboardStats = async function() {
     // Set active users (simplified for now)
     stats.activeUsers = stats.totalUsers;
 
-    console.log('Dashboard stats retrieved successfully:', stats);
+    
     return stats;
 
   } catch (error) {
