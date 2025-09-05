@@ -463,7 +463,7 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // Enhanced fetch available loads with better filtering and bid integration
+ 
   const fetchAvailableLoads = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, loads: true }));
     
@@ -471,7 +471,7 @@ const DriverDashboard = () => {
       // Build query parameters
       const params = new URLSearchParams({
         limit: '10', 
-        status: 'active',
+        status: 'available',
         page: '1'
       });
 

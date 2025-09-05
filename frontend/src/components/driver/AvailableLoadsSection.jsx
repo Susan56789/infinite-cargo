@@ -8,7 +8,6 @@ import {
   Plus,
   Calendar,
   Weight,
-  ArrowRight,
   X,
   Clock,
   User,
