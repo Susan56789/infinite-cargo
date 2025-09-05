@@ -1,5 +1,4 @@
-import React, { useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState } from 'react';
 import { 
   Search, 
   Package, 
@@ -14,24 +13,10 @@ import {
   Clock,
   User,
   Loader,
-  MessageSquare
+  MessageSquare,
+  ExternalLink,
+  Truck
 } from 'lucide-react';
-
-// Hook for outside click detection
-const useOutsideClick = (ref, callback) => {
-  React.useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (ref.current && !ref.current.contains(event.target)) {
-        callback();
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [ref, callback]);
-};
 
 // BidForm Component 
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
@@ -47,10 +32,6 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   });
 
   const [errors, setErrors] = useState({});
-  const formRef = useRef(null);
-
-  // Auto-close on outside click
-  useOutsideClick(formRef, onCancel);
 
   const validateForm = () => {
     const newErrors = {};
@@ -85,7 +66,12 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
       message: bidData.message || undefined
     };
 
-    await onBidSubmit(bidPayload);
+    const result = await onBidSubmit(bidPayload);
+    
+    // Only close form if bid was successful
+    if (result !== false) {
+      onCancel();
+    }
   };
 
   const handleInputChange = (field, value) => {
@@ -103,7 +89,7 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   };
 
   return (
-    <div ref={formRef} className="bg-gray-50 border rounded-lg p-4 mt-4 relative z-10">
+    <div className="bg-gray-50 border rounded-lg p-4 mt-4 relative z-10">
       <div className="flex items-center justify-between mb-4">
         <h4 className="font-medium text-gray-900 flex items-center">
           <Plus className="w-4 h-4 mr-2" />
@@ -230,21 +216,14 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
 
 // LoadDetailsModal Component
 const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDate }) => {
-  const modalRef = useRef(null);
-  
-  // Auto-close on outside click
-  useOutsideClick(modalRef, onClose);
-
   const getCargoTypeLabel = (type) => {
     if (!type) return 'N/A';
     return type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
-  
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div ref={modalRef} className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-gray-900">Load Details</h3>
           <button
@@ -287,7 +266,7 @@ const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDat
 
           {/* Status and Priority */}
           <div className="flex flex-wrap gap-2">
-            {load.urgency === 'urgent' && (
+            {load.isUrgent && (
               <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
                 <Clock className="w-4 h-4 mr-1" />
                 Urgent
@@ -326,184 +305,58 @@ const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDat
             )}
           </div>
 
-          {/* Posted By Information */}
-          <div className="border-t pt-4">
-            <label className="block text-sm font-medium text-gray-700">Posted By</label>
-            <div className="flex items-center mt-1">
-              <User className="w-4 h-4 mr-2 text-gray-400" />
-              <span className="text-gray-900">Cargo Owner</span>
+          {/* Distance and Duration */}
+          {(load.distance || load.estimatedDuration) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {load.distance && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Distance</label>
+                  <p className="text-gray-900">{load.distance} km</p>
+                </div>
+              )}
+              {load.estimatedDuration && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Est. Duration</label>
+                  <p className="text-gray-900">{load.estimatedDuration} hours</p>
+                </div>
+              )}
             </div>
-            <p className="text-sm text-gray-500 mt-1">Posted {formatDate(load.createdAt)}</p>
-          </div>
-        </div>
+          )}
 
-        <div className="flex space-x-3 mt-6 pt-6 border-t">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            Close
-          </button>
-          <button
-            onClick={() => {
-              onClose();
-              onBidClick(load);
-            }}
-            className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-          >
-            Place Bid
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// LoadCard Component
-const LoadCard = ({ load, onBidPlace, formatCurrency, formatDate, isAuthenticated }) => {
-  const [showBidForm, setShowBidForm] = useState(false);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleBidSubmit = async (bidData) => {
-    setSubmitting(true);
-    try {
-      const result = await onBidPlace(bidData);
-      
-      if (result !== false) {
-        setShowBidForm(false);
-      }
-    } catch (error) {
-      console.error('Failed to place bid:', error);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const isUrgent = () => {
-    return load.urgency === 'urgent' || (load.pickupDate && (() => {
-      const pickupDate = new Date(load.pickupDate);
-      const today = new Date();
-      const diffTime = pickupDate.getTime() - today.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      return diffDays <= 2;
-    })());
-  };
-
-  return (
-    <>
-      <div className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors relative">
-        {/* Urgent Badge */}
-        {isUrgent() && (
-          <div className="absolute top-2 right-2">
-            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-              <Clock className="w-3 h-3 mr-1" />
-              Urgent
-            </span>
-          </div>
-        )}
-
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex-1">
-            {/* Load Title */}
-            <h4 className="font-medium text-gray-900 mb-2">
-              {load.title || `${load.cargoType || 'General Cargo'} Transport`}
-            </h4>
-
-            {/* Route */}
-            <div className="flex items-center space-x-2 mb-2">
-              <MapPin size={16} className="text-gray-400 flex-shrink-0" />
-              <span className="text-sm text-gray-600 truncate">
-                {load.pickupLocation || 'Pickup'} → {load.deliveryLocation || 'Delivery'}
-              </span>
-            </div>
-
-            {/* Load Details Grid */}
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div className="flex items-center space-x-1">
-                <Package size={16} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-600 truncate">{load.cargoType || 'General Cargo'}</span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <Weight size={16} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-600">
-                  {load.weight ? `${load.weight} kg` : 'Weight TBD'}
-                </span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <DollarSign size={16} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm font-medium text-green-600">
-                  Est: {formatCurrency(load.estimatedAmount)}
-                </span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <Calendar size={16} className="text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-500">
-                  {load.pickupDate ? formatDate(load.pickupDate) : 'ASAP'}
-                </span>
+          {/* Vehicle Requirements */}
+          {load.vehicleTypeRequired && load.vehicleTypeRequired.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Vehicle Requirements</label>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {load.vehicleTypeRequired.map((type, index) => (
+                  <span key={index} className="inline-flex items-center px-2 py-1 rounded-md text-sm bg-blue-100 text-blue-800">
+                    <Truck className="w-4 h-4 mr-1" />
+                    {getCargoTypeLabel(type)}
+                  </span>
+                ))}
               </div>
             </div>
+          )}
 
-            {/* Load Description */}
-            {load.description && (
-              <div className="mb-3">
-                <p className="text-sm text-gray-600 line-clamp-2">
-                  {load.description}
-                </p>
-              </div>
-            )}
-
-            {/* Load Stats */}
-            <div className="flex items-center justify-between text-xs text-gray-500">
-              <span>Posted {formatDate(load.createdAt)}</span>
-              <div className="flex items-center space-x-3">
-                <span>{load.bidCount || 0} bids</span>
-                <span className="px-2 py-1 rounded-full bg-green-100 text-green-800">
-                  Available
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {!showBidForm ? (
-          <div className="flex space-x-2">
+          {/* Action Buttons */}
+          <div className="flex space-x-3 pt-4 border-t">
             <button
-              onClick={() => setShowBidForm(true)}
-              className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+              onClick={() => onBidClick(load)}
+              className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
-              <Plus size={14} className="mr-1" />
+              <Plus className="w-4 h-4 mr-2" />
               Place Bid
             </button>
             <button
-              onClick={() => setShowDetailsModal(true)}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 transition-colors"
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              <Eye size={14} className="mr-1" />
-              Details
+              Close
             </button>
           </div>
-        ) : (
-          <BidForm 
-            load={load}
-            onBidSubmit={handleBidSubmit}
-            onCancel={() => setShowBidForm(false)}
-            submitting={submitting}
-          />
-        )}
+        </div>
       </div>
-
-      {/* Load Details Modal */}
-      {showDetailsModal && (
-        <LoadDetailsModal 
-          load={load}
-          onClose={() => setShowDetailsModal(false)}
-          onBidClick={() => setShowBidForm(true)}
-          formatCurrency={formatCurrency}
-          formatDate={formatDate}
-        />
-      )}
-    </>
+    </div>
   );
 };
 
@@ -512,61 +365,196 @@ const AvailableLoadsSection = ({
   availableLoads, 
   onBidPlace, 
   formatCurrency, 
-  formatDate,
-  loading,
-  isAuthenticated = true
+  formatDate, 
+  loading, 
+  onSearchLoads 
 }) => {
+  const [selectedLoad, setSelectedLoad] = useState(null);
+  const [bidFormLoad, setBidFormLoad] = useState(null);
+  const [submittingBid, setSubmittingBid] = useState(false);
+
+  const handleBidSubmit = async (bidData) => {
+    setSubmittingBid(true);
+    try {
+      const result = await onBidPlace(bidData);
+      if (result !== false) {
+        setBidFormLoad(null);
+      }
+      return result;
+    } finally {
+      setSubmittingBid(false);
+    }
+  };
+
+  const handleViewDetails = (load) => {
+    setSelectedLoad(load);
+  };
+
+  const handleBidClick = (load) => {
+    setBidFormLoad(load);
+    setSelectedLoad(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Available Loads</h2>
+          <div className="flex items-center justify-center py-8">
+            <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+            <span className="ml-2 text-gray-600">Loading available loads...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-      <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Available Loads</h2>
-        <Link
-          to="/search-loads"
-          target='_blank'
-          className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center"
-        >
-          <Search size={16} className="mr-1" />
-          Browse More <ArrowRight size={14} className="ml-1" />
-        </Link>
-      </div>
-      <div className="p-6">
-        {loading ? (
-          <div className="text-center py-8">
-            <Loader className="mx-auto h-8 w-8 text-blue-600 animate-spin mb-4" />
-            <p className="text-gray-600">Loading available loads...</p>
-          </div>
-        ) : availableLoads.length > 0 ? (
-          <div className="space-y-6">
-            {availableLoads.slice(0, 3).map((load) => (
-              <LoadCard 
-                key={load._id} 
-                load={load} 
-                onBidPlace={onBidPlace}
-                formatCurrency={formatCurrency}
-                formatDate={formatDate}
-                isAuthenticated={isAuthenticated}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8">
-            <Package size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-600 mb-2">No available loads in your area</p>
-            <p className="text-sm text-gray-500 mb-4">
-              Try expanding your search area or check back later
-            </p>
-            <Link
-              to="/search-loads"
-              target="_blank"
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+    <>
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-gray-900 flex items-center">
+              <Package className="w-6 h-6 mr-2 text-blue-600" />
+              Available Loads
+            </h2>
+            <button
+              onClick={onSearchLoads}
+              className="inline-flex items-center px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
             >
-              <Search size={16} className="mr-2" />
-              Search All Loads
-            </Link>
+              <Search className="w-4 h-4 mr-2" />
+              Search More
+              <ExternalLink className="w-3 h-3 ml-1" />
+            </button>
           </div>
-        )}
+
+          {availableLoads && availableLoads.length > 0 ? (
+            <div className="space-y-4">
+              {availableLoads.map((load) => (
+                <div key={load._id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          {load.title || 'Transport Required'}
+                        </h3>
+                        {load.isUrgent && (
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                            <Clock className="w-3 h-3 mr-1" />
+                            Urgent
+                          </span>
+                        )}
+                        {load.bidCount > 0 && (
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                            <User className="w-3 h-3 mr-1" />
+                            {load.bidCount} bids
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                        <div className="flex items-center text-gray-600">
+                          <MapPin className="w-4 h-4 mr-2 text-green-500" />
+                          <span className="text-sm">
+                            <strong>From:</strong> {load.pickupLocation || 'Not specified'}
+                          </span>
+                        </div>
+                        <div className="flex items-center text-gray-600">
+                          <MapPin className="w-4 h-4 mr-2 text-red-500" />
+                          <span className="text-sm">
+                            <strong>To:</strong> {load.deliveryLocation || 'Not specified'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-600">
+                        <div className="flex items-center">
+                          <Package className="w-4 h-4 mr-1" />
+                          {load.cargoType ? load.cargoType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'General Cargo'}
+                        </div>
+                        <div className="flex items-center">
+                          <Weight className="w-4 h-4 mr-1" />
+                          {load.weight || 0} kg
+                        </div>
+                        <div className="flex items-center">
+                          <DollarSign className="w-4 h-4 mr-1" />
+                          {formatCurrency(load.estimatedAmount)}
+                        </div>
+                        {load.pickupDate && (
+                          <div className="flex items-center">
+                            <Calendar className="w-4 h-4 mr-1" />
+                            {formatDate(load.pickupDate)}
+                          </div>
+                        )}
+                      </div>
+
+                      {load.description && (
+                        <p className="text-sm text-gray-600 mt-2 line-clamp-2">
+                          {load.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col space-y-2 ml-4">
+                      <button
+                        onClick={() => handleViewDetails(load)}
+                        className="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        <Eye className="w-4 h-4 mr-2" />
+                        View
+                      </button>
+                      <button
+                        onClick={() => handleBidClick(load)}
+                        className="inline-flex items-center px-3 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Bid
+                      </button>
+                    </div>
+                  </div>
+
+                  {bidFormLoad && bidFormLoad._id === load._id && (
+                    <BidForm
+                      load={load}
+                      onBidSubmit={handleBidSubmit}
+                      onCancel={() => setBidFormLoad(null)}
+                      submitting={submittingBid}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <Package className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-medium text-gray-900">No available loads</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                There are no available loads matching your criteria right now.
+              </p>
+              <button
+                onClick={onSearchLoads}
+                className="mt-4 inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Search className="w-4 h-4 mr-2" />
+                Search All Loads
+                <ExternalLink className="w-3 h-3 ml-1" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+
+      {/* Load Details Modal */}
+      {selectedLoad && (
+        <LoadDetailsModal
+          load={selectedLoad}
+          onClose={() => setSelectedLoad(null)}
+          onBidClick={handleBidClick}
+          formatCurrency={formatCurrency}
+          formatDate={formatDate}
+        />
+      )}
+    </>
   );
 };
 

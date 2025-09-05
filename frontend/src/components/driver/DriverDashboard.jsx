@@ -80,6 +80,55 @@ const DriverDashboard = () => {
     return false;
   }, []);
 
+  // Enhanced method to open search loads with authentication
+  const openSearchLoads = useCallback(() => {
+    const token = authManager.getToken();
+    const userData = getUser();
+    
+    if (!token || !userData) {
+      setError('Authentication required to search loads');
+      return;
+    }
+
+    // Option 1: Use URL parameters (less secure but works across domains)
+    const searchParams = new URLSearchParams({
+      token: encodeURIComponent(token),
+      userType: userData.userType,
+      userId: userData._id || userData.id,
+      timestamp: Date.now().toString()
+    });
+    
+    const searchUrl = `/search-loads?${searchParams.toString()}`;
+    
+    // Option 2: Store in sessionStorage for the new tab
+    try {
+      // Create a temporary key for this session
+      const tempKey = `tempAuth_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const authData = {
+        token,
+        user: userData,
+        timestamp: Date.now(),
+        tempKey
+      };
+      
+      sessionStorage.setItem(tempKey, JSON.stringify(authData));
+      
+      // Open new tab with auth key
+      const finalUrl = `/search-loads?authKey=${tempKey}`;
+      window.open(finalUrl, '_blank');
+      
+      // Clean up temp auth after 30 seconds
+      setTimeout(() => {
+        sessionStorage.removeItem(tempKey);
+      }, 30000);
+      
+    } catch (error) {
+      console.error('Error opening search loads:', error);
+      // Fallback to simple navigation
+      window.open('/search-loads', '_blank');
+    }
+  }, []);
+
   // Fetch user profile
   const fetchUserProfile = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, profile: true }));
@@ -329,7 +378,7 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // Fetch driver bids - MOVED BEFORE fetchAvailableLoads
+  // Fetch driver bids
   const fetchDriverBids = useCallback(async () => {
     setLoadingStates(prev => ({ ...prev, bids: true }));
     
@@ -414,75 +463,118 @@ const DriverDashboard = () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // Fetch available loads with better filtering 
-const fetchAvailableLoads = useCallback(async () => {
-  setLoadingStates(prev => ({ ...prev, loads: true }));
-  
-  try {
-    // Build query parameters
-    const params = new URLSearchParams({
-      limit: '5',
-      status: 'active'
-    });
-
-    const currentUser = getUser(); 
+  // Enhanced fetch available loads with better filtering and bid integration
+  const fetchAvailableLoads = useCallback(async () => {
+    setLoadingStates(prev => ({ ...prev, loads: true }));
     
-    // Add location if available 
-    if (currentUser?.location) {
-      params.append('location', currentUser.location);
-    } else if (currentUser?.coordinates?.latitude && currentUser?.coordinates?.longitude) {
-      params.append('lat', currentUser.coordinates.latitude.toString());
-      params.append('lng', currentUser.coordinates.longitude.toString());
-      params.append('radius', '50'); 
-    }
+    try {
+      // Build query parameters
+      const params = new URLSearchParams({
+        limit: '10', 
+        status: 'active',
+        page: '1'
+      });
 
-    // Add vehicle type filter
-    if (currentUser?.vehicleType) {
-      params.append('vehicleType', currentUser.vehicleType);
-    }
-
-    const response = await fetch(
-      `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`, 
-      { headers: getAuthHeaders() }
-    );
-
-    if (await handleApiError(response, 'fetchAvailableLoads')) return;
-
-    if (response.ok) {
-      const loadsData = await response.json();
-      const loads = loadsData.data?.loads || loadsData.loads || [];
+      const currentUser = getUser(); 
       
-      // Format loads for consistent display
-      const formattedLoads = loads.slice(0, 10).map(load => ({
-        _id: load._id,
-        title: load.title || 'Transport Required',
-        pickupLocation: load.pickupLocation || load.origin || 'Pickup Location',
-        deliveryLocation: load.deliveryLocation || load.destination || 'Delivery Location',
-        cargoType: load.cargoType || load.loadType || 'General Cargo',
-        weight: load.weight || load.estimatedWeight || 0,
-        estimatedAmount: load.estimatedAmount || load.budget || 0,
-        pickupDate: load.pickupDate || load.scheduledPickupDate,
-        deliveryDate: load.deliveryDate || load.scheduledDeliveryDate,
-        description: load.description,
-        urgency: load.urgency || 'normal',
-        bidCount: load.bidCount || 0,
-        createdAt: load.createdAt,
-        cargoOwnerId: load.cargoOwnerId || load.postedBy
-      }));
+      // Add location if available 
+      if (currentUser?.location) {
+        params.append('location', currentUser.location);
+      } else if (currentUser?.coordinates?.latitude && currentUser?.coordinates?.longitude) {
+        params.append('lat', currentUser.coordinates.latitude.toString());
+        params.append('lng', currentUser.coordinates.longitude.toString());
+        params.append('radius', '100'); 
+      }
+
+    
+      if (currentUser?.vehicleType) {
+        params.append('vehicleType', currentUser.vehicleType);
+      }
+
+     
+      if (currentUser?.driverProfile?.preferredCargoTypes?.length > 0) {
+        params.append('cargoTypes', currentUser.driverProfile.preferredCargoTypes.join(','));
+      }
+
+      // Exclude loads where driver already has bids
+      const myBidLoadIds = dashboardData.myBids.map(bid => bid.loadId).filter(Boolean);
+      if (myBidLoadIds.length > 0) {
+        params.append('excludeLoads', myBidLoadIds.join(','));
+      }
+
+      const response = await fetch(
+        `https://infinite-cargo-api.onrender.com/api/loads?${params.toString()}`, 
+        { headers: getAuthHeaders() }
+      );
+
+      if (await handleApiError(response, 'fetchAvailableLoads')) return;
+
+      if (response.ok) {
+        const loadsData = await response.json();
+        const loads = loadsData.data?.loads || loadsData.loads || [];
+        
+       
+        const formattedLoads = loads
+
+          .filter(load => {
+            // Don't show loads where driver already has a bid
+            const hasExistingBid = dashboardData.myBids.some(bid => bid.loadId === load._id);
+            return !hasExistingBid && load.status === 'active';
+          })
+          .map(load => ({
+            _id: load._id,
+            title: load.title || 'Transport Required',
+            pickupLocation: load.pickupLocation || load.origin || 'Pickup Location',
+            deliveryLocation: load.deliveryLocation || load.destination || 'Delivery Location',
+            cargoType: load.cargoType || load.loadType || 'General Cargo',
+            weight: load.weight || load.estimatedWeight || 0,
+            estimatedAmount: load.estimatedAmount || load.budget || 0,
+            pickupDate: load.pickupDate || load.scheduledPickupDate,
+            deliveryDate: load.deliveryDate || load.scheduledDeliveryDate,
+            description: load.description || '',
+            urgency: load.urgency || 'normal',
+            bidCount: load.bidCount || 0,
+            createdAt: load.createdAt,
+            updatedAt: load.updatedAt,
+            cargoOwnerId: load.cargoOwnerId || load.postedBy,
+            requirements: load.requirements || {},
+            distance: load.distance || 0,
+            estimatedDuration: load.estimatedDuration || 0,
+            vehicleTypeRequired: load.vehicleTypeRequired || [],
+            maxBidAmount: load.maxBidAmount || 0,
+            minBidAmount: load.minBidAmount || 0,
+            bidDeadline: load.bidDeadline,
+            isUrgent: load.urgency === 'urgent' || (load.pickupDate && (() => {
+              const pickupDate = new Date(load.pickupDate);
+              const today = new Date();
+              const diffTime = pickupDate.getTime() - today.getTime();
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              return diffDays <= 2;
+            })())
+          }))
+          .slice(0, 10); 
       
+        setDashboardData(prev => ({
+          ...prev,
+          availableLoads: formattedLoads
+        }));
+      } else {
+        console.error('Failed to fetch available loads:', response.status);
+        setDashboardData(prev => ({
+          ...prev,
+          availableLoads: []
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching available loads:', error);
       setDashboardData(prev => ({
         ...prev,
-        availableLoads: formattedLoads
+        availableLoads: []
       }));
-    } else {
-      console.error('Failed to fetch available loads:', response.status);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, loads: false }));
     }
-  } catch (error) {
-    console.error('Error fetching available loads:', error);
-  } finally {
-    setLoadingStates(prev => ({ ...prev, loads: false }));
-  }
-}, [getAuthHeaders, handleApiError]);
+  }, [getAuthHeaders, handleApiError, dashboardData.myBids]);
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
@@ -505,7 +597,7 @@ const fetchAvailableLoads = useCallback(async () => {
     }
   }, [getAuthHeaders, handleApiError]);
 
-  // Fetch all dashboard data - NOW WITH CORRECT DEPENDENCIES
+  // Fetch all dashboard data 
   const fetchDashboardData = useCallback(async (showLoader = true) => {
     if (showLoader) {
       setLoading(true);
@@ -516,7 +608,7 @@ const fetchAvailableLoads = useCallback(async () => {
     setError('');
     
     try {
-      // OPTION 1: Try the comprehensive dashboard endpoint first
+     
       try {
         const dashboardResponse = await fetch('https://infinite-cargo-api.onrender.com/api/drivers/dashboard', {
           headers: getAuthHeaders()
@@ -581,15 +673,17 @@ const fetchAvailableLoads = useCallback(async () => {
         console.log('[DEBUG] Dashboard endpoint error:', dashboardError);
       }
 
-      // OPTION 2: Fallback to individual endpoints
+      
       await Promise.all([
         fetchUserProfile(),
         fetchDriverStats(),
         fetchActiveJobs(),
-        fetchAvailableLoads(), 
         fetchDriverBids(),
         fetchNotifications()
       ]);
+
+      
+      await fetchAvailableLoads();
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -598,7 +692,16 @@ const fetchAvailableLoads = useCallback(async () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [getAuthHeaders, handleApiError]); 
+  }, [
+    getAuthHeaders, 
+    handleApiError,
+    fetchUserProfile,
+    fetchDriverStats,
+    fetchActiveJobs,
+    fetchAvailableLoads,  
+    fetchDriverBids,
+    fetchNotifications
+  ]); 
 
   // Initial load and auth setup
   useEffect(() => {
@@ -628,7 +731,7 @@ const fetchAvailableLoads = useCallback(async () => {
     return () => window.removeEventListener('authStateChanged', handleAuthChange);
   }, []);
 
-  // Check token expiration periodically
+  
   useEffect(() => {
     const checkTokenExpiration = () => {
       if (authManager.isTokenExpiringSoon()) {
@@ -652,7 +755,7 @@ const fetchAvailableLoads = useCallback(async () => {
     const newAvailability = !currentAvailability;
 
     setAvailabilityUpdating(true);
-    setError(''); // Clear previous errors
+    setError(''); 
 
     try {
       const requestBody = { isAvailable: newAvailability };
@@ -666,17 +769,17 @@ const fetchAvailableLoads = useCallback(async () => {
         body: JSON.stringify(requestBody)
       });
 
-      // Handle authentication errors first
+      
       if (response.status === 401 || response.status === 403) {
         setError('Authentication failed. Please login again.');
         handleLogout();
         return;
       }
 
-      // Get response text first for better debugging
+      
       const responseText = await response.text();
       
-      // Parse response
+      
       let responseData;
       try {
         responseData = responseText ? JSON.parse(responseText) : {};
@@ -687,14 +790,14 @@ const fetchAvailableLoads = useCallback(async () => {
       }
 
       if (!response.ok) {
-        // Handle server errors
+       
         const errorMessage = responseData?.message || `Failed to update availability (${response.status})`;
         console.error('Server error:', errorMessage);
         setError(errorMessage);
         return;
       }
 
-      // Get the actual updated value from the server response
+      
       const serverUpdatedValue = responseData.data?.isAvailable;
       
       if (serverUpdatedValue === undefined || serverUpdatedValue === null) {
@@ -714,20 +817,19 @@ const fetchAvailableLoads = useCallback(async () => {
 
       setUser(updatedUser);
       
-      // Update authManager storage
+      
       authManager.setAuth(
         authManager.getToken(),
         updatedUser,
         localStorage.getItem('infiniteCargoRememberMe') === 'true'
       );
 
-      // Clear any existing errors on success
+      
       setError('');
 
-      // Show success message
       setSuccessMessage(`You are now ${serverUpdatedValue ? 'available' : 'offline'} for new jobs`);
 
-      // Auto-clear success message after 3 seconds
+      
       setTimeout(() => {
         setSuccessMessage('');
       }, 3000);
@@ -740,10 +842,10 @@ const fetchAvailableLoads = useCallback(async () => {
     }
   };
 
-  // Place a bid on a load
+
   const placeBid = async (bidData) => {
     try {
-      // Validate required fields before sending
+     
       if (!bidData._id) {
         setError('Load ID is required');
         return false;
@@ -754,21 +856,21 @@ const fetchAvailableLoads = useCallback(async () => {
         return false;
       }
 
-      // Validate MongoDB ObjectId format (24 hex characters)
+     
       const objectIdRegex = /^[0-9a-fA-F]{24}$/;
       if (!objectIdRegex.test(bidData._id)) {
         setError('Invalid load ID format');
         return false;
       }
 
-      // Validate date formats if provided
+      
       if (bidData.proposedPickupDate) {
         const pickupDate = new Date(bidData.proposedPickupDate);
         if (isNaN(pickupDate.getTime())) {
           setError('Invalid proposed pickup date');
           return false;
         }
-        // Ensure ISO8601 format
+        
         bidData.proposedPickupDate = pickupDate.toISOString();
       }
 
@@ -778,17 +880,17 @@ const fetchAvailableLoads = useCallback(async () => {
           setError('Invalid proposed delivery date');
           return false;
         }
-        // Ensure ISO8601 format
+       
         bidData.proposedDeliveryDate = deliveryDate.toISOString();
       }
 
-      // Validate message length
+     
       if (bidData.message && bidData.message.length > 500) {
         setError('Message cannot exceed 500 characters');
         return false;
       }
 
-      // Clean the bid data - remove any undefined/null values
+      
       const cleanBidData = {
         loadId: bidData._id,
         bidAmount: parseFloat(bidData.bidAmount),
@@ -812,14 +914,14 @@ const fetchAvailableLoads = useCallback(async () => {
         }
       );
 
-      // Handle authentication errors
+    
       if (response.status === 401 || response.status === 403) {
         setError('Authentication failed. Please login again.');
         handleLogout();
         return false;
       }
 
-      // Get response body for debugging
+      
       const responseText = await response.text();
 
       let responseData;
@@ -851,8 +953,10 @@ const fetchAvailableLoads = useCallback(async () => {
       }
 
       // Refresh data and show success message
-      await fetchDriverBids();
-      await fetchAvailableLoads(); // Don't pass user data here since it's not location-dependent
+      await Promise.all([
+        fetchDriverBids(),
+        fetchAvailableLoads()
+      ]);
       
       setSuccessMessage('Bid placed successfully!');
       setTimeout(() => {
@@ -870,8 +974,6 @@ const fetchAvailableLoads = useCallback(async () => {
       return false;
     }
   };
-
-  
 
   // Update driver location
   const updateDriverLocation = async (latitude, longitude) => {
@@ -1094,13 +1196,14 @@ const fetchAvailableLoads = useCallback(async () => {
               loading={loadingStates.bookings}
             />
 
-            {/* Available Loads */}
+            {/* Available Loads - Enhanced with better auth integration */}
             <AvailableLoadsSection 
               availableLoads={dashboardData.availableLoads}
               onBidPlace={placeBid}
               formatCurrency={formatCurrency}
               formatDate={formatDate}
               loading={loadingStates.loads}
+              onSearchLoads={openSearchLoads}
             />
 
             {/* My Bids */}
