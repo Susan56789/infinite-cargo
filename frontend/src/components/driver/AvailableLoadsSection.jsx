@@ -17,7 +17,7 @@ import {
   Truck
 } from 'lucide-react';
 
-// BidForm Component 
+// BidForm Component - 
 const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
   const [bidData, setBidData] = useState({
     bidAmount: '',
@@ -47,6 +47,31 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
       newErrors.message = 'Message cannot exceed 500 characters';
     }
 
+    // Add date validation
+    if (!bidData.proposedPickupDate) {
+      newErrors.proposedPickupDate = 'Pickup date is required';
+    } else {
+      const pickupDate = new Date(bidData.proposedPickupDate);
+      if (isNaN(pickupDate.getTime())) {
+        newErrors.proposedPickupDate = 'Invalid pickup date format';
+      } else if (pickupDate < new Date()) {
+        newErrors.proposedPickupDate = 'Pickup date cannot be in the past';
+      }
+    }
+    
+    if (!bidData.proposedDeliveryDate) {
+      newErrors.proposedDeliveryDate = 'Delivery date is required';
+    } else {
+      const deliveryDate = new Date(bidData.proposedDeliveryDate);
+      const pickupDate = new Date(bidData.proposedPickupDate);
+      
+      if (isNaN(deliveryDate.getTime())) {
+        newErrors.proposedDeliveryDate = 'Invalid delivery date format';
+      } else if (bidData.proposedPickupDate && deliveryDate <= pickupDate) {
+        newErrors.proposedDeliveryDate = 'Delivery date must be after pickup date';
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -56,14 +81,21 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
     
     if (!validateForm()) return;
 
-    // Structure the bid data to match what DriverDashboard.placeBid expects
+    // Structure the bid data to exactly match what DriverDashboard.placeBid expects
+    // This matches the cleanBidData structure in DriverDashboard
     const bidPayload = {
-      _id: load._id, // This is what placeBid expects for loadId
+      loadId: load._id, // Correct field name that API expects
       bidAmount: parseFloat(bidData.bidAmount),
-      proposedPickupDate: bidData.proposedPickupDate || undefined,
-      proposedDeliveryDate: bidData.proposedDeliveryDate || undefined,
-      message: bidData.message || undefined
+      currency: 'KES', // Default currency
+      proposedPickupDate: bidData.proposedPickupDate ? new Date(bidData.proposedPickupDate).toISOString() : undefined,
+      proposedDeliveryDate: bidData.proposedDeliveryDate ? new Date(bidData.proposedDeliveryDate).toISOString() : undefined,
+      message: bidData.message?.trim() || undefined,
+      vehicleDetails: {
+        type: bidData.vehicleDetails.type,
+        capacity: parseFloat(bidData.vehicleDetails.capacity) || 5
+      }
     };
+
 
     const result = await onBidSubmit(bidPayload);
     
@@ -85,6 +117,16 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
         [field]: ''
       }));
     }
+  };
+
+  const handleVehicleDetailsChange = (field, value) => {
+    setBidData(prev => ({
+      ...prev,
+      vehicleDetails: {
+        ...prev.vehicleDetails,
+        [field]: value
+      }
+    }));
   };
 
   return (
@@ -113,45 +155,98 @@ const BidForm = ({ load, onBidSubmit, onCancel, submitting }) => {
             type="number"
             value={bidData.bidAmount}
             onChange={(e) => handleInputChange('bidAmount', e.target.value)}
-            placeholder={`Estimated: KES ${load.estimatedAmount || 'Not specified'}`}
+            placeholder={`Estimated: KES ${load.estimatedAmount || load.budget || 'Not specified'}`}
             className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
               errors.bidAmount ? 'border-red-300' : 'border-gray-300'
             }`}
             min="1"
             step="0.01"
+            required
           />
           {errors.bidAmount && (
             <p className="mt-1 text-sm text-red-600">{errors.bidAmount}</p>
           )}
         </div>
 
-        {/* Dates */}
+        {/* Dates - Now Required */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               <Calendar size={16} className="inline mr-1" />
-              Proposed Pickup Date
+              Proposed Pickup Date *
             </label>
             <input
               type="datetime-local"
               value={bidData.proposedPickupDate}
               onChange={(e) => handleInputChange('proposedPickupDate', e.target.value)}
               min={new Date().toISOString().slice(0, 16)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.proposedPickupDate ? 'border-red-300' : 'border-gray-300'
+              }`}
+              required
             />
+            {errors.proposedPickupDate && (
+              <p className="mt-1 text-sm text-red-600">{errors.proposedPickupDate}</p>
+            )}
           </div>
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               <Calendar size={16} className="inline mr-1" />
-              Proposed Delivery Date
+              Proposed Delivery Date *
             </label>
             <input
               type="datetime-local"
               value={bidData.proposedDeliveryDate}
               onChange={(e) => handleInputChange('proposedDeliveryDate', e.target.value)}
               min={bidData.proposedPickupDate || new Date().toISOString().slice(0, 16)}
+              className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.proposedDeliveryDate ? 'border-red-300' : 'border-gray-300'
+              }`}
+              required
+            />
+            {errors.proposedDeliveryDate && (
+              <p className="mt-1 text-sm text-red-600">{errors.proposedDeliveryDate}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Vehicle Details */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Vehicle Type
+            </label>
+            <select
+              value={bidData.vehicleDetails.type}
+              onChange={(e) => handleVehicleDetailsChange('type', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="pickup">Pickup Truck</option>
+              <option value="van">Van</option>
+              <option value="small_truck">Small Truck</option>
+              <option value="medium_truck">Medium Truck</option>
+              <option value="large_truck">Large Truck</option>
+              <option value="heavy_truck">Heavy Truck</option>
+              <option value="trailer">Trailer</option>
+              <option value="refrigerated_truck">Refrigerated Truck</option>
+              <option value="flatbed">Flatbed</option>
+              <option value="container_truck">Container Truck</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Capacity (tonnes)
+            </label>
+            <input
+              type="number"
+              value={bidData.vehicleDetails.capacity}
+              onChange={(e) => handleVehicleDetailsChange('capacity', parseFloat(e.target.value) || '')}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              min="0.1"
+              step="0.1"
+              placeholder="e.g. 5.0"
             />
           </div>
         </div>
@@ -243,7 +338,7 @@ const LoadDetailsModal = ({ load, onClose, onBidClick, formatCurrency, formatDat
           <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
             <div>
               <label className="block text-sm font-medium text-gray-700">Estimated Amount</label>
-              <p className="text-green-600 font-bold text-xl">{formatCurrency(load.estimatedAmount)}</p>
+              <p className="text-green-600 font-bold text-xl">{formatCurrency(load.estimatedAmount || load.budget)}</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700">Weight</label>
@@ -372,9 +467,11 @@ const AvailableLoadsSection = ({
   const [bidFormLoad, setBidFormLoad] = useState(null);
   const [submittingBid, setSubmittingBid] = useState(false);
 
+  // Updated to handle the new bid payload structure
   const handleBidSubmit = async (bidData) => {
     setSubmittingBid(true);
     try {
+      // Pass the correctly structured bidData directly to onBidPlace
       const result = await onBidPlace(bidData);
       if (result !== false) {
         setBidFormLoad(null);
@@ -477,7 +574,7 @@ const AvailableLoadsSection = ({
                         </div>
                         <div className="flex items-center">
                           <DollarSign className="w-4 h-4 mr-1" />
-                          {formatCurrency(load.estimatedAmount)}
+                          {formatCurrency(load.estimatedAmount || load.budget)}
                         </div>
                         {load.pickupDate && (
                           <div className="flex items-center">

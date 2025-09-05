@@ -605,7 +605,7 @@ const LoadSearch = () => {
         ...getAuthHeaders()
       };
 
-      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids/my-bids', {
+      const response = await fetch('https://infinite-cargo-api.onrender.com/api/bids', {
         method: 'GET',
         headers,
         credentials: 'include'
