@@ -9,6 +9,7 @@ import AdminNotifications from './AdminNotifications';
 import AdminHeader from './AdminHeader';
 import AddAdminModal from './AddAdminModal';
 import ReportsTab from './ReportsTab';
+import AdminManagementDashboard from './AdminManagementDashboard';
 
 import { 
   Users, Package, Truck, DollarSign, RefreshCw, TrendingUp,
@@ -1060,6 +1061,9 @@ const AdminDashboard = () => {
     { key: 'notifications', label: 'Notifications', icon: Bell },
     { key: 'activity', label: 'Activity', icon: Activity },
     { key: 'reports', label: 'Reports', icon: BarChart3 },
+    ...(adminData?.role === 'super_admin' ? [
+    { key: 'admin-management', label: 'Admin Management', icon: Shield }
+  ] : []),
     ...(adminData?.role === 'super_admin' || adminData?.permissions?.systemSettings ? 
       [{ key: 'settings', label: 'Settings', icon: Settings }] : [])
   ];
@@ -1096,32 +1100,39 @@ const AdminDashboard = () => {
         )}
 
         {/* Super Admin Controls */}
-        {adminData?.role === 'super_admin' && (
-          <div className="mb-6 bg-white p-4 border border-gray-200 rounded-xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Super Admin Controls</h3>
-                <p className="text-sm text-gray-600">Advanced administrative functions</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowAddAdmin(true)}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors"
-                >
-                  <Shield className="w-4 h-4" />
-                  Add Admin
-                </button>
-                <button
-                  onClick={() => setActiveTab('settings')}
-                  className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 flex items-center gap-2 transition-colors"
-                >
-                  <Settings className="w-4 h-4" />
-                  Settings
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+       {adminData?.role === 'super_admin' && (
+  <div className="mb-6 bg-white p-4 border border-gray-200 rounded-xl">
+    <div className="flex items-center justify-between">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900">Super Admin Controls</h3>
+        <p className="text-sm text-gray-600">Advanced administrative functions</p>
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setShowAddAdmin(true)}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors"
+        >
+          <Shield className="w-4 h-4" />
+          Add Admin
+        </button>
+        <button
+          onClick={() => setActiveTab('admin-management')}
+          className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 flex items-center gap-2 transition-colors"
+        >
+          <Shield className="w-4 h-4" />
+          Manage Admins
+        </button>
+        <button
+          onClick={() => setActiveTab('settings')}
+          className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 flex items-center gap-2 transition-colors"
+        >
+          <Settings className="w-4 h-4" />
+          Settings
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
         {/* Loading Overlay */}
         {loading && (
@@ -1172,6 +1183,16 @@ const AdminDashboard = () => {
           
           />}
           {activeTab === 'settings' && <SettingsTab />}
+
+          {activeTab === 'admin-management' && adminData?.role === 'super_admin' && (
+    <div className="p-6">
+      <AdminManagementDashboard
+        apiCall={apiCall}
+        showError={showError}
+        showSuccess={showSuccess}
+      />
+    </div>
+  )}
 
           {/* Table Components */}
           {activeTab === 'users' && (
