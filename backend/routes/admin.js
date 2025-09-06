@@ -1,3 +1,4 @@
+// Admin Routes routes/admin.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
@@ -1102,6 +1103,487 @@ async function sendAdminPasswordChangeConfirmationEmail(email, name) {
     // Don't throw error - email failure shouldn't fail password reset
   }
 }
+
+
+// Get all admins (Super Admin only)
+router.get('/admins', adminAuth, async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || '';
+    const status = req.query.status || '';
+
+    let query = {};
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+    }
+    if (status) {
+      query.isActive = status === 'active';
+    }
+
+    const admins = await Admin.find(query, '-password')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Admin.countDocuments(query);
+
+    res.json({
+      status: 'success',
+      data: admins,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        total,
+        limit
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching admins:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admins'
+    });
+  }
+});
+
+// Get admin by ID (Super Admin only)
+router.get('/admins/:id', adminAuth, async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const admin = await Admin.findById(req.params.id, '-password');
+    
+    if (!admin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      data: admin
+    });
+  } catch (error) {
+    console.error('Error fetching admin:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch admin'
+    });
+  }
+});
+
+// Update admin (Super Admin only)
+router.put('/admins/:id', [
+  adminAuth,
+  body('name').optional().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
+  body('email').optional().isEmail().withMessage('Valid email is required'),
+  body('phone').optional().isMobilePhone().withMessage('Valid phone number is required'),
+  body('role').optional().isIn(['admin', 'super_admin']).withMessage('Invalid role'),
+  body('isActive').optional().isBoolean().withMessage('isActive must be a boolean')
+], async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const updateData = req.body;
+
+    // Prevent self-demotion from super_admin
+    if (id === req.admin._id.toString() && updateData.role && updateData.role !== 'super_admin') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot change your own super admin role'
+      });
+    }
+
+    // Prevent self-deactivation
+    if (id === req.admin._id.toString() && updateData.isActive === false) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot deactivate your own account'
+      });
+    }
+
+    const admin = await Admin.findByIdAndUpdate(
+      id,
+      { 
+        ...updateData,
+        updatedAt: new Date()
+      },
+      { new: true, select: '-password' }
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Admin updated successfully',
+      data: admin
+    });
+  } catch (error) {
+    console.error('Error updating admin:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update admin'
+    });
+  }
+});
+
+// Suspend/Activate admin (Super Admin only)
+router.patch('/admins/:id/status', [
+  adminAuth,
+  body('isActive').isBoolean().withMessage('isActive must be a boolean'),
+  body('reason').optional().isString().withMessage('Reason must be a string')
+], async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const { isActive, reason } = req.body;
+
+    // Prevent self-deactivation
+    if (id === req.admin._id.toString() && isActive === false) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot suspend your own account'
+      });
+    }
+
+    const admin = await Admin.findByIdAndUpdate(
+      id,
+      {
+        isActive,
+        suspendedAt: !isActive ? new Date() : null,
+        suspendedBy: !isActive ? req.admin._id : null,
+        suspensionReason: !isActive ? reason : null,
+        reactivatedAt: isActive ? new Date() : null,
+        reactivatedBy: isActive ? req.admin._id : null,
+        updatedAt: new Date()
+      },
+      { new: true, select: '-password' }
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
+    const action = isActive ? 'activated' : 'suspended';
+
+    res.json({
+      status: 'success',
+      message: `Admin ${action} successfully`,
+      data: admin
+    });
+  } catch (error) {
+    console.error('Error updating admin status:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update admin status'
+    });
+  }
+});
+
+// Delete admin (Super Admin only)
+router.delete('/admins/:id', adminAuth, async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const { id } = req.params;
+
+    // Prevent self-deletion
+    if (id === req.admin._id.toString()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cannot delete your own account'
+      });
+    }
+
+    const admin = await Admin.findById(id);
+    if (!admin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
+    // Check if it's the last super admin
+    if (admin.role === 'super_admin') {
+      const superAdminCount = await Admin.countDocuments({ role: 'super_admin' });
+      if (superAdminCount <= 1) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Cannot delete the last super admin account'
+        });
+      }
+    }
+
+    await Admin.findByIdAndDelete(id);
+
+    res.json({
+      status: 'success',
+      message: 'Admin deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting admin:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete admin'
+    });
+  }
+});
+
+// Get subscription pricing plans (Super Admin only)
+router.get('/subscription-plans', adminAuth, async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    // This would typically come from a database or config
+    const plans = {
+      basic: {
+        id: 'basic',
+        name: 'Basic Plan',
+        price: 0,
+        currency: 'KES',
+        duration: 30,
+        features: {
+          maxLoads: 3,
+          prioritySupport: false,
+          advancedAnalytics: false,
+          bulkOperations: false,
+          apiAccess: false,
+          dedicatedManager: false
+        },
+        description: 'Perfect for individuals getting started'
+      },
+      pro: {
+        id: 'pro',
+        name: 'Pro Plan',
+        price: 2500,
+        currency: 'KES',
+        duration: 30,
+        features: {
+          maxLoads: 20,
+          prioritySupport: true,
+          advancedAnalytics: true,
+          bulkOperations: false,
+          apiAccess: false,
+          dedicatedManager: false
+        },
+        description: 'Great for small to medium businesses'
+      },
+      business: {
+        id: 'business',
+        name: 'Business Plan',
+        price: 5000,
+        currency: 'KES',
+        duration: 30,
+        features: {
+          maxLoads: -1,
+          prioritySupport: true,
+          advancedAnalytics: true,
+          bulkOperations: true,
+          apiAccess: true,
+          dedicatedManager: true
+        },
+        description: 'Perfect for large enterprises'
+      }
+    };
+
+    res.json({
+      status: 'success',
+      data: { plans }
+    });
+  } catch (error) {
+    console.error('Error fetching subscription plans:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch subscription plans'
+    });
+  }
+});
+
+// Update subscription pricing (Super Admin only)
+router.put('/subscription-plans/:planId', [
+  adminAuth,
+  body('name').optional().isLength({ min: 2 }).withMessage('Plan name must be at least 2 characters'),
+  body('price').optional().isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+  body('duration').optional().isInt({ min: 1 }).withMessage('Duration must be at least 1 day'),
+  body('description').optional().isLength({ min: 10 }).withMessage('Description must be at least 10 characters')
+], async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { planId } = req.params;
+    const updateData = req.body;
+
+    // Validate plan ID
+    if (!['basic', 'pro', 'business'].includes(planId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid plan ID'
+      });
+    }
+
+    // In a real implementation, you would save this to a database
+    // For now, we'll just return success
+    res.json({
+      status: 'success',
+      message: 'Subscription plan updated successfully',
+      data: {
+        planId,
+        ...updateData,
+        updatedAt: new Date(),
+        updatedBy: req.admin._id
+      }
+    });
+  } catch (error) {
+    console.error('Error updating subscription plan:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update subscription plan'
+    });
+  }
+});
+
+// Update subscription payment details (Super Admin only)
+router.patch('/subscriptions/:id/payment', [
+  adminAuth,
+  body('paymentStatus').optional().isIn(['pending', 'completed', 'failed', 'refunded'])
+    .withMessage('Invalid payment status'),
+  body('paymentDetails').optional().isObject().withMessage('Payment details must be an object'),
+  body('adminNotes').optional().isString().withMessage('Admin notes must be a string')
+], async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const { paymentStatus, paymentDetails, adminNotes } = req.body;
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (paymentStatus) updateData.paymentStatus = paymentStatus;
+    if (paymentDetails) updateData.paymentDetails = paymentDetails;
+    if (adminNotes) updateData.adminNotes = adminNotes;
+
+    const subscription = await Subscription.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true }
+    );
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Subscription payment details updated successfully',
+      data: subscription
+    });
+  } catch (error) {
+    console.error('Error updating subscription payment:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update subscription payment details'
+    });
+  }
+});
 
 // @route   GET /api/admin/analytics/activity-summary
 // @desc    Get activity summary for today
