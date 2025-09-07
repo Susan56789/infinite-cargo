@@ -64,36 +64,71 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
   const [selectedAdmin, setSelectedAdmin] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
 
-  // Fetch functions using the same pattern as AdminDashboard
+  
   const fetchAdmins = useCallback(async (page = 1, search = '', status = '') => {
-    try {
-      setLoading(true);
-      const queryParams = new URLSearchParams({
-        page: page.toString(),
-        limit: '10',
-        ...(search && { search }),
-        ...(status && status !== 'all' && { status })
+  try {
+    setLoading(true);
+    const queryParams = new URLSearchParams({
+      page: page.toString(),
+      limit: '10',
+      ...(search && { search }),
+      ...(status && status !== 'all' && { status })
+    });
+    
+    
+    const response = await apiCall(`/admin/admins?${queryParams}`, {
+      method: 'GET'
+    });
+    
+    
+    if (response?.status === 'success') {
+      // Ensure we have valid data
+      const adminList = Array.isArray(response.data) ? response.data : [];
+      
+      // Validate admin IDs
+      const validAdmins = adminList.filter(admin => {
+        const adminId = admin._id || admin.id;
+        if (!adminId) {
+          console.warn('Admin found without ID:', admin);
+          return false;
+        }
+        if (!/^[0-9a-fA-F]{24}$/.test(adminId)) {
+          console.warn('Admin found with invalid ID format:', adminId);
+          return false;
+        }
+        return true;
       });
       
-      const response = await apiCall(`/admin/admins?${queryParams}`, {
-        method: 'GET'
-      });
-      
-      if (response?.status === 'success') {
-        setAdmins(Array.isArray(response.data) ? response.data : []);
-        setTotalPages(response.pagination?.totalPages || 1);
-        setCurrentPage(response.pagination?.currentPage || 1);
-      } else {
-        throw new Error(response?.message || 'Failed to fetch admins');
+      if (validAdmins.length !== adminList.length) {
+        console.warn(`Filtered ${adminList.length - validAdmins.length} invalid admins`);
       }
-    } catch (error) {
-      console.error('Fetch admins error:', error);
-      showError('Failed to fetch admins: ' + (error.message || 'Unknown error'));
-      setAdmins([]);
-    } finally {
-      setLoading(false);
+      
+      setAdmins(validAdmins);
+      setTotalPages(response.pagination?.totalPages || 1);
+      setCurrentPage(response.pagination?.currentPage || 1);
+    } else {
+      throw new Error(response?.message || 'Failed to fetch admins');
     }
-  }, [apiCall, showError]);
+  } catch (error) {
+    console.error('Fetch admins error:', error);
+    
+    let errorMessage = 'Failed to fetch admins';
+    if (error.message.includes('Access denied')) {
+      errorMessage = 'You do not have permission to view admin management.';
+    } else if (error.message.includes('Network')) {
+      errorMessage = 'Network error. Please check your connection and try again.';
+    } else {
+      errorMessage = error.message || 'An unexpected error occurred while fetching admins.';
+    }
+    
+    showError(errorMessage);
+    setAdmins([]);
+    setTotalPages(1);
+    setCurrentPage(1);
+  } finally {
+    setLoading(false);
+  }
+}, [apiCall, showError]);
 
   const fetchPricingPlans = useCallback(async () => {
     try {
@@ -158,112 +193,195 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
   // Admin management functions
   const handleEditAdmin = async (adminData) => {
-    if (!selectedAdmin?._id && !selectedAdmin?.id) {
-      showError('No admin selected');
-      return;
-    }
+  // Enhanced ID validation
+  const adminId = selectedAdmin?._id || selectedAdmin?.id;
+  
+  if (!adminId) {
+    showError('No admin selected for editing');
+    return;
+  }
 
-    try {
-      setLoading(true);
-      const adminId = selectedAdmin._id || selectedAdmin.id;
-      console.log('Updating admin:', adminId, adminData); // Debug log
-      
-      const response = await apiCall(`/admin/admins/${adminId}`, {
-        method: 'PUT',
-        body: JSON.stringify(adminData)
-      });
-      
-      console.log('Update admin response:', response); // Debug log
-      
-      if (response?.status === 'success') {
-        showSuccess('Admin updated successfully');
-        setShowEditAdmin(false);
-        setSelectedAdmin(null);
-        fetchAdmins(currentPage, searchTerm, statusFilter);
-      } else {
-        throw new Error(response?.message || 'Failed to update admin');
+  // Validate ObjectId format (24 hex characters)
+  if (!/^[0-9a-fA-F]{24}$/.test(adminId)) {
+    showError('Invalid admin ID format');
+    return;
+  }
+
+  try {
+    setLoading(true);
+    
+    // Clean the admin data - remove any undefined values
+    const cleanAdminData = {};
+    Object.keys(adminData).forEach(key => {
+      if (adminData[key] !== undefined && adminData[key] !== null && adminData[key] !== '') {
+        cleanAdminData[key] = adminData[key];
       }
-    } catch (error) {
-      console.error('Update admin error:', error);
-      showError('Failed to update admin: ' + (error.message || 'Unknown error'));
-    } finally {
-      setLoading(false);
+    });
+
+    const response = await apiCall(`/admin/admins/${adminId}`, {
+      method: 'PUT',
+      body: JSON.stringify(cleanAdminData)
+    });
+    
+    
+    if (response?.status === 'success') {
+      showSuccess('Admin updated successfully');
+      setShowEditAdmin(false);
+      setSelectedAdmin(null);
+      // Refresh the admin list
+      await fetchAdmins(currentPage, searchTerm, statusFilter);
+    } else {
+      const errorMessage = response?.message || 'Failed to update admin';
+      throw new Error(errorMessage);
     }
-  };
+  } catch (error) {
+    console.error('Update admin error:', error);
+    
+    // Handle specific error types
+    let errorMessage = 'Failed to update admin';
+    
+    if (error.message.includes('Invalid admin ID format')) {
+      errorMessage = 'Invalid admin ID format. Please refresh the page and try again.';
+    } else if (error.message.includes('Admin not found')) {
+      errorMessage = 'Admin not found. They may have been deleted by another administrator.';
+    } else if (error.message.includes('Validation failed')) {
+      errorMessage = 'Please check all required fields and try again.';
+    } else if (error.message.includes('Access denied')) {
+      errorMessage = 'You do not have permission to perform this action.';
+    } else if (error.message.includes('already exists')) {
+      errorMessage = 'Email or phone number already exists for another admin.';
+    } else {
+      errorMessage = error.message || 'An unexpected error occurred while updating the admin.';
+    }
+    
+    showError(errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleSuspendAdmin = async (suspensionData) => {
-    if (!selectedAdmin?._id && !selectedAdmin?.id) {
-      showError('No admin selected');
-      return;
-    }
+  const adminId = selectedAdmin?._id || selectedAdmin?.id;
+  
+  if (!adminId) {
+    showError('No admin selected for status update');
+    return;
+  }
 
-    try {
-      setLoading(true);
-      const adminId = selectedAdmin._id || selectedAdmin.id;
-      
-      // Prepare the data according to backend expectations
-      const requestData = {
-        isActive: suspensionData.isActive !== undefined ? suspensionData.isActive : !selectedAdmin.isActive,
-        reason: suspensionData.reason || suspensionData.suspensionReason || ''
-      };
-      
-      console.log('Updating admin status:', adminId, requestData);
-      
-      const response = await apiCall(`/admin/admins/${adminId}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify(requestData)
-      });
-      
-      console.log('Suspend admin response:', response);
-      
-      if (response?.status === 'success') {
-        showSuccess(`Admin ${!requestData.isActive ? 'suspended' : 'activated'} successfully`);
-        setShowSuspendModal(false);
-        setSelectedAdmin(null);
-        fetchAdmins(currentPage, searchTerm, statusFilter);
-      } else {
-        throw new Error(response?.message || 'Failed to update admin status');
-      }
-    } catch (error) {
-      console.error('Suspend admin error:', error);
-      showError('Failed to update admin status: ' + (error.message || 'Unknown error'));
-    } finally {
-      setLoading(false);
+  // Validate ObjectId format
+  if (!/^[0-9a-fA-F]{24}$/.test(adminId)) {
+    showError('Invalid admin ID format');
+    return;
+  }
+
+  try {
+    setLoading(true);
+    
+    // Prepare the data according to backend expectations
+    const requestData = {
+      isActive: suspensionData.isActive !== undefined ? suspensionData.isActive : !selectedAdmin.isActive,
+      reason: suspensionData.reason || suspensionData.suspensionReason || ''
+    };
+    
+    
+    const response = await apiCall(`/admin/admins/${adminId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(requestData)
+    });
+    
+    
+    if (response?.status === 'success') {
+      const action = requestData.isActive ? 'activated' : 'suspended';
+      showSuccess(`Admin ${action} successfully`);
+      setShowSuspendModal(false);
+      setSelectedAdmin(null);
+      // Refresh the admin list
+      await fetchAdmins(currentPage, searchTerm, statusFilter);
+    } else {
+      const errorMessage = response?.message || 'Failed to update admin status';
+      throw new Error(errorMessage);
     }
-  };
+  } catch (error) {
+    console.error('Suspend admin error:', error);
+    
+    // Handle specific error types
+    let errorMessage = 'Failed to update admin status';
+    
+    if (error.message.includes('Invalid admin ID format')) {
+      errorMessage = 'Invalid admin ID format. Please refresh the page and try again.';
+    } else if (error.message.includes('Admin not found')) {
+      errorMessage = 'Admin not found. They may have been deleted by another administrator.';
+    } else if (error.message.includes('Cannot suspend your own account')) {
+      errorMessage = 'You cannot suspend your own account.';
+    } else if (error.message.includes('Access denied')) {
+      errorMessage = 'You do not have permission to perform this action.';
+    } else {
+      errorMessage = error.message || 'An unexpected error occurred while updating the admin status.';
+    }
+    
+    showError(errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleDeleteAdmin = async () => {
-    if (!selectedAdmin?._id && !selectedAdmin?.id) {
-      showError('No admin selected');
-      return;
-    }
+  const adminId = selectedAdmin?._id || selectedAdmin?.id;
+  
+  if (!adminId) {
+    showError('No admin selected for deletion');
+    return;
+  }
 
-    try {
-      setLoading(true);
-      const adminId = selectedAdmin._id || selectedAdmin.id;
-      console.log('Deleting admin:', adminId); // Debug log
-      
-      const response = await apiCall(`/admin/admins/${adminId}`, {
-        method: 'DELETE'
-      });
-      
-      console.log('Delete admin response:', response); // Debug log
-      
-      if (response?.status === 'success') {
-        showSuccess('Admin deleted successfully');
-        setShowDeleteModal(false);
-        setSelectedAdmin(null);
-        fetchAdmins(currentPage, searchTerm, statusFilter);
-      } else {
-        throw new Error(response?.message || 'Failed to delete admin');
-      }
-    } catch (error) {
-      console.error('Delete admin error:', error);
-      showError('Failed to delete admin: ' + (error.message || 'Unknown error'));
-    } finally {
-      setLoading(false);
+  // Validate ObjectId format
+  if (!/^[0-9a-fA-F]{24}$/.test(adminId)) {
+    showError('Invalid admin ID format');
+    return;
+  }
+
+  try {
+    setLoading(true);
+    
+    const response = await apiCall(`/admin/admins/${adminId}`, {
+      method: 'DELETE'
+    });
+    
+    
+    if (response?.status === 'success') {
+      showSuccess('Admin deleted successfully');
+      setShowDeleteModal(false);
+      setSelectedAdmin(null);
+      // Refresh the admin list
+      await fetchAdmins(currentPage, searchTerm, statusFilter);
+    } else {
+      const errorMessage = response?.message || 'Failed to delete admin';
+      throw new Error(errorMessage);
     }
-  };
+  } catch (error) {
+    console.error('Delete admin error:', error);
+    
+    // Handle specific error types
+    let errorMessage = 'Failed to delete admin';
+    
+    if (error.message.includes('Invalid admin ID format')) {
+      errorMessage = 'Invalid admin ID format. Please refresh the page and try again.';
+    } else if (error.message.includes('Admin not found')) {
+      errorMessage = 'Admin not found. They may have already been deleted.';
+    } else if (error.message.includes('Cannot delete your own account')) {
+      errorMessage = 'You cannot delete your own account.';
+    } else if (error.message.includes('Cannot delete the last')) {
+      errorMessage = 'Cannot delete the last super admin account.';
+    } else if (error.message.includes('Access denied')) {
+      errorMessage = 'You do not have permission to perform this action.';
+    } else {
+      errorMessage = error.message || 'An unexpected error occurred while deleting the admin.';
+    }
+    
+    showError(errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleUpdatePricing = async (planId, pricingData) => {
     try {
@@ -322,189 +440,219 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
     return path.split('.').reduce((acc, key) => acc?.[key], obj) || defaultValue;
   };
 
-  // Component: Admin Table
-  const AdminsTable = () => (
-    <div className="space-y-6">
-      {/* Header with Search and Filters */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <h2 className="text-xl font-semibold flex items-center gap-2">
-          <Shield className="w-6 h-6" />
-          Admin Management
-        </h2>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-            <input
-              type="text"
-              placeholder="Search admins..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
-          </select>
-        </div>
-      </div>
+  const AdminTableRow = ({ admin, index, onEdit, onSuspend, onDelete }) => {
+  const adminId = admin._id || admin.id;
+  
+  // Don't render if admin doesn't have a valid ID
+  if (!adminId || !/^[0-9a-fA-F]{24}$/.test(adminId)) {
+    console.warn('Skipping admin row with invalid ID:', admin);
+    return null;
+  }
 
-      {/* Admins Table */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-        {loading ? (
-          <div className="flex justify-center items-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-            <span className="ml-3 text-gray-600">Loading admins...</span>
-          </div>
-        ) : admins.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <Shield className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-            <p>No admins found</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Admin</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Login</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {admins.map((admin, index) => (
-                  <tr key={admin._id || admin.id || `admin-${index}`} className="hover:bg-gray-50">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0 h-10 w-10">
-                          <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                            <span className="text-blue-600 font-medium text-sm">
-                              {getAdminInitials(admin.name)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">{admin.name || 'Unknown'}</div>
-                          <div className="text-sm text-gray-500 flex items-center gap-1">
-                            <Mail className="w-3 h-3" />
-                            {admin.email || 'No email'}
-                          </div>
-                          {admin.phone && (
-                            <div className="text-sm text-gray-500 flex items-center gap-1">
-                              <Phone className="w-3 h-3" />
-                              {admin.phone}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        admin.role === 'super_admin' 
-                          ? 'bg-purple-100 text-purple-800' 
-                          : admin.role === 'moderator'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}>
-                        {admin.role === 'super_admin' ? 'Super Admin' : 
-                         admin.role === 'moderator' ? 'Moderator' : 'Admin'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                        getStatusBadgeColor(admin.isActive ? 'active' : 'suspended')
-                      }`}>
-                        {admin.isActive ? 'Active' : 'Suspended'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      <div className="flex items-center gap-1">
-                        <Calendar className="w-4 h-4" />
-                        {formatDate(admin.createdAt)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-4 h-4" />
-                        {formatDate(admin.lastLogin)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            setSelectedAdmin(admin);
-                            setShowEditAdmin(true);
-                          }}
-                          className="text-blue-600 hover:text-blue-800 p-1"
-                          title="Edit Admin"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedAdmin(admin);
-                            setShowSuspendModal(true);
-                          }}
-                          className={`${admin.isActive ? 'text-orange-600 hover:text-orange-800' : 'text-green-600 hover:text-green-800'} p-1`}
-                          title={admin.isActive ? 'Suspend Admin' : 'Activate Admin'}
-                        >
-                          {admin.isActive ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedAdmin(admin);
-                            setShowDeleteModal(true);
-                          }}
-                          className="text-red-600 hover:text-red-800 p-1"
-                          title="Delete Admin"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between p-4 bg-gray-50 border-t">
-            <span className="text-sm text-gray-700">
-              Page {currentPage} of {totalPages}
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-              >
-                Next
-              </button>
+  return (
+    <tr key={adminId} className="hover:bg-gray-50">
+      <td className="px-6 py-4">
+        <div className="flex items-center">
+          <div className="flex-shrink-0 h-10 w-10">
+            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
+              <span className="text-blue-600 font-medium text-sm">
+                {getAdminInitials(admin.name)}
+              </span>
             </div>
           </div>
-        )}
+          <div className="ml-4">
+            <div className="text-sm font-medium text-gray-900">{admin.name || 'Unknown'}</div>
+            <div className="text-sm text-gray-500 flex items-center gap-1">
+              <Mail className="w-3 h-3" />
+              {admin.email || 'No email'}
+            </div>
+            {admin.phone && (
+              <div className="text-sm text-gray-500 flex items-center gap-1">
+                <Phone className="w-3 h-3" />
+                {admin.phone}
+              </div>
+            )}
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+          admin.role === 'super_admin' 
+            ? 'bg-purple-100 text-purple-800' 
+            : admin.role === 'moderator'
+            ? 'bg-green-100 text-green-800'
+            : 'bg-blue-100 text-blue-800'
+        }`}>
+          {admin.role === 'super_admin' ? 'Super Admin' : 
+           admin.role === 'moderator' ? 'Moderator' : 'Admin'}
+        </span>
+      </td>
+      <td className="px-6 py-4">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+          getStatusBadgeColor(admin.isActive ? 'active' : 'suspended')
+        }`}>
+          {admin.isActive ? 'Active' : 'Suspended'}
+        </span>
+      </td>
+      <td className="px-6 py-4 text-sm text-gray-500">
+        <div className="flex items-center gap-1">
+          <Calendar className="w-4 h-4" />
+          {formatDate(admin.createdAt)}
+        </div>
+      </td>
+      <td className="px-6 py-4 text-sm text-gray-500">
+        <div className="flex items-center gap-1">
+          <Clock className="w-4 h-4" />
+          {formatDate(admin.lastLogin)}
+        </div>
+      </td>
+      <td className="px-6 py-4 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={() => onEdit(admin)}
+            className="text-blue-600 hover:text-blue-800 p-1"
+            title="Edit Admin"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onSuspend(admin)}
+            className={`${admin.isActive ? 'text-orange-600 hover:text-orange-800' : 'text-green-600 hover:text-green-800'} p-1`}
+            title={admin.isActive ? 'Suspend Admin' : 'Activate Admin'}
+          >
+            {admin.isActive ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => onDelete(admin)}
+            className="text-red-600 hover:text-red-800 p-1"
+            title="Delete Admin"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+};
+
+  // Component: Admin Table
+  const AdminsTable = () => (
+  <div className="space-y-6">
+    {/* Header with Search and Filters */}
+    <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+      <h2 className="text-xl font-semibold flex items-center gap-2">
+        <Shield className="w-6 h-6" />
+        Admin Management
+      </h2>
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <input
+            type="text"
+            placeholder="Search admins..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="all">All Status</option>
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+        </select>
+        <button
+          onClick={() => fetchAdmins(currentPage, searchTerm, statusFilter)}
+          disabled={loading}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
     </div>
-  );
+
+    {/* Admins Table */}
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      {loading ? (
+        <div className="flex justify-center items-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+          <span className="ml-3 text-gray-600">Loading admins...</span>
+        </div>
+      ) : admins.length === 0 ? (
+        <div className="text-center py-12 text-gray-500">
+          <Shield className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+          <p>No admins found</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Admin</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Login</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {admins.map((admin, index) => (
+                <AdminTableRow
+                  key={admin._id || admin.id || `admin-${index}`}
+                  admin={admin}
+                  index={index}
+                  onEdit={(admin) => {
+                    setSelectedAdmin(admin);
+                    setShowEditAdmin(true);
+                  }}
+                  onSuspend={(admin) => {
+                    setSelectedAdmin(admin);
+                    setShowSuspendModal(true);
+                  }}
+                  onDelete={(admin) => {
+                    setSelectedAdmin(admin);
+                    setShowDeleteModal(true);
+                  }}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between p-4 bg-gray-50 border-t">
+          <span className="text-sm text-gray-700">
+            Page {currentPage} of {totalPages}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1 || loading}
+              className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage === totalPages || loading}
+              className="px-3 py-1 border rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+);
+
 
   // Component: Pricing Management
   const PricingManagement = () => (

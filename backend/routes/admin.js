@@ -1316,11 +1316,17 @@ router.put('/admins/:id', [
   adminAuth,
   body('name').optional().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
   body('email').optional().isEmail().withMessage('Valid email is required'),
-  body('phone').optional().isMobilePhone().withMessage('Valid phone number is required'),
-  body('role').optional().isIn(['admin', 'super_admin']).withMessage('Invalid role'),
+  body('phone').optional().matches(/^(\+254|0)[0-9]{9}$/).withMessage('Valid Kenyan phone number is required'),
+  body('role').optional().isIn(['admin', 'moderator', 'super_admin']).withMessage('Invalid role'),
   body('isActive').optional().isBoolean().withMessage('isActive must be a boolean')
 ], async (req, res) => {
   try {
+    console.log('Update admin request:', {
+      adminId: req.params.id,
+      requestedBy: req.admin.id,
+      updateData: req.body
+    });
+
     if (req.admin.role !== 'super_admin') {
       return res.status(403).json({
         status: 'error',
@@ -1338,10 +1344,21 @@ router.put('/admins/:id', [
     }
 
     const { id } = req.params;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log('Invalid ObjectId format for update:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
     const updateData = req.body;
 
     // Prevent self-demotion from super_admin
-    if (id === req.admin._id.toString() && updateData.role && updateData.role !== 'super_admin') {
+    if ((id === req.admin.id || id === req.admin._id?.toString()) && 
+        updateData.role && updateData.role !== 'super_admin') {
       return res.status(400).json({
         status: 'error',
         message: 'Cannot change your own super admin role'
@@ -1349,27 +1366,76 @@ router.put('/admins/:id', [
     }
 
     // Prevent self-deactivation
-    if (id === req.admin._id.toString() && updateData.isActive === false) {
+    if ((id === req.admin.id || id === req.admin._id?.toString()) && 
+        updateData.isActive === false) {
       return res.status(400).json({
         status: 'error',
         message: 'Cannot deactivate your own account'
       });
     }
 
+    // Check if admin exists before updating
+    const existingAdmin = await Admin.findById(id);
+    if (!existingAdmin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
+    // If updating role, set appropriate permissions
+    if (updateData.role && updateData.role !== existingAdmin.role) {
+      updateData.permissions = getDefaultPermissions(updateData.role);
+    }
+
+    // Perform the update
     const admin = await Admin.findByIdAndUpdate(
       id,
       { 
         ...updateData,
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        updatedBy: req.admin.id
       },
-      { new: true, select: '-password' }
+      { new: true, select: '-password', runValidators: true }
     );
 
     if (!admin) {
       return res.status(404).json({
         status: 'error',
-        message: 'Admin not found'
+        message: 'Admin not found during update'
       });
+    }
+
+    console.log('Admin updated successfully:', {
+      updatedAdminId: id,
+      updatedFields: Object.keys(updateData),
+      updatedBy: req.admin.id
+    });
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'admin_updated',
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          updatedAdminEmail: admin.email,
+          updatedFields: Object.keys(updateData),
+          previousRole: existingAdmin.role,
+          newRole: admin.role
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin update:', auditError);
     }
 
     res.json({
@@ -1377,11 +1443,47 @@ router.put('/admins/:id', [
       message: 'Admin updated successfully',
       data: admin
     });
+
   } catch (error) {
-    console.error('Error updating admin:', error);
+    console.error('Error updating admin:', {
+      error: error.message,
+      stack: error.stack,
+      adminId: req.params.id,
+      updateData: req.body
+    });
+
+    // Handle specific error types
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email or phone number already exists'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update admin'
+      message: 'Failed to update admin',
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message 
+      })
     });
   }
 });
@@ -1394,6 +1496,12 @@ router.patch('/admins/:id/status', [
   body('reason').optional().isString().withMessage('Reason must be a string')
 ], async (req, res) => {
   try {
+    console.log('Update admin status request:', {
+      adminId: req.params.id,
+      requestedBy: req.admin.id,
+      statusData: req.body
+    });
+
     if (req.admin.role !== 'super_admin') {
       return res.status(403).json({
         status: 'error',
@@ -1411,49 +1519,141 @@ router.patch('/admins/:id/status', [
     }
 
     const { id } = req.params;
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log('Invalid ObjectId format for status update:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
     const { isActive, reason } = req.body;
 
     // Prevent self-deactivation
-    if (id === req.admin._id.toString() && isActive === false) {
+    if ((id === req.admin.id || id === req.admin._id?.toString()) && isActive === false) {
       return res.status(400).json({
         status: 'error',
         message: 'Cannot suspend your own account'
       });
     }
 
-    const admin = await Admin.findByIdAndUpdate(
-      id,
-      {
-        isActive,
-        suspendedAt: !isActive ? new Date() : null,
-        suspendedBy: !isActive ? req.admin._id : null,
-        suspensionReason: !isActive ? reason : null,
-        reactivatedAt: isActive ? new Date() : null,
-        reactivatedBy: isActive ? req.admin._id : null,
-        updatedAt: new Date()
-      },
-      { new: true, select: '-password' }
-    );
-
-    if (!admin) {
+    // Check if admin exists first
+    const existingAdmin = await Admin.findById(id);
+    if (!existingAdmin) {
       return res.status(404).json({
         status: 'error',
         message: 'Admin not found'
       });
     }
 
+    // Prepare update data
+    const updateData = {
+      isActive,
+      updatedAt: new Date(),
+      updatedBy: req.admin.id
+    };
+
+    // Add suspension/reactivation specific fields
+    if (!isActive) {
+      updateData.suspendedAt = new Date();
+      updateData.suspendedBy = req.admin.id;
+      updateData.suspensionReason = reason || '';
+      // Clear reactivation fields if suspending
+      updateData.$unset = {
+        reactivatedAt: '',
+        reactivatedBy: ''
+      };
+    } else {
+      updateData.reactivatedAt = new Date();
+      updateData.reactivatedBy = req.admin.id;
+      // Clear suspension fields if reactivating
+      updateData.$unset = {
+        suspendedAt: '',
+        suspendedBy: '',
+        suspensionReason: ''
+      };
+    }
+
+    // Perform the update
+    const admin = await Admin.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, select: '-password' }
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found during status update'
+      });
+    }
+
     const action = isActive ? 'activated' : 'suspended';
+    
+    console.log(`Admin ${action} successfully:`, {
+      adminId: id,
+      adminEmail: admin.email,
+      newStatus: isActive,
+      updatedBy: req.admin.id
+    });
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: `admin_${action}`,
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          targetAdminEmail: admin.email,
+          targetAdminRole: admin.role,
+          previousStatus: existingAdmin.isActive,
+          newStatus: isActive,
+          reason: reason || 'No reason provided'
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin status update:', auditError);
+    }
 
     res.json({
       status: 'success',
       message: `Admin ${action} successfully`,
       data: admin
     });
+
   } catch (error) {
-    console.error('Error updating admin status:', error);
+    console.error('Error updating admin status:', {
+      error: error.message,
+      stack: error.stack,
+      adminId: req.params.id,
+      statusData: req.body
+    });
+
+    // Handle specific error types
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update admin status'
+      message: 'Failed to update admin status',
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message 
+      })
     });
   }
 });
@@ -1462,6 +1662,12 @@ router.patch('/admins/:id/status', [
 // @route   DELETE /api/admin/admins/:id
 router.delete('/admins/:id', adminAuth, async (req, res) => {
   try {
+    console.log('Delete admin request:', {
+      adminId: req.params.id,
+      requestedBy: req.admin.id,
+      requestedByRole: req.admin.role
+    });
+
     if (req.admin.role !== 'super_admin') {
       return res.status(403).json({
         status: 'error',
@@ -1471,47 +1677,137 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 
     const { id } = req.params;
 
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log('Invalid ObjectId format:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
     // Prevent self-deletion
-    if (id === req.admin._id.toString()) {
+    if (id === req.admin.id || id === req.admin._id?.toString()) {
       return res.status(400).json({
         status: 'error',
         message: 'Cannot delete your own account'
       });
     }
 
+    // Find the admin first
     const admin = await Admin.findById(id);
     if (!admin) {
+      console.log('Admin not found for deletion:', id);
       return res.status(404).json({
         status: 'error',
         message: 'Admin not found'
       });
     }
 
+    console.log('Found admin to delete:', {
+      id: admin._id,
+      email: admin.email,
+      role: admin.role
+    });
+
     // Check if it's the last super admin
     if (admin.role === 'super_admin') {
-      const superAdminCount = await Admin.countDocuments({ role: 'super_admin' });
+      const superAdminCount = await Admin.countDocuments({ 
+        role: 'super_admin',
+        isActive: true 
+      });
+      
+      console.log('Super admin count:', superAdminCount);
+      
       if (superAdminCount <= 1) {
         return res.status(400).json({
           status: 'error',
-          message: 'Cannot delete the last super admin account'
+          message: 'Cannot delete the last active super admin account'
         });
       }
     }
 
-    await Admin.findByIdAndDelete(id);
+    // Perform the deletion
+    const deleteResult = await Admin.findByIdAndDelete(id);
+    
+    if (!deleteResult) {
+      console.log('Failed to delete admin - not found during deletion');
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found during deletion'
+      });
+    }
+
+    console.log('Admin deleted successfully:', {
+      deletedAdminId: id,
+      deletedAdminEmail: deleteResult.email,
+      deletedBy: req.admin.id
+    });
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'admin_deleted',
+        entityType: 'admin',
+        entityId: new mongoose.Types.ObjectId(id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          deletedAdminEmail: deleteResult.email,
+          deletedAdminRole: deleteResult.role,
+          deletedAdminName: deleteResult.name
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed for admin deletion:', auditError);
+    }
 
     res.json({
       status: 'success',
       message: 'Admin deleted successfully'
     });
+
   } catch (error) {
-    console.error('Error deleting admin:', error);
+    console.error('Error deleting admin:', {
+      error: error.message,
+      stack: error.stack,
+      adminId: req.params.id,
+      requestedBy: req.admin?.id
+    });
+
+    // Handle specific error types
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid admin ID format'
+      });
+    }
+
+    if (error.name === 'DocumentNotFoundError') {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Admin not found'
+      });
+    }
+
     res.status(500).json({
       status: 'error',
-      message: 'Failed to delete admin'
+      message: 'Failed to delete admin',
+      ...(process.env.NODE_ENV === 'development' && { 
+        error: error.message,
+        adminId: req.params.id 
+      })
     });
   }
 });
+
 
 // Get subscription pricing plans (Super Admin only)
 // @route   GET /api/admin/subscription-plans

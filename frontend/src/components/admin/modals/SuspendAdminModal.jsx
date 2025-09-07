@@ -7,7 +7,6 @@ const SuspendAdminModal = ({ admin, isOpen, onClose, onSubmit, loading }) => {
   if (!isOpen || !admin) return null;
 
   const isCurrentlyActive = admin.isActive;
-  const action = isCurrentlyActive ? 'suspend' : 'activate';
   const actionTitle = isCurrentlyActive ? 'Suspend Admin' : 'Activate Admin';
 
   const handleSubmit = async (e) => {
