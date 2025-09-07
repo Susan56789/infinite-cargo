@@ -6,6 +6,9 @@ import {
   Package, TrendingUp, Activity
 } from 'lucide-react';
 
+// Import the auth utilities (same as AdminDashboard)
+import { authManager, isAuthenticated, getAuthHeader } from '../../utils/auth';
+
 // Utility functions
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('en-KE', {
@@ -87,6 +90,30 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
     }
   });
 
+  // Create consistent API call wrapper that uses the same auth as parent
+  const makeAuthenticatedCall = useCallback(async (endpoint, options = {}) => {
+    try {
+      if (!isAuthenticated(true)) {
+        throw new Error('Authentication required');
+      }
+
+      const authHeader = getAuthHeader(true);
+      const config = {
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        ...options,
+      };
+
+      // Use the apiCall function passed from parent component
+      return await apiCall(endpoint, config);
+    } catch (error) {
+      console.error('API call failed:', error);
+      throw error;
+    }
+  }, [apiCall]);
+
   // Fetch functions with proper error handling
   const fetchAdmins = useCallback(async (page = 1, search = '', status = '') => {
     try {
@@ -98,12 +125,8 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
         ...(status && status !== 'all' && { status })
       });
       
-      const response = await apiCall(`/admin/admins?${queryParams}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        }
+      const response = await makeAuthenticatedCall(`/admin/admins?${queryParams}`, {
+        method: 'GET'
       });
       
       if (response?.status === 'success') {
@@ -122,17 +145,13 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
     } finally {
       setLoading(false);
     }
-  }, [apiCall, showError]);
+  }, [makeAuthenticatedCall, showError]);
 
   const fetchPricingPlans = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await apiCall('/admin/subscription-plans', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        }
+      const response = await makeAuthenticatedCall('/admin/subscription-plans', {
+        method: 'GET'
       });
       
       if (response?.status === 'success') {
@@ -147,7 +166,7 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
     } finally {
       setLoading(false);
     }
-  }, [apiCall, showError]);
+  }, [makeAuthenticatedCall, showError]);
 
   // Load initial data
   useEffect(() => {
@@ -178,12 +197,8 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
     try {
       setLoading(true);
-      const response = await apiCall(`/admin/admins/${selectedAdmin._id}`, {
+      const response = await makeAuthenticatedCall(`/admin/admins/${selectedAdmin._id}`, {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(adminData)
       });
       
@@ -212,12 +227,8 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
     try {
       setLoading(true);
-      const response = await apiCall(`/admin/admins/${selectedAdmin._id}/status`, {
+      const response = await makeAuthenticatedCall(`/admin/admins/${selectedAdmin._id}/status`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify({
           isActive: !selectedAdmin.isActive,
           reason: suspensionReason
@@ -249,12 +260,8 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
     try {
       setLoading(true);
-      const response = await apiCall(`/admin/admins/${selectedAdmin._id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        }
+      const response = await makeAuthenticatedCall(`/admin/admins/${selectedAdmin._id}`, {
+        method: 'DELETE'
       });
       
       if (response?.status === 'success') {
@@ -282,12 +289,8 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
     try {
       setLoading(true);
-      const response = await apiCall(`/admin/subscription-plans/${planId}`, {
+      const response = await makeAuthenticatedCall(`/admin/subscription-plans/${planId}`, {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('adminToken')}`,
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify(pricingData)
       });
       
@@ -312,10 +315,17 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
   const handleUpdatePaymentMethods = async () => {
     try {
       setLoading(true);
-      // This would be an API call to update payment methods
-      // For now, we'll simulate success
-      showSuccess('Payment methods updated successfully');
-      setShowPaymentMethodsModal(false);
+      const response = await makeAuthenticatedCall('/admin/payment-methods', {
+        method: 'PUT',
+        body: JSON.stringify({ methods: paymentMethods })
+      });
+      
+      if (response?.status === 'success') {
+        showSuccess('Payment methods updated successfully');
+        setShowPaymentMethodsModal(false);
+      } else {
+        throw new Error(response?.message || 'Failed to update payment methods');
+      }
     } catch (error) {
       console.error('Update payment methods error:', error);
       showError('Failed to update payment methods: ' + (error.message || 'Unknown error'));
@@ -664,6 +674,7 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
         {activeTab === 'pricing' && <PricingManagement />}
       </div>
 
+      {/* All your existing modals remain the same... */}
       {/* Edit Admin Modal */}
       {showEditAdmin && selectedAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

@@ -7,7 +7,7 @@ import LoadsTable from './LoadsTable';
 import SubscriptionsTable from './SubscriptionsTable';
 import AdminNotifications from './AdminNotifications';
 import AdminHeader from './AdminHeader';
-import AddAdminModal from './AddAdminModal';
+import AddAdminModal from './modals/AddAdminModal';
 import ReportsTab from './ReportsTab';
 import AdminManagementDashboard from './AdminManagementDashboard';
 
