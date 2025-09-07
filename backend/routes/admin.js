@@ -7,6 +7,8 @@ const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
 const Admin = require('../models/admin');
 const Load = require('../models/load');
+const SubscriptionPlan = require('../models/subscriptionPlan');
+const PaymentMethod = require('../models/paymentMethod');
 const { adminAuth } = require('../middleware/adminAuth');
 const { Subscription } = require('../models/subscription');
 const corsHandler = require('../middleware/corsHandler');
@@ -71,6 +73,122 @@ function getDefaultPermissions(role) {
 
   return permissions[role] || permissions.admin;
 }
+
+// Initialize default subscription plans and payment methods
+async function initializeSystemDefaults() {
+  try {
+    // Initialize default subscription plans
+    const planCount = await SubscriptionPlan.countDocuments();
+    if (planCount === 0) {
+      const defaultPlans = [
+        {
+          planId: 'basic',
+          name: 'Basic Plan',
+          price: 0,
+          currency: 'KES',
+          duration: 30,
+          description: 'Perfect for individuals getting started',
+          features: {
+            maxLoads: 3,
+            prioritySupport: false,
+            advancedAnalytics: false,
+            bulkOperations: false,
+            apiAccess: false,
+            dedicatedManager: false
+          },
+          displayOrder: 1
+        },
+        {
+          planId: 'pro',
+          name: 'Pro Plan',
+          price: 999,
+          currency: 'KES',
+          duration: 30,
+          description: 'Great for small to medium businesses',
+          features: {
+            maxLoads: 25,
+            prioritySupport: true,
+            advancedAnalytics: true,
+            bulkOperations: false,
+            apiAccess: false,
+            dedicatedManager: false
+          },
+          displayOrder: 2
+        },
+        {
+          planId: 'business',
+          name: 'Business Plan',
+          price: 2499,
+          currency: 'KES',
+          duration: 30,
+          description: 'Perfect for large enterprises',
+          features: {
+            maxLoads: -1,
+            prioritySupport: true,
+            advancedAnalytics: true,
+            bulkOperations: true,
+            apiAccess: true,
+            dedicatedManager: true
+          },
+          displayOrder: 3
+        }
+      ];
+      
+      await SubscriptionPlan.insertMany(defaultPlans);
+      console.log('Default subscription plans initialized');
+    }
+
+    // Initialize default payment methods
+    const paymentMethodCount = await PaymentMethod.countDocuments();
+    if (paymentMethodCount === 0) {
+      const defaultPaymentMethods = [
+        {
+          methodId: 'mpesa',
+          displayName: 'M-Pesa',
+          description: 'Pay using M-Pesa mobile money',
+          enabled: true,
+          details: {
+            businessNumber: '174379',
+            accountName: 'Infinite Cargo Ltd'
+          },
+          displayOrder: 1,
+          instructions: 'Send money to the business number above and use your phone number as the account reference.'
+        },
+        {
+          methodId: 'bank',
+          displayName: 'Bank Transfer',
+          description: 'Direct bank transfer',
+          enabled: true,
+          details: {
+            bankName: 'KCB Bank',
+            accountNumber: '1234567890',
+            accountName: 'Infinite Cargo Limited'
+          },
+          displayOrder: 2,
+          instructions: 'Transfer to the bank account above and use your subscription ID as reference.'
+        },
+        {
+          methodId: 'card',
+          displayName: 'Credit/Debit Card',
+          description: 'Pay using your card',
+          enabled: false,
+          details: {},
+          displayOrder: 3,
+          instructions: 'Pay securely using your credit or debit card.'
+        }
+      ];
+      
+      await PaymentMethod.insertMany(defaultPaymentMethods);
+      console.log('Default payment methods initialized');
+    }
+  } catch (error) {
+    console.error('Error initializing system defaults:', error);
+  }
+}
+
+// Call initialization on router load
+initializeSystemDefaults();
+
 
 // @route   POST /api/admin/register
 // @desc    Register new admin (Super Admin only)
@@ -1400,57 +1518,26 @@ router.get('/subscription-plans', adminAuth, async (req, res) => {
       });
     }
 
-    // This would typically come from a database or config
-    const plans = {
-      basic: {
-        id: 'basic',
-        name: 'Basic Plan',
-        price: 0,
-        currency: 'KES',
-        duration: 30,
-        features: {
-          maxLoads: 3,
-          prioritySupport: false,
-          advancedAnalytics: false,
-          bulkOperations: false,
-          apiAccess: false,
-          dedicatedManager: false
-        },
-        description: 'Perfect for individuals getting started'
-      },
-      pro: {
-        id: 'pro',
-        name: 'Pro Plan',
-        price: 2500,
-        currency: 'KES',
-        duration: 30,
-        features: {
-          maxLoads: 20,
-          prioritySupport: true,
-          advancedAnalytics: true,
-          bulkOperations: false,
-          apiAccess: false,
-          dedicatedManager: false
-        },
-        description: 'Great for small to medium businesses'
-      },
-      business: {
-        id: 'business',
-        name: 'Business Plan',
-        price: 5000,
-        currency: 'KES',
-        duration: 30,
-        features: {
-          maxLoads: -1,
-          prioritySupport: true,
-          advancedAnalytics: true,
-          bulkOperations: true,
-          apiAccess: true,
-          dedicatedManager: true
-        },
-        description: 'Perfect for large enterprises'
-      }
-    };
+    // Fetch plans from database
+    const plansArray = await SubscriptionPlan.find({ isActive: true })
+      .sort({ displayOrder: 1 })
+      .select('-__v');
+
+    // Convert array to object for frontend compatibility
+    const plans = {};
+    plansArray.forEach(plan => {
+      plans[plan.planId] = {
+        id: plan.planId,
+        name: plan.name,
+        price: plan.price,
+        currency: plan.currency,
+        duration: plan.duration,
+        description: plan.description,
+        features: plan.features,
+        displayOrder: plan.displayOrder,
+        updatedAt: plan.updatedAt
+      };
+    });
 
     res.json({
       status: 'success',
@@ -1465,13 +1552,15 @@ router.get('/subscription-plans', adminAuth, async (req, res) => {
   }
 });
 
+
 // Update subscription pricing (Super Admin only)
 router.put('/subscription-plans/:planId', [
   adminAuth,
   body('name').optional().isLength({ min: 2 }).withMessage('Plan name must be at least 2 characters'),
   body('price').optional().isFloat({ min: 0 }).withMessage('Price must be a positive number'),
   body('duration').optional().isInt({ min: 1 }).withMessage('Duration must be at least 1 day'),
-  body('description').optional().isLength({ min: 10 }).withMessage('Description must be at least 10 characters')
+  body('description').optional().isLength({ min: 10 }).withMessage('Description must be at least 10 characters'),
+  body('features').optional().isObject().withMessage('Features must be an object')
 ], async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1491,36 +1580,86 @@ router.put('/subscription-plans/:planId', [
     }
 
     const { planId } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
 
-    // Validate plan ID
-    if (!['basic', 'pro', 'business'].includes(planId)) {
-      return res.status(400).json({
+    // Add audit fields
+    updateData.updatedBy = req.admin.id;
+    updateData.updatedAt = new Date();
+
+    // Update the plan in database
+    const updatedPlan = await SubscriptionPlan.findOneAndUpdate(
+      { planId: planId, isActive: true },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedPlan) {
+      return res.status(404).json({
         status: 'error',
-        message: 'Invalid plan ID'
+        message: 'Subscription plan not found'
       });
     }
 
-    // In a real implementation, you would save this to a database
-    // For now, we'll just return success
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'subscription_plan_updated',
+        entityType: 'subscription_plan',
+        entityId: updatedPlan._id,
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          planId: planId,
+          updatedFields: Object.keys(updateData),
+          previousData: updateData // You might want to fetch the previous data first
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+    }
+
     res.json({
       status: 'success',
       message: 'Subscription plan updated successfully',
       data: {
-        planId,
-        ...updateData,
-        updatedAt: new Date(),
-        updatedBy: req.admin._id
+        id: updatedPlan.planId,
+        name: updatedPlan.name,
+        price: updatedPlan.price,
+        currency: updatedPlan.currency,
+        duration: updatedPlan.duration,
+        description: updatedPlan.description,
+        features: updatedPlan.features,
+        updatedAt: updatedPlan.updatedAt
       }
     });
   } catch (error) {
     console.error('Error updating subscription plan:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
       message: 'Failed to update subscription plan'
     });
   }
 });
+
 
 // Update subscription payment details (Super Admin only)
 router.patch('/subscriptions/:id/payment', [
@@ -1529,6 +1668,175 @@ router.patch('/subscriptions/:id/payment', [
     .withMessage('Invalid payment status'),
   body('paymentDetails').optional().isObject().withMessage('Payment details must be an object'),
   body('adminNotes').optional().isString().withMessage('Admin notes must be a string')
+], async (req, res) => {
+  try {
+    // Check if admin has permission to approve subscriptions
+    if (!req.admin.permissions?.approveSubscriptions && req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. You do not have permission to manage subscription payments.'
+      });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const { paymentStatus, paymentDetails, adminNotes } = req.body;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date(),
+      lastUpdatedBy: req.admin.id
+    };
+
+    if (paymentStatus !== undefined) {
+      updateData.paymentStatus = paymentStatus;
+      updateData.paymentStatusUpdatedAt = new Date();
+    }
+    if (paymentDetails !== undefined) {
+      updateData.$set = { 
+        ...updateData.$set,
+        'paymentDetails': { ...paymentDetails }
+      };
+    }
+    if (adminNotes !== undefined) {
+      updateData.adminNotes = adminNotes;
+    }
+
+    const subscription = await Subscription.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('cargoOwnerId', 'name email')
+     .populate('planDetails');
+
+    if (!subscription) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Subscription not found'
+      });
+    }
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'subscription_payment_updated',
+        entityType: 'subscription',
+        entityId: new mongoose.Types.ObjectId(subscription._id),
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          subscriptionId: subscription._id,
+          cargoOwnerId: subscription.cargoOwnerId?._id,
+          previousPaymentStatus: subscription.paymentStatus,
+          newPaymentStatus: paymentStatus,
+          adminNotes: adminNotes
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
+      });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Subscription payment details updated successfully',
+      data: subscription
+    });
+  } catch (error) {
+    console.error('Error updating subscription payment:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid subscription ID format'
+      });
+    }
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update subscription payment details'
+    });
+  }
+});
+
+// Get all payment methods (Super Admin only)
+router.get('/payment-methods', adminAuth, async (req, res) => {
+  try {
+    if (req.admin.role !== 'super_admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Super admin privileges required.'
+      });
+    }
+
+    const paymentMethodsArray = await PaymentMethod.find()
+      .sort({ displayOrder: 1 })
+      .select('-__v');
+
+    // Convert to object format for frontend compatibility
+    const methods = {};
+    paymentMethodsArray.forEach(method => {
+      methods[method.methodId] = {
+        enabled: method.enabled,
+        displayName: method.displayName,
+        description: method.description,
+        details: method.details,
+        processingFee: method.processingFee,
+        minAmount: method.minAmount,
+        maxAmount: method.maxAmount,
+        displayOrder: method.displayOrder
+      };
+    });
+
+    res.json({
+      status: 'success',
+      data: { methods }
+    });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch payment methods'
+    });
+  }
+});
+
+// Update payment methods (Super Admin only)
+router.put('/payment-methods', [
+  adminAuth,
+  body('methods').isObject().withMessage('Methods must be an object')
 ], async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1547,43 +1855,85 @@ router.patch('/subscriptions/:id/payment', [
       });
     }
 
-    const { id } = req.params;
-    const { paymentStatus, paymentDetails, adminNotes } = req.body;
+    const { methods } = req.body;
+    const updatePromises = [];
 
-    const updateData = {
-      updatedAt: new Date()
-    };
+    // Update each payment method
+    for (const [methodId, methodData] of Object.entries(methods)) {
+      const updateData = {
+        enabled: methodData.enabled,
+        displayName: methodData.displayName,
+        description: methodData.description,
+        details: methodData.details,
+        updatedBy: req.admin.id,
+        updatedAt: new Date()
+      };
 
-    if (paymentStatus) updateData.paymentStatus = paymentStatus;
-    if (paymentDetails) updateData.paymentDetails = paymentDetails;
-    if (adminNotes) updateData.adminNotes = adminNotes;
+      // Add optional fields if they exist
+      if (methodData.processingFee !== undefined) updateData.processingFee = methodData.processingFee;
+      if (methodData.minAmount !== undefined) updateData.minAmount = methodData.minAmount;
+      if (methodData.maxAmount !== undefined) updateData.maxAmount = methodData.maxAmount;
+      if (methodData.displayOrder !== undefined) updateData.displayOrder = methodData.displayOrder;
 
-    const subscription = await Subscription.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true }
-    );
+      const updatePromise = PaymentMethod.findOneAndUpdate(
+        { methodId: methodId },
+        updateData,
+        { new: true, upsert: true, runValidators: true }
+      );
 
-    if (!subscription) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Subscription not found'
+      updatePromises.push(updatePromise);
+    }
+
+    await Promise.all(updatePromises);
+
+    // Log audit trail
+    try {
+      const db = mongoose.connection.db;
+      const auditLogsCollection = db.collection('audit_logs');
+      
+      await auditLogsCollection.insertOne({
+        action: 'payment_methods_updated',
+        entityType: 'payment_method',
+        adminId: new mongoose.Types.ObjectId(req.admin.id),
+        adminName: req.admin.name,
+        adminEmail: req.admin.email,
+        details: {
+          updatedMethods: Object.keys(methods),
+          methodCount: Object.keys(methods).length
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        createdAt: new Date()
       });
+    } catch (auditError) {
+      console.warn('Audit log failed:', auditError);
     }
 
     res.json({
       status: 'success',
-      message: 'Subscription payment details updated successfully',
-      data: subscription
+      message: 'Payment methods updated successfully'
     });
   } catch (error) {
-    console.error('Error updating subscription payment:', error);
+    console.error('Error updating payment methods:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: Object.values(error.errors).map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+    
     res.status(500).json({
       status: 'error',
-      message: 'Failed to update subscription payment details'
+      message: 'Failed to update payment methods'
     });
   }
 });
+
 
 // @route   GET /api/admin/analytics/activity-summary
 // @desc    Get activity summary for today
