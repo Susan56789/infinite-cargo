@@ -42,6 +42,112 @@ const getStatusBadgeColor = (status) => {
   return colors[status] || 'bg-gray-100 text-gray-700 border-gray-200';
 };
 
+// Helper functions
+const getAdminInitials = (name) => {
+  if (!name) return '?';
+  return name.split(' ').map(n => n.charAt(0)).join('').toUpperCase().slice(0, 2);
+};
+
+const safeGet = (obj, path, defaultValue = '') => {
+  return path.split('.').reduce((acc, key) => acc?.[key], obj) || defaultValue;
+};
+
+// AdminTableRow Component - Moved outside and fixed
+const AdminTableRow = ({ admin, index, onEdit, onSuspend, onDelete }) => {
+  const adminId = admin._id || admin.id;
+  
+  // Don't render if admin doesn't have a valid ID
+  if (!adminId || !/^[0-9a-fA-F]{24}$/.test(adminId)) {
+    console.warn('Skipping admin row with invalid ID:', admin);
+    return null;
+  }
+
+  return (
+    <tr key={adminId} className="hover:bg-gray-50">
+      <td className="px-6 py-4">
+        <div className="flex items-center">
+          <div className="flex-shrink-0 h-10 w-10">
+            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
+              <span className="text-blue-600 font-medium text-sm">
+                {getAdminInitials(admin.name)}
+              </span>
+            </div>
+          </div>
+          <div className="ml-4">
+            <div className="text-sm font-medium text-gray-900">{admin.name || 'Unknown'}</div>
+            <div className="text-sm text-gray-500 flex items-center gap-1">
+              <Mail className="w-3 h-3" />
+              {admin.email || 'No email'}
+            </div>
+            {admin.phone && (
+              <div className="text-sm text-gray-500 flex items-center gap-1">
+                <Phone className="w-3 h-3" />
+                {admin.phone}
+              </div>
+            )}
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+          admin.role === 'super_admin' 
+            ? 'bg-purple-100 text-purple-800' 
+            : admin.role === 'moderator'
+            ? 'bg-green-100 text-green-800'
+            : 'bg-blue-100 text-blue-800'
+        }`}>
+          {admin.role === 'super_admin' ? 'Super Admin' : 
+           admin.role === 'moderator' ? 'Moderator' : 'Admin'}
+        </span>
+      </td>
+      <td className="px-6 py-4">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+          getStatusBadgeColor(admin.isActive ? 'active' : 'suspended')
+        }`}>
+          {admin.isActive ? 'Active' : 'Suspended'}
+        </span>
+      </td>
+      <td className="px-6 py-4 text-sm text-gray-500">
+        <div className="flex items-center gap-1">
+          <Calendar className="w-4 h-4" />
+          {formatDate(admin.createdAt)}
+        </div>
+      </td>
+      <td className="px-6 py-4 text-sm text-gray-500">
+        <div className="flex items-center gap-1">
+          <Clock className="w-4 h-4" />
+          {formatDate(admin.lastLogin)}
+        </div>
+      </td>
+      <td className="px-6 py-4 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={() => onEdit(admin)}
+            className="text-blue-600 hover:text-blue-800 p-1"
+            title="Edit Admin"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onSuspend(admin)}
+            className={`${admin.isActive ? 'text-orange-600 hover:text-orange-800' : 'text-green-600 hover:text-green-800'} p-1`}
+            title={admin.isActive ? 'Suspend Admin' : 'Activate Admin'}
+          >
+            {admin.isActive ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => onDelete(admin)}
+            className="text-red-600 hover:text-red-800 p-1"
+            title="Delete Admin"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+};
+
 const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
   const [activeTab, setActiveTab] = useState('admins');
   const [admins, setAdmins] = useState([]);
@@ -429,111 +535,6 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
       setLoading(false);
     }
   };
-
-  // Helper functions
-  const getAdminInitials = (name) => {
-    if (!name) return '?';
-    return name.split(' ').map(n => n.charAt(0)).join('').toUpperCase().slice(0, 2);
-  };
-
-  const safeGet = (obj, path, defaultValue = '') => {
-    return path.split('.').reduce((acc, key) => acc?.[key], obj) || defaultValue;
-  };
-
-  const AdminTableRow = ({ admin, index, onEdit, onSuspend, onDelete }) => {
-  const adminId = admin._id || admin.id;
-  
-  // Don't render if admin doesn't have a valid ID
-  if (!adminId || !/^[0-9a-fA-F]{24}$/.test(adminId)) {
-    console.warn('Skipping admin row with invalid ID:', admin);
-    return null;
-  }
-
-  return (
-    <tr key={adminId} className="hover:bg-gray-50">
-      <td className="px-6 py-4">
-        <div className="flex items-center">
-          <div className="flex-shrink-0 h-10 w-10">
-            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-              <span className="text-blue-600 font-medium text-sm">
-                {getAdminInitials(admin.name)}
-              </span>
-            </div>
-          </div>
-          <div className="ml-4">
-            <div className="text-sm font-medium text-gray-900">{admin.name || 'Unknown'}</div>
-            <div className="text-sm text-gray-500 flex items-center gap-1">
-              <Mail className="w-3 h-3" />
-              {admin.email || 'No email'}
-            </div>
-            {admin.phone && (
-              <div className="text-sm text-gray-500 flex items-center gap-1">
-                <Phone className="w-3 h-3" />
-                {admin.phone}
-              </div>
-            )}
-          </div>
-        </div>
-      </td>
-      <td className="px-6 py-4">
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-          admin.role === 'super_admin' 
-            ? 'bg-purple-100 text-purple-800' 
-            : admin.role === 'moderator'
-            ? 'bg-green-100 text-green-800'
-            : 'bg-blue-100 text-blue-800'
-        }`}>
-          {admin.role === 'super_admin' ? 'Super Admin' : 
-           admin.role === 'moderator' ? 'Moderator' : 'Admin'}
-        </span>
-      </td>
-      <td className="px-6 py-4">
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-          getStatusBadgeColor(admin.isActive ? 'active' : 'suspended')
-        }`}>
-          {admin.isActive ? 'Active' : 'Suspended'}
-        </span>
-      </td>
-      <td className="px-6 py-4 text-sm text-gray-500">
-        <div className="flex items-center gap-1">
-          <Calendar className="w-4 h-4" />
-          {formatDate(admin.createdAt)}
-        </div>
-      </td>
-      <td className="px-6 py-4 text-sm text-gray-500">
-        <div className="flex items-center gap-1">
-          <Clock className="w-4 h-4" />
-          {formatDate(admin.lastLogin)}
-        </div>
-      </td>
-      <td className="px-6 py-4 text-right">
-        <div className="flex items-center justify-end gap-2">
-          <button
-            onClick={() => onEdit(admin)}
-            className="text-blue-600 hover:text-blue-800 p-1"
-            title="Edit Admin"
-          >
-            <Edit3 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => onSuspend(admin)}
-            className={`${admin.isActive ? 'text-orange-600 hover:text-orange-800' : 'text-green-600 hover:text-green-800'} p-1`}
-            title={admin.isActive ? 'Suspend Admin' : 'Activate Admin'}
-          >
-            {admin.isActive ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => onDelete(admin)}
-            className="text-red-600 hover:text-red-800 p-1"
-            title="Delete Admin"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        </div>
-      </td>
-    </tr>
-  );
-};
 
   // Component: Admin Table
   const AdminsTable = () => (
