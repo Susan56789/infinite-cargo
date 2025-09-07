@@ -1224,6 +1224,7 @@ async function sendAdminPasswordChangeConfirmationEmail(email, name) {
 
 
 // Get all admins (Super Admin only)
+// @route   GET /api/admin/admins
 router.get('/admins', adminAuth, async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1277,6 +1278,7 @@ router.get('/admins', adminAuth, async (req, res) => {
 });
 
 // Get admin by ID (Super Admin only)
+// @route   GET /api/admin/admins/:id
 router.get('/admins/:id', adminAuth, async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1309,6 +1311,7 @@ router.get('/admins/:id', adminAuth, async (req, res) => {
 });
 
 // Update admin (Super Admin only)
+// @route   PUT /api/admin/admins/:id
 router.put('/admins/:id', [
   adminAuth,
   body('name').optional().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
@@ -1384,6 +1387,7 @@ router.put('/admins/:id', [
 });
 
 // Suspend/Activate admin (Super Admin only)
+// @route   PATCH /api/admin/admins/:id/status
 router.patch('/admins/:id/status', [
   adminAuth,
   body('isActive').isBoolean().withMessage('isActive must be a boolean'),
@@ -1455,6 +1459,7 @@ router.patch('/admins/:id/status', [
 });
 
 // Delete admin (Super Admin only)
+// @route   DELETE /api/admin/admins/:id
 router.delete('/admins/:id', adminAuth, async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1509,6 +1514,7 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 });
 
 // Get subscription pricing plans (Super Admin only)
+// @route   GET /api/admin/subscription-plans
 router.get('/subscription-plans', adminAuth, async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1554,6 +1560,7 @@ router.get('/subscription-plans', adminAuth, async (req, res) => {
 
 
 // Update subscription pricing (Super Admin only)
+// @route   PUT /api/admin/subscription-plans/:planId
 router.put('/subscription-plans/:planId', [
   adminAuth,
   body('name').optional().isLength({ min: 2 }).withMessage('Plan name must be at least 2 characters'),
@@ -1662,6 +1669,7 @@ router.put('/subscription-plans/:planId', [
 
 
 // Update subscription payment details (Super Admin only)
+// @route   PATCH /api/admin/subscriptions/:id/payment
 router.patch('/subscriptions/:id/payment', [
   adminAuth,
   body('paymentStatus').optional().isIn(['pending', 'completed', 'failed', 'refunded'])
@@ -1792,6 +1800,7 @@ router.patch('/subscriptions/:id/payment', [
 });
 
 // Get all payment methods (Super Admin only)
+// @route   GET /api/admin/payment-methods
 router.get('/payment-methods', adminAuth, async (req, res) => {
   try {
     if (req.admin.role !== 'super_admin') {
@@ -1834,6 +1843,7 @@ router.get('/payment-methods', adminAuth, async (req, res) => {
 });
 
 // Update payment methods (Super Admin only)
+// @route   PUT /api/admin/payment-methods
 router.put('/payment-methods', [
   adminAuth,
   body('methods').isObject().withMessage('Methods must be an object')
