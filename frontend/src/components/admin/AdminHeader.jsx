@@ -25,22 +25,30 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
     try {
       setLoading(true);
      
+      // Fetch both summary and recent notifications
+      const [summaryResponse, recentResponse] = await Promise.all([
+        apiCall('/admin/notifications/summary'),
+        apiCall('/admin/notifications?page=1&limit=5') // Get recent 5 notifications for dropdown
+      ]);
       
-      const response = await apiCall('/admin/notifications/summary');
-     
-      
-      if (response && response.status === 'success') {
-        const count = response.data?.summary?.unread || 0;
-        const notifications = response.data?.recentNotifications || [];
-        
+      // Handle summary response
+      if (summaryResponse && summaryResponse.status === 'success') {
+        const count = summaryResponse.data?.summary?.unread || 0;
         setNotificationCount(count);
-        setRecentNotifications(notifications);
-        
       } else {
-        console.warn('Unexpected response format:', response);
+        console.warn('Unexpected summary response format:', summaryResponse);
         setNotificationCount(0);
+      }
+
+      // Handle recent notifications response
+      if (recentResponse && recentResponse.status === 'success') {
+        const notifications = recentResponse.data?.notifications || recentResponse.notifications || [];
+        setRecentNotifications(notifications.slice(0, 5)); // Ensure max 5 notifications
+      } else {
+        console.warn('Unexpected recent notifications response format:', recentResponse);
         setRecentNotifications([]);
       }
+        
     } catch (error) {
       console.error('Notification fetch error:', error);
       
@@ -58,7 +66,6 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
         setError('Authentication required');
         return;
       }
-      
       
       if (retryCount < 1) {
         console.log('Retrying notification fetch...');
@@ -213,6 +220,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
       case 'user_action':
         return <div className="w-2 h-2 bg-blue-500 rounded-full"></div>;
       case 'subscription':
+      case 'subscription_request':
         return <div className="w-2 h-2 bg-green-500 rounded-full"></div>;
       default:
         return <div className="w-2 h-2 bg-blue-500 rounded-full"></div>;
@@ -377,7 +385,7 @@ const AdminHeader = ({ name, role, onLogout, apiCall, onNotificationClick, isAut
                     </button>
                   </div>
                 ) : (
-                  recentNotifications.slice(0, 5).map((notification) => (
+                  recentNotifications.map((notification) => (
                     <div
                       key={notification._id || notification.id}
                       className={`px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
