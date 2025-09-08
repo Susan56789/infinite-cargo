@@ -1172,7 +1172,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       billingCycle: 'monthly'
     };
 
-
     const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
       method: 'POST',
       headers: {

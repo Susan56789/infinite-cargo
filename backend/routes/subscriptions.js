@@ -1,4 +1,3 @@
-// routes/subscriptions.js 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -7,6 +6,8 @@ const rateLimit = require('express-rate-limit');
 const auth = require('../middleware/auth');
 const {adminAuth} = require('../middleware/adminAuth');
 const corsHandler = require('../middleware/corsHandler');
+const SubscriptionPlan = require('../models/subscriptionPlan');
+const PaymentMethod = require('../models/paymentMethod');
 
 router.use(corsHandler);
 
@@ -19,34 +20,6 @@ const subscriptionLimiter = rateLimit({
     message: 'Too many subscription requests, please try again later.'
   }
 });
-
-// Subscription plans configuration
-const SUBSCRIPTION_PLANS = {
-  basic: {
-    id: 'basic', 
-    name: 'Basic Plan',
-    maxLoads: 1,
-    features: ['Basic support', 'Load posting', 'Basic analytics'],
-    price: 0,
-    duration: 30 // days
-  },
-  pro: {
-    id: 'pro', 
-    name: 'Pro Plan', 
-    maxLoads: 25,
-    features: ['Priority support', 'Advanced analytics', 'Priority listings'],
-    price: 999,
-    duration: 30 // days
-  },
-  business: {
-    id: 'business', 
-    name: 'Business Plan',
-    maxLoads: 100, 
-    features: ['Premium support', 'Custom integrations', 'Dedicated account manager'],
-    price: 2499,
-    duration: 30 // days
-  }
-};
 
 // Helper function to ensure basic subscription exists
 const ensureBasicSubscription = async (userId, db) => {
@@ -68,23 +41,36 @@ const ensureBasicSubscription = async (userId, db) => {
       return activeBasic._id;
     }
 
+    // Get basic plan from database
+    const basicPlan = await SubscriptionPlan.getPlanById('basic');
+    if (!basicPlan) {
+      throw new Error('Basic plan not found in database');
+    }
+
     // Create new basic subscription
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(userId),
-      planId: 'basic', //  use planId instead of SUBSCRIPTION_PLANS.basic.id
-      planName: SUBSCRIPTION_PLANS.basic.name,
-      price: SUBSCRIPTION_PLANS.basic.price,
-      currency: 'KES',
-      billingCycle: 'monthly',
-      duration: SUBSCRIPTION_PLANS.basic.duration,
-      features: SUBSCRIPTION_PLANS.basic.features,
+      planId: basicPlan.planId,
+      planName: basicPlan.name,
+      price: basicPlan.price,
+      currency: basicPlan.currency,
+      billingCycle: basicPlan.billingCycle,
+      duration: basicPlan.duration,
+      features: {
+        maxLoads: basicPlan.features.maxLoads,
+        prioritySupport: basicPlan.features.prioritySupport,
+        advancedAnalytics: basicPlan.features.advancedAnalytics,
+        bulkOperations: basicPlan.features.bulkOperations,
+        apiAccess: basicPlan.features.apiAccess,
+        dedicatedManager: basicPlan.features.dedicatedManager
+      },
       status: 'active',
       paymentMethod: 'free',
       paymentDetails: { type: 'free_plan' },
       paymentStatus: 'completed',
       activatedAt: new Date(),
-      // Basic plan should not expire
-      // expiresAt: new Date(Date.now() + SUBSCRIPTION_PLANS.basic.duration * 24 * 60 * 60 * 1000),
+      // Basic plan should not expire for free tier
+      // expiresAt: new Date(Date.now() + basicPlan.duration * 24 * 60 * 60 * 1000),
       requestedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -101,10 +87,8 @@ const ensureBasicSubscription = async (userId, db) => {
       {
         $set: {
           currentSubscription: result.insertedId,
-          subscriptionPlan: 'basic',
+          subscriptionPlan: basicPlan.planId,
           subscriptionStatus: 'active',
-          // Don't set expiry for basic plan
-          // subscriptionExpiresAt: subscriptionData.expiresAt,
           updatedAt: new Date()
         }
       }
@@ -263,7 +247,7 @@ const getUsageData = async (userId, db, subscription) => {
     createdAt: { $gte: currentMonthStart }
   });
 
-  const maxLoads = subscription.features?.maxLoads || SUBSCRIPTION_PLANS[subscription.planId]?.maxLoads || 3;
+  const maxLoads = subscription.features?.maxLoads || 1;
   const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - monthlyUsage);
 
   return {
@@ -279,63 +263,46 @@ const getUsageData = async (userId, db, subscription) => {
 // @access  Private
 router.get('/plans', auth, async (req, res) => {
   try {
-    const plans = {
-      basic: {
-        id: 'basic',
-        name: 'Basic Plan',
-        price: 0,
-        currency: 'KES',
-        interval: 'monthly',
-        maxLoads: 1,
+    // Get active subscription plans from database
+    const activePlans = await SubscriptionPlan.getActivePlans();
+    
+    if (!activePlans || activePlans.length === 0) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'No subscription plans available'
+      });
+    }
+
+    // Transform plans for frontend consumption
+    const plansData = {};
+    
+    activePlans.forEach(plan => {
+      plansData[plan.planId] = {
+        id: plan.planId,
+        name: plan.name,
+        price: plan.price,
+        currency: plan.currency,
+        interval: plan.billingCycle,
+        maxLoads: plan.features.maxLoads,
         features: [
-          'Post up to 3 loads per month',
-          'Basic analytics',
-          'Email support',
-          'Standard listing visibility'
-        ],
-        recommended: false
-      },
-      pro: {
-        id: 'pro',
-        name: 'Pro Plan',
-        price: 999,
-        currency: 'KES', 
-        interval: 'monthly',
-        maxLoads: 25,
-        features: [
-          'Post up to 25 loads per month',
-          'Advanced analytics & reporting',
-          'Priority support',
-          'Enhanced listing visibility',
-          'Bid management tools',
-          'Performance insights'
-        ],
-        recommended: true
-      },
-      business: {
-        id: 'business',
-        name: 'Business Plan',
-        price: 2499,
-        currency: 'KES',
-        interval: 'monthly', 
-        maxLoads: 100,
-        features: [
-          'Unlimited load postings',
-          'Premium analytics dashboard',
-          'Dedicated account manager',
-          'Priority listing placement',
-          'Custom integrations',
-          'Advanced reporting',
-          'Phone & email support',
-          'Bulk operations'
-        ],
-        recommended: false
-      }
-    };
+          plan.features.maxLoads === -1 
+            ? 'Unlimited load postings'
+            : `Post up to ${plan.features.maxLoads} loads per month`,
+          plan.features.advancedAnalytics ? 'Advanced analytics & reporting' : 'Basic analytics',
+          plan.features.prioritySupport ? 'Priority support' : 'Standard support',
+          plan.features.bulkOperations ? 'Bulk operations' : 'Individual operations',
+          ...(plan.features.apiAccess ? ['API access'] : []),
+          ...(plan.features.dedicatedManager ? ['Dedicated account manager'] : [])
+        ].filter(Boolean),
+        recommended: plan.isPopular,
+        description: plan.description,
+        displayOrder: plan.displayOrder
+      };
+    });
 
     res.json({
       status: 'success',
-      data: { plans }
+      data: { plans: plansData }
     });
 
   } catch (error) {
@@ -349,18 +316,67 @@ router.get('/plans', auth, async (req, res) => {
 });
 
 
+// @route   GET /api/subscriptions/payment-methods
+// @desc    Get available payment methods from database
+// @access  Private
+router.get('/payment-methods', auth, async (req, res) => {
+  try {
+    // Get enabled payment methods from database
+    const paymentMethods = await PaymentMethod.getEnabledMethods();
+    
+    if (!paymentMethods || paymentMethods.length === 0) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'No payment methods available'
+      });
+    }
+
+    // Transform for frontend
+    const methodsData = paymentMethods.map(method => ({
+      id: method.methodId,
+      name: method.displayName,
+      description: method.description,
+      instructions: method.instructions,
+      minimumAmount: method.minimumAmount,
+      maximumAmount: method.maximumAmount,
+      processingFee: method.processingFee,
+      processingFeeType: method.processingFeeType,
+      currency: method.currency,
+      supportedCurrencies: method.supportedCurrencies,
+      processingTimeMinutes: method.processingTimeMinutes,
+      requiresVerification: method.requiresVerification,
+      verificationInstructions: method.verificationInstructions,
+      details: method.details,
+      availableNow: method.isAvailableNow(),
+      availableHours: method.availableHours,
+      availableDays: method.availableDays
+    }));
+
+    res.json({
+      status: 'success',
+      data: { paymentMethods: methodsData }
+    });
+
+  } catch (error) {
+    console.error('Get payment methods error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error fetching payment methods',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   POST /api/subscriptions/subscribe
 // @desc    Create a new subscription request 
 // @access  Private (Cargo owners only)
 router.post('/subscribe', auth, subscriptionLimiter, [
   body('planId')
     .notEmpty()
-    .withMessage('Plan ID is required')
-    .isIn(['basic', 'pro', 'business'])
-    .withMessage('Invalid plan selected'),
+    .withMessage('Plan ID is required'),
   body('paymentMethod')
-    .isIn(['mpesa', 'bank_transfer', 'card'])
-    .withMessage('Invalid payment method'),
+    .notEmpty()
+    .withMessage('Payment method is required'),
   body('paymentDetails')
     .optional()
     .isObject()
@@ -389,12 +405,12 @@ router.post('/subscribe', auth, subscriptionLimiter, [
 
     const { planId, paymentMethod, paymentDetails, billingCycle = 'monthly' } = req.body;
 
-    // Validate plan exists
-    const selectedPlan = SUBSCRIPTION_PLANS[planId];
-    if (!selectedPlan) {
+    // Get plan from database
+    const selectedPlan = await SubscriptionPlan.getPlanById(planId);
+    if (!selectedPlan || !selectedPlan.isValidForUser('individual')) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid subscription plan'
+        message: 'Invalid or unavailable subscription plan'
       });
     }
 
@@ -402,7 +418,16 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     if (planId === 'basic') {
       return res.status(400).json({
         status: 'error',
-        message: 'Basic plan is automatically assigned. Please choose Pro or Business plan.'
+        message: 'Basic plan is automatically assigned. Please choose a premium plan.'
+      });
+    }
+
+    // Get payment method from database
+    const paymentMethodObj = await PaymentMethod.getMethodById(paymentMethod);
+    if (!paymentMethodObj || !paymentMethodObj.isAvailableNow()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or unavailable payment method'
       });
     }
 
@@ -443,8 +468,17 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       duration = 365;
     }
 
+    // Validate payment amount against method limits
+    const amountValidation = await PaymentMethod.validateAmount(paymentMethod, finalPrice);
+    if (!amountValidation.valid) {
+      return res.status(400).json({
+        status: 'error',
+        message: amountValidation.error
+      });
+    }
+
     // Validate payment details based on method
-    if (paymentMethod === 'mpesa') {
+    if (paymentMethodObj.methodId === 'mpesa') {
       if (!paymentDetails?.mpesaCode || !paymentDetails?.userPhone) {
         return res.status(400).json({
           status: 'error',
@@ -461,20 +495,34 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       }
     }
 
+    // Calculate total amount including processing fee
+    const processingFee = paymentMethodObj.calculateFee(finalPrice);
+    const totalAmount = paymentMethodObj.getTotalAmount(finalPrice);
+
     // Create subscription request
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(req.user.id),
-      planId,
+      planId: selectedPlan.planId,
       planName: selectedPlan.name,
       price: finalPrice,
-      currency: 'KES',
+      currency: selectedPlan.currency,
       billingCycle,
       duration,
-      features: selectedPlan.features,
+      features: {
+        maxLoads: selectedPlan.features.maxLoads,
+        prioritySupport: selectedPlan.features.prioritySupport,
+        advancedAnalytics: selectedPlan.features.advancedAnalytics,
+        bulkOperations: selectedPlan.features.bulkOperations,
+        apiAccess: selectedPlan.features.apiAccess,
+        dedicatedManager: selectedPlan.features.dedicatedManager
+      },
       status: 'pending', // Requires admin approval
-      paymentMethod,
+      paymentMethod: paymentMethodObj.methodId,
       paymentDetails: {
         ...paymentDetails,
+        processingFee,
+        totalAmount,
+        paymentMethodName: paymentMethodObj.displayName,
         userInfo: {
           userId: req.user.id,
           userName: req.user.name,
@@ -486,7 +534,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       requestedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
-      notes: `${billingCycle} subscription requested via ${paymentMethod}`,
+      notes: `${billingCycle} subscription requested via ${paymentMethodObj.displayName}`,
       requestMetadata: {
         ip: req.ip,
         userAgent: req.get('User-Agent'),
@@ -500,6 +548,9 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     if (!result.insertedId) {
       throw new Error('Failed to create subscription request');
     }
+
+    // Update payment method statistics
+    await paymentMethodObj.updateStatistics(finalPrice, false); // false as it's pending
 
     // Update user with pending subscription reference
     await usersCollection.updateOne(
@@ -521,10 +572,10 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       message: `Your ${selectedPlan.name} subscription request has been submitted and is pending approval. You will be notified once it's processed.`,
       data: {
         subscriptionId: result.insertedId,
-        planId,
+        planId: selectedPlan.planId,
         planName: selectedPlan.name,
         price: finalPrice,
-        paymentMethod
+        paymentMethod: paymentMethodObj.displayName
       },
       isRead: false,
       priority: 'medium',
@@ -535,16 +586,16 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     await notificationsCollection.insertOne({
       type: 'new_subscription_request',
       title: 'New Subscription Request',
-      message: `${req.user.name} has requested a ${selectedPlan.name} subscription via ${paymentMethod}.`,
+      message: `${req.user.name} has requested a ${selectedPlan.name} subscription via ${paymentMethodObj.displayName}.`,
       data: {
         subscriptionId: result.insertedId,
         userId: req.user.id,
         userName: req.user.name,
         userEmail: req.user.email,
-        planId,
+        planId: selectedPlan.planId,
         planName: selectedPlan.name,
         price: finalPrice,
-        paymentMethod,
+        paymentMethod: paymentMethodObj.displayName,
         paymentDetails: paymentDetails?.mpesaCode ? { mpesaCode: paymentDetails.mpesaCode } : {}
       },
       userType: 'admin',
@@ -556,9 +607,9 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     console.log('Subscription request created:', {
       subscriptionId: result.insertedId,
       userId: req.user.id,
-      planId,
+      planId: selectedPlan.planId,
       price: finalPrice,
-      paymentMethod
+      paymentMethod: paymentMethodObj.methodId
     });
 
     res.status(201).json({
@@ -568,12 +619,14 @@ router.post('/subscribe', auth, subscriptionLimiter, [
         subscriptionId: result.insertedId,
         planName: selectedPlan.name,
         price: finalPrice,
-        currency: 'KES',
+        processingFee,
+        totalAmount,
+        currency: selectedPlan.currency,
         billingCycle,
         status: 'pending',
-        paymentMethod,
+        paymentMethod: paymentMethodObj.displayName,
         requestedAt: new Date(),
-        estimatedProcessingTime: '24-48 hours'
+        estimatedProcessingTime: `${paymentMethodObj.processingTimeMinutes || 1440} minutes` // Default 24 hours
       }
     });
 
@@ -605,7 +658,7 @@ router.get('/admin/pending', adminAuth, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(['pending', 'active', 'expired', 'cancelled', 'rejected']),
-  query('paymentMethod').optional().isIn(['mpesa', 'bank_transfer', 'card']),
+  query('paymentMethod').optional(),
   query('sortBy').optional().isIn(['createdAt', 'price', 'planName']),
   query('sortOrder').optional().isIn(['asc', 'desc'])
 ], async (req, res) => {
@@ -727,6 +780,8 @@ router.get('/admin/pending', adminAuth, [
             amount: sub.price,
             currency: sub.currency,
             mpesaCode: sub.paymentDetails?.mpesaCode,
+            processingFee: sub.paymentDetails?.processingFee || 0,
+            totalAmount: sub.paymentDetails?.totalAmount || sub.price,
             reference: sub.paymentDetails?.reference || sub.paymentDetails?.userInfo?.userId,
             userPhone: sub.paymentDetails?.userInfo?.userPhone
           },
@@ -862,6 +917,13 @@ router.get('/admin/analytics', adminAuth, async (req, res) => {
       }
     ]).toArray();
 
+    // Get all subscription plans from database for plan names
+    const allPlans = await SubscriptionPlan.find({}, { planId: 1, name: 1 }).lean();
+    const planNameMap = {};
+    allPlans.forEach(plan => {
+      planNameMap[plan.planId] = plan.name;
+    });
+
     // Get payment method analytics (exclude basic plans)
     const paymentMethodStats = await subscriptionsCollection.aggregate([
       { 
@@ -941,7 +1003,7 @@ router.get('/admin/analytics', adminAuth, async (req, res) => {
       },
       planDistribution: planDistribution.map(plan => ({
         planId: plan._id,
-        planName: SUBSCRIPTION_PLANS[plan._id]?.name || plan._id,
+        planName: planNameMap[plan._id] || plan._id,
         count: plan.count,
         activeCount: plan.activeCount,
         revenue: plan.revenue,
@@ -993,7 +1055,8 @@ router.get('/admin/analytics', adminAuth, async (req, res) => {
   }
 });
 
-// @route   POST /api/subscriptions/check-limits
+
+// @route   GET /api/subscriptions/check-limits
 // @desc    Check if user can create more loads based on subscription
 // @access  Private (Cargo owners only)
 router.get('/check-limits', auth, async (req, res) => {
@@ -1029,7 +1092,14 @@ router.get('/check-limits', auth, async (req, res) => {
       createdAt: { $gte: currentMonthStart }
     });
 
-    const maxLoads = subscription.features?.maxLoads || SUBSCRIPTION_PLANS[subscription.planId]?.maxLoads || 3;
+    // Get maxLoads from subscription features, fall back to subscription plan from database
+    let maxLoads = subscription.features?.maxLoads;
+    
+    if (maxLoads === undefined || maxLoads === null) {
+      const plan = await SubscriptionPlan.getPlanById(subscription.planId);
+      maxLoads = plan?.features?.maxLoads || 3; // Default fallback
+    }
+
     const remainingLoads = maxLoads === -1 ? -1 : Math.max(0, maxLoads - monthlyUsage);
     const canCreateLoads = maxLoads === -1 || remainingLoads > 0;
 
@@ -1929,7 +1999,15 @@ router.put('/admin/:id/adjust-duration', adminAuth, [
 // @desc    Update subscription details
 // @access  Private (Admin only)
 router.put('/admin/:id/update', adminAuth, [
-  body('planId').optional().isIn(['basic', 'pro', 'business']).withMessage('Invalid plan ID'),
+  body('planId').optional().custom(async (value) => {
+    if (value) {
+      const plan = await SubscriptionPlan.getPlanById(value);
+      if (!plan) {
+        throw new Error('Invalid plan ID');
+      }
+    }
+    return true;
+  }),
   body('status').optional().isIn(['active', 'pending', 'cancelled', 'expired']).withMessage('Invalid status'),
   body('expiresAt').optional().isISO8601().withMessage('Invalid expiry date'),
   body('autoRenew').optional().isBoolean(),
@@ -1991,7 +2069,7 @@ router.put('/admin/:id/update', adminAuth, [
     const changes = [];
 
     if (planId && planId !== subscription.planId) {
-      const newPlan = SUBSCRIPTION_PLANS[planId];
+      const newPlan = await SubscriptionPlan.getPlanById(planId);
       if (!newPlan) {
         return res.status(400).json({
           status: 'error',
