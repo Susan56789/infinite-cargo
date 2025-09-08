@@ -1223,14 +1223,10 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     const requestPayload = {
       planId: planId,
       paymentMethod: paymentMethodId,
-      paymentDetails: requestPaymentDetails, // This should NOT be nested
+      paymentDetails: requestPaymentDetails, 
       billingCycle: 'monthly'
     };
 
-    console.log('=== SUBSCRIPTION REQUEST DEBUG ===');
-    console.log('Request payload:', JSON.stringify(requestPayload, null, 2));
-    console.log('Selected plan:', selectedPlan);
-    console.log('Selected payment method:', selectedPaymentMethod);
 
     const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
       method: 'POST',
@@ -1242,13 +1238,10 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       body: JSON.stringify(requestPayload)
     });
 
-    console.log('Response status:', response.status);
-    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
     let data;
     try {
       const responseText = await response.text();
-      console.log('Raw response:', responseText);
       
       if (responseText.trim()) {
         data = JSON.parse(responseText);
@@ -1261,7 +1254,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    console.log('Parsed response data:', data);
 
     if (response.ok) {
       // Update subscription state optimistically
