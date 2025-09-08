@@ -30,6 +30,7 @@ const CargoOwnerDashboard = () => {
   const [stats, setStats] = useState({});
   const [subscription, setSubscription] = useState(null);
   const [subscriptionPlans, setSubscriptionPlans] = useState({});
+  const [paymentMethods, setPaymentMethods] = useState([]); // New state for payment methods
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -218,8 +219,6 @@ try {
   // Don't pass default fallback here — we only want real data or null
   subscriptionData = await handleResponse(subscriptionResponse, null);
 
-  
-
   setSubscription(subscriptionData);
 
 } catch (error) {
@@ -312,7 +311,7 @@ try {
         setNotifications([]);
       }
 
-      // Fetch subscription plans
+      // Fetch subscription plans from database
       try {
         const plansResponse = await fetch(`${API_BASE_URL}/subscriptions/plans`, {
           headers: authHeaders,
@@ -322,7 +321,24 @@ try {
         setSubscriptionPlans(plansData?.plans || {});
       } catch (error) {
         console.warn('Could not fetch subscription plans:', error.message);
+        // Fallback to empty object - components should handle gracefully
         setSubscriptionPlans({});
+      }
+
+      // Fetch payment methods from database
+      try {
+        const paymentMethodsResponse = await fetch(`${API_BASE_URL}/subscriptions/payment-methods`, {
+          headers: authHeaders,
+          timeout: 8000
+        });
+        const paymentMethodsData = await handleResponse(paymentMethodsResponse, { paymentMethods: [] });
+        const methods = Array.isArray(paymentMethodsData?.paymentMethods) ? 
+                       paymentMethodsData.paymentMethods : [];
+        setPaymentMethods(methods);
+      } catch (error) {
+        console.warn('Could not fetch payment methods:', error.message);
+        // Fallback to empty array - components should handle gracefully
+        setPaymentMethods([]);
       }
 
     } catch (error) {
@@ -1071,11 +1087,18 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   }
 };
 
-  const handleSubscribe = async (planId, paymentMethod, paymentDetails = null) => {
+  // Updated handleSubscribe function to work with database payment methods
+  const handleSubscribe = async (planId, paymentMethodId, paymentDetails = null) => {
   const selectedPlan = subscriptionPlans?.[planId];
+  const selectedPaymentMethod = paymentMethods.find(method => method.id === paymentMethodId);
 
   if (!selectedPlan) {
     setError('Selected plan not found.');
+    return;
+  }
+
+  if (!selectedPaymentMethod) {
+    setError('Selected payment method not found.');
     return;
   }
   
@@ -1088,8 +1111,14 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
     
-    if (!paymentMethod) {
+    if (!paymentMethodId) {
       setError('Payment method is required');
+      return;
+    }
+
+    // Check if payment method is available now
+    if (!selectedPaymentMethod.availableNow) {
+      setError(`${selectedPaymentMethod.name} is currently not available. Please try another payment method or try again later.`);
       return;
     }
 
@@ -1097,7 +1126,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       timestamp: new Date().toISOString()
     };
 
-    if (paymentMethod === 'mpesa') {
+    // Handle M-Pesa payment method specifically
+    if (selectedPaymentMethod.id === 'mpesa') {
       // If payment details were passed from modal, use them
       if (paymentDetails && paymentDetails.paymentCode && paymentDetails.phoneNumber) {
         // Validate the M-Pesa code format
@@ -1122,9 +1152,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         };
       } else {
         // Fallback to prompt (original behavior)
-        const mpesaCode = window.prompt(
-          `To complete your ${selectedPlan.name} subscription (${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}), please enter your M-Pesa transaction code:\n\n` +
-          `Steps to get your transaction code:\n` +
+        const instructions = selectedPaymentMethod.instructions || 
+          `Steps to pay via M-Pesa:\n` +
           `1. Go to M-Pesa menu\n` +
           `2. Select "Lipa na M-Pesa"\n` +
           `3. Select "Pay Bill"\n` +
@@ -1132,7 +1161,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           `5. Account Number: ${user?.email || user?.phone || user?.id}\n` +
           `6. Amount: ${selectedPlan.price}\n` +
           `7. Enter your M-Pesa PIN\n` +
-          `8. Copy the transaction code from the confirmation SMS\n\n` +
+          `8. Copy the transaction code from the confirmation SMS`;
+
+        const mpesaCode = window.prompt(
+          `To complete your ${selectedPlan.name} subscription (${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}), please enter your M-Pesa transaction code:\n\n` +
+          `${instructions}\n\n` +
           `Enter M-Pesa Transaction Code (e.g. QA12B34567):`
         );
 
@@ -1163,11 +1196,35 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
         };
       }
+    } else {
+      // Handle other payment methods based on their requirements
+      if (selectedPaymentMethod.requiresVerification && !paymentDetails) {
+        setError(`${selectedPaymentMethod.name} requires additional verification. Please provide payment details.`);
+        return;
+      }
+
+      // Add payment method specific details
+      finalPaymentDetails = {
+        ...finalPaymentDetails,
+        paymentMethodDetails: paymentDetails || {},
+        paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
+      };
+    }
+
+    // Validate payment amount against method limits
+    if (selectedPaymentMethod.minimumAmount && selectedPlan.price < selectedPaymentMethod.minimumAmount) {
+      setError(`Payment amount is below minimum limit of ${formatCurrency(selectedPaymentMethod.minimumAmount)} for ${selectedPaymentMethod.name}.`);
+      return;
+    }
+
+    if (selectedPaymentMethod.maximumAmount && selectedPlan.price > selectedPaymentMethod.maximumAmount) {
+      setError(`Payment amount exceeds maximum limit of ${formatCurrency(selectedPaymentMethod.maximumAmount)} for ${selectedPaymentMethod.name}.`);
+      return;
     }
 
     const requestPayload = {
       planId: planId,
-      paymentMethod: paymentMethod,
+      paymentMethod: paymentMethodId,
       paymentDetails: finalPaymentDetails,
       billingCycle: 'monthly'
     };
@@ -1203,7 +1260,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         planId: planId,
         planName: selectedPlan.name,
         status: 'pending',
-        paymentMethod: paymentMethod,
+        paymentMethod: paymentMethodId,
         requestedAt: new Date().toISOString(),
         hasPendingUpgrade: true,
         pendingSubscription: {
@@ -1213,15 +1270,16 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       });
 
       const successMessage = data?.message || `${selectedPlan.name} subscription request submitted successfully!`;
-      setSuccess(`${successMessage}\n\nYour request will be reviewed within 24-48 hours. You'll receive a notification once approved.`);
+      setSuccess(`${successMessage}\n\nYour request will be reviewed within ${selectedPaymentMethod.processingTimeMinutes ? Math.ceil(selectedPaymentMethod.processingTimeMinutes / 60) : 24}-48 hours. You'll receive a notification once approved.`);
       
       if (window.showToast) {
         window.showToast(
           `Subscription request submitted!\n\n` +
           `Plan: ${selectedPlan.name}\n` +
           `Amount: ${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}\n` +
-          `Payment: ${paymentMethod.toUpperCase()}\n\n` +
-          `You'll be notified within 24-48 hours once approved.`,
+          `Payment: ${selectedPaymentMethod.name}\n` +
+          `Processing Fee: ${formatCurrency(selectedPaymentMethod.processingFee || 0)}\n\n` +
+          `You'll be notified within ${selectedPaymentMethod.processingTimeMinutes ? Math.ceil(selectedPaymentMethod.processingTimeMinutes / 60) : 24}-48 hours once approved.`,
           'success',
           8000
         );
@@ -1708,10 +1766,6 @@ const getSubscriptionStatus = (subscription) => {
   return { status: subscription.status || 'Unknown', color: 'text-gray-600', icon: AlertCircle };
 };
 
-
-
-
-
   const canPostLoads = () => {
   // If no subscription data is loaded yet, allow posting (assume basic plan)
   if (!subscription) {
@@ -1923,42 +1977,43 @@ const getSubscriptionStatus = (subscription) => {
             )}
 
             {activeTab === 'loads' && (
-  <LoadsTab 
-    filters={filters}
-    setFilters={setFilters}
-    loading={loading}
-    filteredLoads={filteredLoads}
-    canPostLoads={canPostLoads}
-    getStatusColor={getStatusColor}
-    formatCurrency={formatCurrency}
-    formatDate={formatDate}
-    onPostLoad={handlePostLoad}
-    onViewDetails={handleViewDetails}
-    onEditLoad={handleEditLoad}  
-    onUpdateLoadStatus={handleUpdateLoadStatus}
-    onRefresh={fetchDashboardData}
-    setError={setError}
-  />
-)}
+              <LoadsTab 
+                filters={filters}
+                setFilters={setFilters}
+                loading={loading}
+                filteredLoads={filteredLoads}
+                canPostLoads={canPostLoads}
+                getStatusColor={getStatusColor}
+                formatCurrency={formatCurrency}
+                formatDate={formatDate}
+                onPostLoad={handlePostLoad}
+                onViewDetails={handleViewDetails}
+                onEditLoad={handleEditLoad}  
+                onUpdateLoadStatus={handleUpdateLoadStatus}
+                onRefresh={fetchDashboardData}
+                setError={setError}
+              />
+            )}
 
             {activeTab === 'bids' && (
-  <BidsTab 
-    bids={bids}
-    loading={loading}
-    formatCurrency={formatCurrency}
-    formatDate={formatDate}
-    onAcceptBid={handleAcceptBid}
-    onRejectBid={handleRejectBid}
-    onRefresh={fetchBids}
-    API_BASE_URL={API_BASE_URL} 
-    getAuthHeaders={getAuthHeaders} 
-  />
-)}
+              <BidsTab 
+                bids={bids}
+                loading={loading}
+                formatCurrency={formatCurrency}
+                formatDate={formatDate}
+                onAcceptBid={handleAcceptBid}
+                onRejectBid={handleRejectBid}
+                onRefresh={fetchBids}
+                API_BASE_URL={API_BASE_URL} 
+                getAuthHeaders={getAuthHeaders} 
+              />
+            )}
 
             {activeTab === 'subscription' && (
               <SubscriptionTab 
                 subscription={subscription}
                 subscriptionPlans={subscriptionPlans}
+                paymentMethods={paymentMethods}
                 loading={loading}
                 formatCurrency={formatCurrency}
                 formatDate={formatDate}
@@ -1993,20 +2048,21 @@ const getSubscriptionStatus = (subscription) => {
       />
 
       <ProfileModal 
-  showProfileModal={showProfileModal}
-  profileForm={profileForm}
-  setProfileForm={setProfileForm}
-  loading={loading}
-  onSubmit={handleUpdateProfile}
-  onClose={() => setShowProfileModal(false)}
-  onDeleteProfile={handleDeleteProfile}
-  onDeactivateProfile={handleDeactivateProfile}
-/>
+        showProfileModal={showProfileModal}
+        profileForm={profileForm}
+        setProfileForm={setProfileForm}
+        loading={loading}
+        onSubmit={handleUpdateProfile}
+        onClose={() => setShowProfileModal(false)}
+        onDeleteProfile={handleDeleteProfile}
+        onDeactivateProfile={handleDeactivateProfile}
+      />
 
       <SubscriptionModal 
         showSubscriptionModal={showSubscriptionModal}
         subscription={subscription}
         subscriptionPlans={subscriptionPlans}
+        paymentMethods={paymentMethods}
         loading={loading}
         formatCurrency={formatCurrency}
         onSubscribe={handleSubscribe}

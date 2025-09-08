@@ -1,395 +1,419 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
-  Crown, Package, CheckCircle2, XCircle, Clock, 
-  CreditCard, Shield, RefreshCw, AlertCircle 
+  Crown, Shield, CheckCircle, AlertCircle, Clock, TrendingUp, 
+  Calendar, DollarSign, Phone, Mail, User, Smartphone, Building2,
+  CreditCard, Refresh, ExternalLink, Zap, Users, BarChart, Globe,
+  Banknote, Wallet
 } from 'lucide-react';
 
 const SubscriptionTab = ({
   subscription,
   subscriptionPlans,
+  paymentMethods,
   loading,
   formatCurrency,
   formatDate,
   onSubscribe
 }) => {
-  
-  // Safe helper function to get usage data with extensive null checks
-  const getUsageData = () => {
-    if (!subscription?.usage) {
-      return { 
-        loadsThisMonth: 0, 
-        maxLoads: 3, 
-        remainingLoads: 3, 
-        usagePercentage: 0 
-      };
-    }
-    
-    const usage = subscription.usage;
-    const loadsThisMonth = usage.loadsThisMonth || 0;
-    const maxLoads = usage.maxLoads || 3;
-    const remainingLoads = usage.remainingLoads !== undefined ? usage.remainingLoads : Math.max(0, maxLoads - loadsThisMonth);
-    const usagePercentage = usage.usagePercentage || (maxLoads === -1 ? 0 : Math.min(100, (loadsThisMonth / maxLoads) * 100));
-    
-    return {
-      loadsThisMonth,
-      maxLoads,
-      remainingLoads,
-      usagePercentage
+  const [showPaymentMethods, setShowPaymentMethods] = useState(false);
+
+  // Get payment method icon
+  const getPaymentMethodIcon = (methodId) => {
+    const iconMap = {
+      mpesa: Smartphone,
+      bank_transfer: Building2,
+      card: CreditCard,
+      paypal: Wallet,
+      stripe: CreditCard,
+      cash: DollarSign,
+      mobile_money: Smartphone,
+      bitcoin: Banknote
     };
+    return iconMap[methodId] || CreditCard;
   };
 
-  // Safe helper function to get current subscription features
-  const getCurrentSubscriptionFeatures = () => {
+  // Safely get subscription data with fallbacks
+  const subscriptionData = useMemo(() => {
     if (!subscription) {
       return {
-        maxLoads: 3,
-        prioritySupport: false,
-        advancedAnalytics: false,
-        bulkOperations: false
+        planId: 'basic',
+        planName: 'Basic Plan',
+        status: 'active',
+        price: 0,
+        usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3, usagePercentage: 0 },
+        isExpired: false,
+        hasPendingUpgrade: false,
+        pendingSubscription: null
       };
     }
 
-    // Try multiple possible data structures
-    const planId = subscription.planId || 'basic';
-    const currentPlan = subscriptionPlans?.[planId];
-    
-    // If we have the plan from subscriptionPlans, use it
-    if (currentPlan) {
-      return {
-        maxLoads: currentPlan.maxLoads || currentPlan.features?.maxLoads || 3,
-        prioritySupport: currentPlan.features?.prioritySupport || 
-                        (Array.isArray(currentPlan.features) && currentPlan.features.includes('Priority support')) ||
-                        false,
-        advancedAnalytics: currentPlan.features?.advancedAnalytics || 
-                          (Array.isArray(currentPlan.features) && currentPlan.features.includes('Advanced analytics')) ||
-                          false,
-        bulkOperations: currentPlan.features?.bulkOperations || 
-                       (Array.isArray(currentPlan.features) && currentPlan.features.includes('Bulk operations')) ||
-                       false
-      };
-    }
-
-    // Fallback to subscription data itself
-    const subscriptionFeatures = subscription.features || [];
     return {
-      maxLoads: subscription.maxLoads || (Array.isArray(subscriptionFeatures) ? 3 : subscriptionFeatures.maxLoads) || 3,
-      prioritySupport: Array.isArray(subscriptionFeatures) ? 
-                      subscriptionFeatures.includes('Priority support') : 
-                      (subscriptionFeatures.prioritySupport || false),
-      advancedAnalytics: Array.isArray(subscriptionFeatures) ? 
-                        subscriptionFeatures.includes('Advanced analytics') : 
-                        (subscriptionFeatures.advancedAnalytics || false),
-      bulkOperations: Array.isArray(subscriptionFeatures) ? 
-                     subscriptionFeatures.includes('Bulk operations') : 
-                     (subscriptionFeatures.bulkOperations || false)
+      planId: subscription.planId || 'basic',
+      planName: subscription.planName || 'Basic Plan',
+      status: subscription.status || 'active',
+      price: subscription.price || 0,
+      currency: subscription.currency || 'KES',
+      isExpired: subscription.isExpired || false,
+      expiresAt: subscription.expiresAt,
+      createdAt: subscription.createdAt,
+      updatedAt: subscription.updatedAt,
+      hasPendingUpgrade: subscription.hasPendingUpgrade || false,
+      pendingSubscription: subscription.pendingSubscription,
+      usage: {
+        loadsThisMonth: subscription.usage?.loadsThisMonth || 0,
+        maxLoads: subscription.usage?.maxLoads || subscription.maxLoads || 3,
+        remainingLoads: subscription.usage?.remainingLoads ?? 
+                       (subscription.usage?.maxLoads ? Math.max(0, subscription.usage.maxLoads - (subscription.usage.loadsThisMonth || 0)) : 3),
+        usagePercentage: subscription.usage?.usagePercentage || 
+                        (subscription.usage?.maxLoads && subscription.usage?.maxLoads > 0 ? 
+                         Math.min(100, ((subscription.usage.loadsThisMonth || 0) / subscription.usage.maxLoads) * 100) : 0)
+      },
+      features: subscription.features || { maxLoads: 3 }
     };
-  };
+  }, [subscription]);
 
-  // Safe helper function to get plan features for available plans
-  const getPlanFeatures = (plan) => {
-    if (!plan) {
-      return {
-        maxLoads: 3,
-        prioritySupport: false,
-        advancedAnalytics: false,
-        bulkOperations: false
-      };
-    }
+  // Get current plan details from plans data
+  const currentPlan = useMemo(() => {
+    if (!subscriptionPlans || !subscriptionData.planId) return null;
+    return subscriptionPlans[subscriptionData.planId];
+  }, [subscriptionPlans, subscriptionData.planId]);
 
-    // Handle different possible structures
-    const features = plan.features || [];
+  // Filter and sort plans for comparison
+  const availablePlans = useMemo(() => {
+    if (!subscriptionPlans) return [];
     
-    return {
-      maxLoads: plan.maxLoads || features.maxLoads || 3,
-      prioritySupport: features.prioritySupport || 
-                      (Array.isArray(features) && features.includes('Priority support')) ||
-                      false,
-      advancedAnalytics: features.advancedAnalytics || 
-                        (Array.isArray(features) && features.includes('Advanced analytics')) ||
-                        false,
-      bulkOperations: features.bulkOperations || 
-                     (Array.isArray(features) && features.includes('Bulk operations')) ||
-                     false
-    };
+    return Object.entries(subscriptionPlans)
+      .map(([planId, plan]) => ({ ...plan, id: planId }))
+      .sort((a, b) => (a.displayOrder || 999) - (b.displayOrder || 999));
+  }, [subscriptionPlans]);
+
+  // Filter available payment methods
+  const availablePaymentMethods = useMemo(() => {
+    if (!paymentMethods) return [];
+    return paymentMethods.filter(method => method.availableNow);
+  }, [paymentMethods]);
+
+  const getStatusBadge = (status, isExpired = false, isPending = false) => {
+    if (isPending) {
+      return { style: 'bg-yellow-100 text-yellow-800 border-yellow-200', text: 'Pending Approval', icon: Clock };
+    }
+    if (isExpired) {
+      return { style: 'bg-red-100 text-red-800 border-red-200', text: 'Expired', icon: AlertCircle };
+    }
+    if (status === 'active') {
+      return { style: 'bg-green-100 text-green-800 border-green-200', text: 'Active', icon: CheckCircle };
+    }
+    return { style: 'bg-gray-100 text-gray-800 border-gray-200', text: status || 'Unknown', icon: AlertCircle };
   };
 
-  const usage = getUsageData();
-  const currentFeatures = getCurrentSubscriptionFeatures();
-  const isUnlimited = usage.maxLoads === -1 || currentFeatures.maxLoads === -1;
+  const statusBadge = getStatusBadge(
+    subscriptionData.status, 
+    subscriptionData.isExpired, 
+    subscriptionData.hasPendingUpgrade || subscriptionData.status === 'pending'
+  );
 
-  // Safe plans object with fallback
-  const safeSubscriptionPlans = subscriptionPlans || {
-    basic: { id: 'basic', name: 'Basic Plan', price: 0, maxLoads: 3, features: [] },
-    pro: { id: 'pro', name: 'Pro Plan', price: 999, maxLoads: 25, features: [] },
-    business: { id: 'business', name: 'Business Plan', price: 2499, maxLoads: 100, features: [] }
-  };
+  if (loading) {
+    return (
+      <div className="text-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading subscription information...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-semibold text-gray-900">Subscription Management</h3>
-      
-      {/* Current Subscription Status */}
-      <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <Crown className="h-8 w-8 text-purple-600" />
-            <div>
-              <h4 className="text-xl font-bold text-gray-900">
-                {subscription?.planName || 'Basic Plan'}
-              </h4>
-              <div className="flex items-center gap-2">
-                <p className="text-gray-600">
-                  {subscription?.status === 'active' && subscription?.planId !== 'basic' ? 'Active Subscription' :
-                   subscription?.status === 'pending' ? 'Pending Approval' :
-                   subscription?.isExpired ? 'Expired - Downgraded to Basic' :
-                   'Free Plan'}
-                </p>
-                {subscription?.status === 'pending' && (
-                  <Clock className="h-4 w-4 text-yellow-500" />
-                )}
-                {subscription?.isExpired && (
-                  <AlertCircle className="h-4 w-4 text-red-500" />
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold text-gray-900">
-              {subscription?.price ? (formatCurrency ? formatCurrency(subscription.price) : `KES ${subscription.price}`) : 'Free'}
-            </p>
-            <p className="text-sm text-gray-600">/month</p>
-          </div>
-        </div>
+    <div className="space-y-8">
+     
 
-        {/* Status Message for Pending */}
-        {subscription?.status === 'pending' && (
-          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <div className="flex items-center gap-2 text-yellow-700">
-              <Clock className="h-4 w-4" />
-              <span className="text-sm font-medium">Subscription Pending Approval</span>
-            </div>
-            <p className="text-xs text-yellow-600 mt-1">
-              Your upgrade request is being reviewed. You'll be notified once it's processed (24-48 hours).
-            </p>
-          </div>
-        )}
-
-        {/* Current Plan Features */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-          <div className="flex items-center gap-2">
-            <Package className="h-4 w-4 text-blue-600" />
-            <span className="text-sm">
-              {isUnlimited ? 'Unlimited loads' : `${currentFeatures.maxLoads} loads per month`}
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            {currentFeatures.prioritySupport ? (
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-            ) : (
-              <XCircle className="h-4 w-4 text-red-600" />
-            )}
-            <span className="text-sm">Priority Support</span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            {currentFeatures.advancedAnalytics ? (
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-            ) : (
-              <XCircle className="h-4 w-4 text-red-600" />
-            )}
-            <span className="text-sm">Advanced Analytics</span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            {currentFeatures.bulkOperations ? (
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-            ) : (
-              <XCircle className="h-4 w-4 text-red-600" />
-            )}
-            <span className="text-sm">Bulk Operations</span>
-          </div>
-        </div>
-
-        {/* Usage Stats */}
-        {subscription?.usage && (
-          <div className="mb-4">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm text-gray-600">Monthly Usage</span>
-              <span className="text-sm font-medium">
-                {usage.loadsThisMonth} / {isUnlimited ? '∞' : usage.maxLoads} loads
-              </span>
-            </div>
-            {!isUnlimited && (
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div 
-                  className="bg-blue-600 h-2 rounded-full transition-all" 
-                  style={{ 
-                    width: `${Math.min(100, usage.usagePercentage)}%` 
-                  }}
-                ></div>
-              </div>
-            )}
-            
-            {/* Usage warning */}
-            {usage.usagePercentage > 80 && !isUnlimited && (
-              <div className="mt-2 text-xs text-yellow-600">
-                {usage.remainingLoads === 0 ? 'Monthly limit reached!' : `Only ${usage.remainingLoads} loads remaining this month`}
-              </div>
-            )}
-          </div>
-        )}
-
-        {subscription?.expiresAt && subscription?.planId !== 'basic' && (
-          <div className="text-sm text-gray-600">
-            <Clock className="h-4 w-4 inline mr-1" />
-            {subscription.isExpired ? 'Expired on' : 'Expires on'} {
-              formatDate ? formatDate(subscription.expiresAt) : new Date(subscription.expiresAt).toLocaleDateString()
-            }
-          </div>
-        )}
-      </div>
-
-      {/* Available Plans */}
+      {/* Available Plans Comparison */}
       <div>
-        <h4 className="text-lg font-semibold text-gray-900 mb-4">Available Plans</h4>
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-xl font-bold text-gray-900">Available Plans</h3>
+          <button 
+            onClick={() => setShowPaymentMethods(!showPaymentMethods)}
+            className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700"
+          >
+            <CreditCard className="h-4 w-4" />
+            {showPaymentMethods ? 'Hide' : 'View'} Payment Methods
+          </button>
+        </div>
+
+        {/* Payment Methods Section */}
+        {showPaymentMethods && (
+          <div className="mb-8 bg-gray-50 rounded-xl p-6 border border-gray-200">
+            <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <CreditCard className="h-5 w-5" />
+              Available Payment Methods
+            </h4>
+            
+            {availablePaymentMethods.length === 0 ? (
+              <div className="text-center py-8">
+                <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600">No payment methods available at the moment</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {availablePaymentMethods.map((method) => {
+                  const IconComponent = getPaymentMethodIcon(method.id);
+                  
+                  return (
+                    <div key={method.id} className="bg-white border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="bg-blue-100 rounded-lg p-2">
+                          <IconComponent className="h-5 w-5 text-blue-600" />
+                        </div>
+                        <div>
+                          <h5 className="font-semibold text-gray-900">{method.name}</h5>
+                          <p className="text-xs text-gray-600">{method.description}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2 text-sm text-gray-600">
+                        {method.processingTimeMinutes && (
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-4 w-4" />
+                            <span>Processing: ~{Math.ceil(method.processingTimeMinutes / 60)} hours</span>
+                          </div>
+                        )}
+                        
+                        {method.processingFee > 0 && (
+                          <div className="flex items-center gap-2">
+                            <DollarSign className="h-4 w-4" />
+                            <span>Fee: {formatCurrency(method.processingFee)}</span>
+                          </div>
+                        )}
+                        
+                        {method.minimumAmount && (
+                          <div className="flex items-center gap-2">
+                            <TrendingUp className="h-4 w-4" />
+                            <span>Min: {formatCurrency(method.minimumAmount)}</span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {!method.availableNow && (
+                        <div className="mt-3 text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                          Currently unavailable
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Plans Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {Object.entries(safeSubscriptionPlans).map(([planId, plan]) => {
-            const features = getPlanFeatures(plan);
-            const isCurrentPlan = subscription?.planId === planId;
-            const hasPendingUpgrade = subscription?.hasPendingUpgrade || subscription?.pendingSubscription;
+          {availablePlans.map((plan) => {
+            const isCurrentPlan = plan.id === subscriptionData.planId && subscriptionData.status === 'active';
+            const isPendingForThisPlan = subscriptionData.hasPendingUpgrade && 
+              subscriptionData.pendingSubscription?.planId === plan.id;
+            const isRecommended = plan.recommended || plan.id === 'business';
             
             return (
-              <div key={planId} className={`border rounded-lg p-6 ${
-                isCurrentPlan ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
-              } ${plan.recommended ? 'ring-2 ring-purple-200' : ''}`}>
-                
-                {plan.recommended && (
-                  <div className="text-center mb-2">
-                    <span className="bg-purple-600 text-white px-3 py-1 rounded-full text-xs font-medium">
-                      Recommended
-                    </span>
+              <div 
+                key={plan.id}
+                className={`relative border-2 rounded-xl p-6 transition-all ${
+                  isRecommended
+                    ? 'border-purple-300 bg-gradient-to-br from-purple-50 to-purple-100' 
+                    : plan.id === 'pro'
+                    ? 'border-blue-300 bg-gradient-to-br from-blue-50 to-blue-100'
+                    : 'border-gray-200 bg-white'
+                } ${isCurrentPlan ? 'ring-2 ring-green-400' : ''} ${
+                  isPendingForThisPlan ? 'ring-2 ring-yellow-400' : ''
+                }`}
+              >
+                {/* Badges */}
+                {isRecommended && (
+                  <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                    <div className="bg-purple-500 text-white px-4 py-1 rounded-full text-sm font-semibold flex items-center gap-1">
+                      <Crown size={14} />
+                      {plan.recommended ? 'Recommended' : 'Most Popular'}
+                    </div>
                   </div>
                 )}
 
-                <div className="text-center mb-4">
-                  <h5 className="text-lg font-semibold text-gray-900">{plan.name || `${planId} Plan`}</h5>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {(plan.price === 0 || plan.price === undefined) ? 'Free' : (
-                      formatCurrency ? formatCurrency(plan.price) : `KES ${plan.price}`
-                    )}
-                  </p>
-                  <p className="text-sm text-gray-600">/month</p>
+                {(isCurrentPlan || isPendingForThisPlan) && (
+                  <div className="absolute -top-3 right-4">
+                    <div className={`${isPendingForThisPlan ? 'bg-yellow-500' : 'bg-green-500'} text-white px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-1`}>
+                      {isPendingForThisPlan ? (
+                        <>
+                          <Clock size={14} />
+                          Pending
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle size={14} />
+                          Current
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Plan Header */}
+                <div className="text-center mb-6">
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">{plan.name}</h3>
+                  <div className="mb-4">
+                    <span className="text-3xl font-bold text-gray-900">
+                      {plan.price === 0 ? 'Free' : formatCurrency(plan.price)}
+                    </span>
+                    {plan.price > 0 && <span className="text-gray-600">/{plan.interval || 'month'}</span>}
+                  </div>
+                  {plan.description && (
+                    <p className="text-sm text-gray-600">{plan.description}</p>
+                  )}
                 </div>
 
-                <ul className="space-y-2 mb-6">
-                  <li className="flex items-center gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    {features.maxLoads === -1 ? 'Unlimited loads' : `${features.maxLoads} loads per month`}
-                  </li>
-                  <li className="flex items-center gap-2 text-sm">
-                    {features.prioritySupport ? (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-gray-400" />
-                    )}
-                    Priority Support
-                  </li>
-                  <li className="flex items-center gap-2 text-sm">
-                    {features.advancedAnalytics ? (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-gray-400" />
-                    )}
-                    Advanced Analytics
-                  </li>
-                  <li className="flex items-center gap-2 text-sm">
-                    {features.bulkOperations ? (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-gray-400" />
-                    )}
-                    Bulk Operations
-                  </li>
-                </ul>
+                {/* Features */}
+                <div className="space-y-3 mb-6">
+                  {plan.features && plan.features.map((feature, index) => (
+                    <div key={index} className="flex items-center gap-2 text-sm">
+                      <CheckCircle size={16} className="text-green-500 flex-shrink-0" />
+                      <span>{feature}</span>
+                    </div>
+                  ))}
+                </div>
 
-                <button
-                  onClick={() => onSubscribe && onSubscribe(planId, 'mpesa')}
-                  disabled={loading || isCurrentPlan || (planId === 'basic') || hasPendingUpgrade}
-                  className={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
-                    isCurrentPlan
-                      ? 'bg-green-100 text-green-800 cursor-not-allowed'
-                      : planId === 'basic'
-                        ? 'bg-gray-100 text-gray-600 cursor-not-allowed'
-                        : hasPendingUpgrade
-                          ? 'bg-yellow-100 text-yellow-800 cursor-not-allowed'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  }`}
-                >
-                  {isCurrentPlan
-                    ? 'Current Plan'
-                    : planId === 'basic'
-                    ? 'Free Plan'
-                    : hasPendingUpgrade
-                    ? 'Upgrade Pending'
-                    : loading
-                    ? 'Processing...'
-                    : 'Upgrade'}
-                </button>
+                {/* Action Button */}
+                <div className="text-center">
+                  {isCurrentPlan && !isPendingForThisPlan ? (
+                    <div className="w-full py-3 px-4 bg-green-100 text-green-800 rounded-lg font-semibold">
+                      Current Plan
+                    </div>
+                  ) : isPendingForThisPlan ? (
+                    <div className="w-full py-3 px-4 bg-yellow-100 text-yellow-800 rounded-lg font-semibold flex items-center justify-center gap-2">
+                      <Clock size={16} />
+                      Pending Approval
+                    </div>
+                  ) : subscriptionData.hasPendingUpgrade ? (
+                    <button
+                      disabled
+                      className="w-full py-3 px-4 bg-gray-400 text-gray-600 rounded-lg font-semibold cursor-not-allowed"
+                    >
+                      Request Pending
+                    </button>
+                  ) : plan.id === 'basic' ? (
+                    <button
+                      onClick={() => onSubscribe && onSubscribe(plan.id)}
+                      className="w-full py-3 px-4 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+                    >
+                      Switch to Basic
+                    </button>
+                  ) : availablePaymentMethods.length === 0 ? (
+                    <button
+                      disabled
+                      className="w-full py-3 px-4 bg-gray-400 text-gray-600 rounded-lg font-semibold cursor-not-allowed"
+                    >
+                      No Payment Methods
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onSubscribe && onSubscribe(plan.id)}
+                      className={`w-full py-3 px-4 rounded-lg font-semibold transition-colors ${
+                        isRecommended
+                          ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg'
+                          : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg'
+                      }`}
+                    >
+                      Choose {plan.name}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* Pending Subscription Notice */}
-      {subscription?.hasPendingUpgrade && subscription?.pendingSubscription && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-yellow-700 mb-2">
-            <Clock className="h-4 w-4" />
-            <span className="font-medium">Pending Subscription Request</span>
-          </div>
-          <p className="text-sm text-yellow-600 mb-2">
-            You have a pending {subscription.pendingSubscription.planName || 'premium'} subscription request. 
-            It will be reviewed within 24-48 hours.
-          </p>
-          {subscription.pendingSubscription.createdAt && (
-            <div className="text-xs text-yellow-500">
-              Requested: {formatDate ? formatDate(subscription.pendingSubscription.createdAt) : 'Recently'}
+      {/* Subscription History/Details */}
+      {currentPlan && subscriptionData.planId !== 'basic' && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Calendar className="h-5 w-5" />
+            Subscription Details
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div>
+                <span className="font-medium text-gray-700">Plan:</span>
+                <div className="text-gray-900">{subscriptionData.planName}</div>
+              </div>
+              
+              <div>
+                <span className="font-medium text-gray-700">Status:</span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${statusBadge.style}`}>
+                    {statusBadge.text}
+                  </span>
+                </div>
+              </div>
+              
+              <div>
+                <span className="font-medium text-gray-700">Monthly Cost:</span>
+                <div className="text-gray-900">{formatCurrency(subscriptionData.price)}</div>
+              </div>
             </div>
-          )}
+            
+            <div className="space-y-4">
+              {subscriptionData.createdAt && (
+                <div>
+                  <span className="font-medium text-gray-700">Started:</span>
+                  <div className="text-gray-900">{formatDate(subscriptionData.createdAt)}</div>
+                </div>
+              )}
+              
+              {subscriptionData.expiresAt && (
+                <div>
+                  <span className="font-medium text-gray-700">Expires:</span>
+                  <div className="text-gray-900">{formatDate(subscriptionData.expiresAt)}</div>
+                </div>
+              )}
+              
+              <div>
+                <span className="font-medium text-gray-700">Load Limit:</span>
+                <div className="text-gray-900">
+                  {subscriptionData.usage.maxLoads === -1 ? 'Unlimited' : `${subscriptionData.usage.maxLoads} per month`}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Payment Information */}
-      <div className="bg-gray-50 rounded-lg p-4">
-        <h4 className="font-medium text-gray-900 mb-2">Payment Information</h4>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
+      {/* Help & Support */}
+      <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-6 border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <Shield className="h-5 w-5" />
+          Need Help?
+        </h3>
+        
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div className="flex items-center gap-2">
-            <CreditCard className="h-4 w-4" />
-            <span>Secure M-Pesa payment processing</span>
+            <Phone className="h-4 w-4 text-blue-600" />
+            <span className="text-gray-700">Call: +254723 139 610</span>
           </div>
           <div className="flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            <span>30-day money-back guarantee</span>
+            <Mail className="h-4 w-4 text-blue-600" />
+            <span className="text-gray-700">Email: support@infinitecargo.co.ke</span>
           </div>
           <div className="flex items-center gap-2">
-            <RefreshCw className="h-4 w-4" />
-            <span>Cancel or change plan anytime</span>
+            <Globe className="h-4 w-4 text-blue-600" />
+            <a href="#" className="text-blue-600 hover:text-blue-700">Visit Help Center</a>
           </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4" />
-            <span>Manual approval for security</span>
-          </div>
+        </div>
+        
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-600">
+            All subscriptions come with a 30-day money-back guarantee. Cancel anytime through your dashboard or contact support.
+          </p>
         </div>
       </div>
     </div>
   );
 };
-
-
-
-
-
 
 export default SubscriptionTab;

@@ -21,79 +21,87 @@ const subscriptionLimiter = rateLimit({
   }
 });
 
+// Helper function to check if payment method is available now
+const isPaymentMethodAvailable = (paymentMethod) => {
+  // Check time availability
+  if (paymentMethod.availableHours) {
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('en-US', {
+      timeZone: paymentMethod.availableHours.timezone || 'Africa/Nairobi',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const current = parseInt(currentTime.replace(':', ''));
+    const start = parseInt(paymentMethod.availableHours.start.replace(':', ''));
+    const end = parseInt(paymentMethod.availableHours.end.replace(':', ''));
+
+    // Handle overnight availability
+    if (start > end) {
+      if (!(current >= start || current <= end)) {
+        return false;
+      }
+    } else if (!(current >= start && current <= end)) {
+      return false;
+    }
+  }
+
+  // Check day availability
+  if (paymentMethod.availableDays && paymentMethod.availableDays.length > 0) {
+    const today = new Date().getDay();
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const currentDayName = dayNames[today];
+    
+    if (!paymentMethod.availableDays.includes(currentDayName)) {
+      return false;
+    }
+  }
+
+  return paymentMethod.enabled;
+};
+
 // Helper function to ensure basic subscription exists
 const ensureBasicSubscription = async (userId, db) => {
   try {
     const subscriptionsCollection = db.collection('subscriptions');
     
-    // Check if user has any active basic subscription
     const activeBasic = await subscriptionsCollection.findOne({
       userId: new mongoose.Types.ObjectId(userId),
       planId: 'basic',
-      status: 'active',
-      $or: [
-        { expiresAt: { $exists: false } }, // No expiry
-        { expiresAt: { $gt: new Date() } }  // Not expired
-      ]
+      status: 'active'
     });
 
     if (activeBasic) {
       return activeBasic._id;
     }
 
-    // Get basic plan from database
-    const basicPlan = await SubscriptionPlan.getPlanById('basic');
-    if (!basicPlan) {
-      throw new Error('Basic plan not found in database');
-    }
-
-    // Create new basic subscription
+    // Create basic subscription
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(userId),
-      planId: basicPlan.planId,
-      planName: basicPlan.name,
-      price: basicPlan.price,
-      currency: basicPlan.currency,
-      billingCycle: basicPlan.billingCycle,
-      duration: basicPlan.duration,
+      planId: 'basic',
+      planName: 'Basic Plan',
+      price: 0,
+      currency: 'KES',
+      billingCycle: 'monthly',
       features: {
-        maxLoads: basicPlan.features.maxLoads,
-        prioritySupport: basicPlan.features.prioritySupport,
-        advancedAnalytics: basicPlan.features.advancedAnalytics,
-        bulkOperations: basicPlan.features.bulkOperations,
-        apiAccess: basicPlan.features.apiAccess,
-        dedicatedManager: basicPlan.features.dedicatedManager
+        maxLoads: 3,
+        prioritySupport: false,
+        advancedAnalytics: false,
+        bulkOperations: false,
+        apiAccess: false,
+        dedicatedManager: false
       },
       status: 'active',
       paymentMethod: 'free',
-      paymentDetails: { type: 'free_plan' },
       paymentStatus: 'completed',
       activatedAt: new Date(),
-      // Basic plan should not expire for free tier
-      // expiresAt: new Date(Date.now() + basicPlan.duration * 24 * 60 * 60 * 1000),
-      requestedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
-      autoRenew: true,
-      notes: 'Basic plan auto-created'
+      autoRenew: true
     };
 
     const result = await subscriptionsCollection.insertOne(subscriptionData);
-    
-    // Update user record
-    const usersCollection = db.collection('cargo-owners');
-    await usersCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(userId) },
-      {
-        $set: {
-          currentSubscription: result.insertedId,
-          subscriptionPlan: basicPlan.planId,
-          subscriptionStatus: 'active',
-          updatedAt: new Date()
-        }
-      }
-    );
-
     return result.insertedId;
   } catch (error) {
     console.error('Error ensuring basic subscription:', error);
@@ -140,88 +148,38 @@ router.get('/status', auth, async (req, res) => {
       });
     }
 
-    const mongoose = require('mongoose');
     const db = mongoose.connection.db;
+    const subscriptionsCollection = db.collection('subscriptions');
 
     // Get current active subscription
-    const subscription = await getCurrentActiveSubscription(req.user.id, db);
+    let subscription = await subscriptionsCollection.findOne({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      status: 'active'
+    }, { sort: { createdAt: -1 } });
 
+    // If no subscription, create basic one
     if (!subscription) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'Failed to get or create subscription'
-      });
+      const basicId = await ensureBasicSubscription(req.user.id, db);
+      subscription = await subscriptionsCollection.findOne({ _id: basicId });
     }
 
     // Check for pending subscriptions
-    const subscriptionsCollection = db.collection('subscriptions');
     const pendingSubscription = await subscriptionsCollection.findOne({
       userId: new mongoose.Types.ObjectId(req.user.id),
       status: 'pending'
     }, { sort: { createdAt: -1 } });
 
-    // Check if subscription is expired (for non-basic plans)
-    let isExpired = false;
-    let daysUntilExpiry = null;
-    
-    if (subscription.expiresAt && subscription.planId !== 'basic') {
-      const now = new Date();
-      const expiryDate = new Date(subscription.expiresAt);
-      isExpired = now > expiryDate;
-      
-      if (!isExpired) {
-        const timeUntilExpiry = expiryDate - now;
-        daysUntilExpiry = Math.max(0, Math.ceil(timeUntilExpiry / (1000 * 60 * 60 * 24)));
-      }
-      
-      // If expired, auto-downgrade to basic
-      if (isExpired && subscription.status === 'active' && subscription.planId !== 'basic') {
-        await subscriptionsCollection.updateOne(
-          { _id: subscription._id },
-          { 
-            $set: { 
-              status: 'expired',
-              updatedAt: new Date()
-            }
-          }
-        );
-        
-        // Create/ensure basic subscription
-        const basicSubscription = await getCurrentActiveSubscription(req.user.id, db);
-        return res.json({
-          status: 'success',
-          data: {
-            ...basicSubscription,
-            hasActiveSubscription: true,
-            planId: basicSubscription.planId,
-            planName: basicSubscription.planName,
-            status: basicSubscription.status,
-            features: basicSubscription.features,
-            price: basicSubscription.price,
-            isExpired: false,
-            daysUntilExpiry: null,
-            hasPendingUpgrade: !!pendingSubscription,
-            pendingSubscription: pendingSubscription,
-            usage: await getUsageData(req.user.id, db, basicSubscription),
-            message: 'Your premium subscription has expired. You have been automatically downgraded to the Basic plan.'
-          }
-        });
-      }
-    }
-
-    // Get current month's load count for usage tracking
-    const usageData = await getUsageData(req.user.id, db, subscription);
+    // Get usage data
+    const usage = await getUsageData(req.user.id, db, subscription);
 
     res.json({
       status: 'success',
       data: {
         ...subscription,
-        hasActiveSubscription: subscription.status === 'active' && !isExpired,
-        isExpired,
-        daysUntilExpiry,
+        hasActiveSubscription: subscription.status === 'active',
         hasPendingUpgrade: !!pendingSubscription,
         pendingSubscription: pendingSubscription,
-        usage: usageData
+        usage: usage
       }
     });
 
@@ -229,8 +187,7 @@ router.get('/status', auth, async (req, res) => {
     console.error('Get subscription status error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching subscription status',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error fetching subscription status'
     });
   }
 });
@@ -263,20 +220,16 @@ const getUsageData = async (userId, db, subscription) => {
 // @access  Private
 router.get('/plans', auth, async (req, res) => {
   try {
-    // Get active subscription plans from database
-    const activePlans = await SubscriptionPlan.getActivePlans();
+    const db = mongoose.connection.db;
+    const plansCollection = db.collection('subscriptionplans');
     
-    if (!activePlans || activePlans.length === 0) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'No subscription plans available'
-      });
-    }
+    const plans = await plansCollection.find({ 
+      isActive: true 
+    }).sort({ displayOrder: 1 }).toArray();
 
-    // Transform plans for frontend consumption
     const plansData = {};
     
-    activePlans.forEach(plan => {
+    plans.forEach(plan => {
       plansData[plan.planId] = {
         id: plan.planId,
         name: plan.name,
@@ -295,8 +248,7 @@ router.get('/plans', auth, async (req, res) => {
           ...(plan.features.dedicatedManager ? ['Dedicated account manager'] : [])
         ].filter(Boolean),
         recommended: plan.isPopular,
-        description: plan.description,
-        displayOrder: plan.displayOrder
+        description: plan.description
       };
     });
 
@@ -309,8 +261,7 @@ router.get('/plans', auth, async (req, res) => {
     console.error('Get subscription plans error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching subscription plans',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error fetching subscription plans'
     });
   }
 });
@@ -321,17 +272,13 @@ router.get('/plans', auth, async (req, res) => {
 // @access  Private
 router.get('/payment-methods', auth, async (req, res) => {
   try {
-    // Get enabled payment methods from database
-    const paymentMethods = await PaymentMethod.getEnabledMethods();
+    const db = mongoose.connection.db;
+    const paymentMethodsCollection = db.collection('paymentmethods');
     
-    if (!paymentMethods || paymentMethods.length === 0) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'No payment methods available'
-      });
-    }
+    const paymentMethods = await paymentMethodsCollection.find({ 
+      enabled: true 
+    }).sort({ displayOrder: 1 }).toArray();
 
-    // Transform for frontend
     const methodsData = paymentMethods.map(method => ({
       id: method.methodId,
       name: method.displayName,
@@ -342,12 +289,10 @@ router.get('/payment-methods', auth, async (req, res) => {
       processingFee: method.processingFee,
       processingFeeType: method.processingFeeType,
       currency: method.currency,
-      supportedCurrencies: method.supportedCurrencies,
       processingTimeMinutes: method.processingTimeMinutes,
       requiresVerification: method.requiresVerification,
-      verificationInstructions: method.verificationInstructions,
       details: method.details,
-      availableNow: method.isAvailableNow(),
+      availableNow: isPaymentMethodAvailable(method),
       availableHours: method.availableHours,
       availableDays: method.availableDays
     }));
@@ -361,8 +306,7 @@ router.get('/payment-methods', auth, async (req, res) => {
     console.error('Get payment methods error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching payment methods',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error fetching payment methods'
     });
   }
 });
@@ -371,20 +315,10 @@ router.get('/payment-methods', auth, async (req, res) => {
 // @desc    Create a new subscription request 
 // @access  Private (Cargo owners only)
 router.post('/subscribe', auth, subscriptionLimiter, [
-  body('planId')
-    .notEmpty()
-    .withMessage('Plan ID is required'),
-  body('paymentMethod')
-    .notEmpty()
-    .withMessage('Payment method is required'),
-  body('paymentDetails')
-    .optional()
-    .isObject()
-    .withMessage('Payment details must be an object'),
-  body('billingCycle')
-    .optional()
-    .isIn(['monthly', 'quarterly', 'yearly'])
-    .withMessage('Invalid billing cycle')
+  body('planId').notEmpty().withMessage('Plan ID is required'),
+  body('paymentMethod').notEmpty().withMessage('Payment method is required'),
+  body('paymentDetails').optional().isObject().withMessage('Payment details must be an object'),
+  body('billingCycle').optional().isIn(['monthly', 'quarterly', 'yearly']).withMessage('Invalid billing cycle')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -405,16 +339,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
 
     const { planId, paymentMethod, paymentDetails, billingCycle = 'monthly' } = req.body;
 
-    // Get plan from database
-    const selectedPlan = await SubscriptionPlan.getPlanById(planId);
-    if (!selectedPlan || !selectedPlan.isValidForUser('individual')) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid or unavailable subscription plan'
-      });
-    }
-
-    // Prevent subscribing to basic plan (it's auto-assigned)
+    // Prevent basic plan subscription
     if (planId === 'basic') {
       return res.status(400).json({
         status: 'error',
@@ -422,19 +347,32 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       });
     }
 
+    const db = mongoose.connection.db;
+    const plansCollection = db.collection('subscriptionplans');
+    const paymentMethodsCollection = db.collection('paymentmethods');
+    const subscriptionsCollection = db.collection('subscriptions');
+
+    // Get plan from database
+    const selectedPlan = await plansCollection.findOne({ planId: planId, isActive: true });
+    if (!selectedPlan) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or unavailable subscription plan'
+      });
+    }
+
     // Get payment method from database
-    const paymentMethodObj = await PaymentMethod.getMethodById(paymentMethod);
-    if (!paymentMethodObj || !paymentMethodObj.isAvailableNow()) {
+    const paymentMethodObj = await paymentMethodsCollection.findOne({ 
+      methodId: paymentMethod, 
+      enabled: true 
+    });
+    
+    if (!paymentMethodObj || !isPaymentMethodAvailable(paymentMethodObj)) {
       return res.status(400).json({
         status: 'error',
         message: 'Invalid or unavailable payment method'
       });
     }
-
-    const db = mongoose.connection.db;
-    const subscriptionsCollection = db.collection('subscriptions');
-    const usersCollection = db.collection('cargo-owners');
-    const notificationsCollection = db.collection('notifications');
 
     // Check for existing pending subscription
     const existingPending = await subscriptionsCollection.findOne({
@@ -446,58 +384,56 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     if (existingPending) {
       return res.status(409).json({
         status: 'error',
-        message: 'You already have a pending subscription request. Please wait for approval or cancel the existing request.',
+        message: 'You already have a pending subscription request.',
         existingRequest: {
           id: existingPending._id,
           planName: existingPending.planName,
-          requestedAt: existingPending.createdAt,
-          status: existingPending.status
+          requestedAt: existingPending.createdAt
         }
       });
     }
 
-    // Calculate pricing based on billing cycle
+    // Calculate pricing
     let finalPrice = selectedPlan.price;
-    let duration = selectedPlan.duration;
+    let duration = selectedPlan.duration || 30;
 
     if (billingCycle === 'quarterly') {
-      finalPrice = selectedPlan.price * 3 * 0.95; // 5% discount
+      finalPrice = selectedPlan.price * 3 * 0.95;
       duration = 90;
     } else if (billingCycle === 'yearly') {
-      finalPrice = selectedPlan.price * 12 * 0.85; // 15% discount
+      finalPrice = selectedPlan.price * 12 * 0.85;
       duration = 365;
     }
 
-    // Validate payment amount against method limits
-    const amountValidation = await PaymentMethod.validateAmount(paymentMethod, finalPrice);
-    if (!amountValidation.valid) {
-      return res.status(400).json({
-        status: 'error',
-        message: amountValidation.error
-      });
-    }
-
-    // Validate payment details based on method
+    // Validate M-Pesa payment details
     if (paymentMethodObj.methodId === 'mpesa') {
-      if (!paymentDetails?.mpesaCode || !paymentDetails?.userPhone) {
+      if (!paymentDetails?.paymentCode || !paymentDetails?.phoneNumber) {
         return res.status(400).json({
           status: 'error',
-          message: 'M-Pesa code and phone number are required for M-Pesa payments'
+          message: 'M-Pesa code and phone number are required'
         });
       }
       
-      // Validate M-Pesa code format
-      if (!/^[A-Z0-9]{10,12}$/.test(paymentDetails.mpesaCode)) {
+      if (!/^[A-Z0-9]{8,12}$/i.test(paymentDetails.paymentCode)) {
         return res.status(400).json({
           status: 'error',
           message: 'Invalid M-Pesa transaction code format'
         });
       }
+
+      // Validate phone number
+      const phone = paymentDetails.phoneNumber.replace(/\s/g, '');
+      if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid phone number format'
+        });
+      }
     }
 
-    // Calculate total amount including processing fee
-    const processingFee = paymentMethodObj.calculateFee(finalPrice);
-    const totalAmount = paymentMethodObj.getTotalAmount(finalPrice);
+    // Calculate fees
+    const processingFee = paymentMethodObj.processingFee || 0;
+    const totalAmount = finalPrice + processingFee;
 
     // Create subscription request
     const subscriptionData = {
@@ -508,81 +444,45 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       currency: selectedPlan.currency,
       billingCycle,
       duration,
-      features: {
-        maxLoads: selectedPlan.features.maxLoads,
-        prioritySupport: selectedPlan.features.prioritySupport,
-        advancedAnalytics: selectedPlan.features.advancedAnalytics,
-        bulkOperations: selectedPlan.features.bulkOperations,
-        apiAccess: selectedPlan.features.apiAccess,
-        dedicatedManager: selectedPlan.features.dedicatedManager
-      },
-      status: 'pending', // Requires admin approval
+      features: selectedPlan.features,
+      status: 'pending',
       paymentMethod: paymentMethodObj.methodId,
       paymentDetails: {
         ...paymentDetails,
         processingFee,
         totalAmount,
         paymentMethodName: paymentMethodObj.displayName,
+        businessNumber: paymentMethodObj.details?.businessNumber,
         userInfo: {
           userId: req.user.id,
           userName: req.user.name,
-          userEmail: req.user.email,
-          userPhone: req.user.phone
+          userEmail: req.user.email
         }
       },
       paymentStatus: 'pending',
       requestedAt: new Date(),
       createdAt: new Date(),
-      updatedAt: new Date(),
-      notes: `${billingCycle} subscription requested via ${paymentMethodObj.displayName}`,
-      requestMetadata: {
-        ip: req.ip,
-        userAgent: req.get('User-Agent'),
-        origin: req.headers.origin
-      }
+      updatedAt: new Date()
     };
 
-    // Insert subscription request
     const result = await subscriptionsCollection.insertOne(subscriptionData);
+
+    // Create notifications
+    const notificationsCollection = db.collection('notifications');
     
-    if (!result.insertedId) {
-      throw new Error('Failed to create subscription request');
-    }
-
-    // Update payment method statistics
-    await paymentMethodObj.updateStatistics(finalPrice, false); // false as it's pending
-
-    // Update user with pending subscription reference
-    await usersCollection.updateOne(
-      { _id: new mongoose.Types.ObjectId(req.user.id) },
-      {
-        $set: {
-          pendingSubscription: result.insertedId,
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    // Create notification for user
+    // User notification
     await notificationsCollection.insertOne({
       userId: new mongoose.Types.ObjectId(req.user.id),
       userType: 'cargo_owner',
       type: 'subscription_requested',
       title: 'Subscription Request Submitted',
-      message: `Your ${selectedPlan.name} subscription request has been submitted and is pending approval. You will be notified once it's processed.`,
-      data: {
-        subscriptionId: result.insertedId,
-        planId: selectedPlan.planId,
-        planName: selectedPlan.name,
-        price: finalPrice,
-        paymentMethod: paymentMethodObj.displayName
-      },
+      message: `Your ${selectedPlan.name} subscription request has been submitted and is pending approval.`,
+      data: { subscriptionId: result.insertedId },
       isRead: false,
-      priority: 'medium',
       createdAt: new Date()
     });
 
-    // Create notification for admins
+    // Admin notification
     await notificationsCollection.insertOne({
       type: 'new_subscription_request',
       title: 'New Subscription Request',
@@ -591,12 +491,10 @@ router.post('/subscribe', auth, subscriptionLimiter, [
         subscriptionId: result.insertedId,
         userId: req.user.id,
         userName: req.user.name,
-        userEmail: req.user.email,
-        planId: selectedPlan.planId,
         planName: selectedPlan.name,
         price: finalPrice,
         paymentMethod: paymentMethodObj.displayName,
-        paymentDetails: paymentDetails?.mpesaCode ? { mpesaCode: paymentDetails.mpesaCode } : {}
+        mpesaCode: paymentDetails?.paymentCode || null
       },
       userType: 'admin',
       isRead: false,
@@ -604,47 +502,25 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       createdAt: new Date()
     });
 
-    console.log('Subscription request created:', {
-      subscriptionId: result.insertedId,
-      userId: req.user.id,
-      planId: selectedPlan.planId,
-      price: finalPrice,
-      paymentMethod: paymentMethodObj.methodId
-    });
-
     res.status(201).json({
       status: 'success',
-      message: `${selectedPlan.name} subscription request submitted successfully. You will receive a notification once it's approved.`,
+      message: `${selectedPlan.name} subscription request submitted successfully.`,
       data: {
         subscriptionId: result.insertedId,
         planName: selectedPlan.name,
         price: finalPrice,
         processingFee,
         totalAmount,
-        currency: selectedPlan.currency,
-        billingCycle,
         status: 'pending',
-        paymentMethod: paymentMethodObj.displayName,
-        requestedAt: new Date(),
-        estimatedProcessingTime: `${paymentMethodObj.processingTimeMinutes || 1440} minutes` // Default 24 hours
+        paymentMethod: paymentMethodObj.displayName
       }
     });
 
   } catch (error) {
     console.error('Subscribe error:', error);
-    
-    // Handle specific error types
-    if (error.code === 11000) {
-      return res.status(409).json({
-        status: 'error',
-        message: 'A subscription request with these details already exists'
-      });
-    }
-
     res.status(500).json({
       status: 'error',
-      message: 'Server error creating subscription request',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error creating subscription request'
     });
   }
 });

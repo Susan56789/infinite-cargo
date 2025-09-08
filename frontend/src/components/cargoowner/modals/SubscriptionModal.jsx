@@ -1,518 +1,456 @@
-import React, { useState } from 'react';
-import { 
-  Crown, X, CreditCard, Shield, Smartphone, Building2, 
-  Copy, CheckCircle, AlertCircle, Loader2, User, Phone, Clock
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, CreditCard, Clock, CheckCircle2, Info } from 'lucide-react';
 
-const SubscriptionModal = ({
-  showSubscriptionModal,
-  subscription,
-  subscriptionPlans,
-  loading,
-  formatCurrency,
-  onSubscribe,
-  onClose,
-  user
+const SubscriptionModal = ({ 
+  showSubscriptionModal, 
+  subscription, 
+  subscriptionPlans, 
+  paymentMethods, 
+  loading, 
+  formatCurrency, 
+  onSubscribe, 
+  onClose 
 }) => {
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('mpesa');
-  const [paymentCode, setPaymentCode] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState(user?.phone || '');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
+  const [billingCycle, setBillingCycle] = useState('monthly');
+  const [paymentDetails, setPaymentDetails] = useState({});
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [validationErrors, setValidationErrors] = useState({});
+
+  // Reset form when modal opens/closes
+  useEffect(() => {
+    if (showSubscriptionModal) {
+      setSelectedPlan('');
+      setSelectedPaymentMethod('');
+      setBillingCycle('monthly');
+      setPaymentDetails({});
+      setShowPaymentForm(false);
+      setValidationErrors({});
+    }
+  }, [showSubscriptionModal]);
+
+  // Auto-select M-Pesa if it's the only payment method
+  useEffect(() => {
+    if (paymentMethods && paymentMethods.length === 1) {
+      setSelectedPaymentMethod(paymentMethods[0].id);
+    }
+  }, [paymentMethods]);
 
   if (!showSubscriptionModal) return null;
 
-  const paymentMethods = [
-    {
-      id: 'mpesa',
-      name: 'M-Pesa',
-      icon: Smartphone,
-      description: 'Pay with M-Pesa mobile money',
-      color: 'green'
-    },
-    {
-      id: 'bank_transfer',
-      name: 'Bank Transfer',
-      icon: Building2,
-      description: 'Direct bank transfer',
-      color: 'blue'
-    },
-    {
-      id: 'card',
-      name: 'Credit/Debit Card',
-      icon: CreditCard,
-      description: 'Pay with card (Contact support)',
-      color: 'purple'
-    }
-  ];
-
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    // You might want to add a toast notification here
+  const handlePlanSelect = (planId) => {
+    setSelectedPlan(planId);
+    setValidationErrors({});
   };
 
-  const handleSubmit = async (planId) => {
-    // Validate required fields based on payment method
-    if (selectedPaymentMethod === 'mpesa') {
-      if (!paymentCode.trim()) {
-        alert('Please enter your M-Pesa transaction code');
-        return;
-      }
-      
-      if (!phoneNumber.trim()) {
-        alert('Please enter your phone number');
-        return;
-      }
-      
-      // Validate M-Pesa code format
-      if (!/^[A-Z0-9]{8,12}$/i.test(paymentCode.trim())) {
-        alert('Invalid M-Pesa transaction code format. Please enter a valid code (e.g. QH12345678)');
-        return;
-      }
+  const handlePaymentMethodSelect = (methodId) => {
+    setSelectedPaymentMethod(methodId);
+    setPaymentDetails({});
+    setShowPaymentForm(false);
+    setValidationErrors({});
+  };
 
-      // Validate phone number format
-      const phone = phoneNumber.replace(/\s/g, '');
-      if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
-        alert('Invalid phone number format. Please use format: 254712345678 or 0712345678');
-        return;
-      }
+  const validateMPesaCode = (code) => {
+    if (!code) return 'M-Pesa transaction code is required';
+    if (!/^[A-Z0-9]{8,12}$/i.test(code.trim())) {
+      return 'Invalid M-Pesa code format. Should be 8-12 alphanumeric characters (e.g., QA12B34567)';
+    }
+    return null;
+  };
+
+  const validatePhoneNumber = (phone) => {
+    if (!phone) return 'Phone number is required';
+    const cleanPhone = phone.replace(/\s/g, '');
+    if (!/^(\+?254|0)?[17][0-9]{8}$/.test(cleanPhone)) {
+      return 'Invalid phone number. Use format: 254712345678 or 0712345678';
+    }
+    return null;
+  };
+
+  const handlePaymentDetailsChange = (field, value) => {
+    setPaymentDetails(prev => ({
+      ...prev,
+      [field]: value
+    }));
+    
+    // Clear validation error for this field
+    if (validationErrors[field]) {
+      setValidationErrors(prev => ({
+        ...prev,
+        [field]: null
+      }));
+    }
+  };
+
+  const validatePaymentForm = () => {
+    const errors = {};
+    
+    if (!selectedPlan) {
+      errors.plan = 'Please select a subscription plan';
+    }
+    
+    if (!selectedPaymentMethod) {
+      errors.paymentMethod = 'Please select a payment method';
     }
 
-    setIsSubmitting(true);
-    try {
-      // Pass payment details as third parameter
-      await onSubscribe(planId, selectedPaymentMethod, {
-        paymentCode: paymentCode.trim(),
-        phoneNumber: phoneNumber.trim()
+    const selectedMethod = paymentMethods?.find(m => m.id === selectedPaymentMethod);
+    
+    if (selectedMethod?.id === 'mpesa') {
+      const codeError = validateMPesaCode(paymentDetails.paymentCode);
+      if (codeError) errors.paymentCode = codeError;
+      
+      const phoneError = validatePhoneNumber(paymentDetails.phoneNumber);
+      if (phoneError) errors.phoneNumber = phoneError;
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleProceedToPayment = () => {
+    if (!selectedPlan || !selectedPaymentMethod) {
+      setValidationErrors({
+        plan: !selectedPlan ? 'Please select a plan' : null,
+        paymentMethod: !selectedPaymentMethod ? 'Please select a payment method' : null
       });
-      
-      // Reset form on success
-      setPaymentCode('');
-      setPhoneNumber(user?.phone || '');
-      
-    } catch (error) {
-      console.error('Subscription submission error:', error);
-      // Error handling is done in the parent component
-    } finally {
-      setIsSubmitting(false);
+      return;
+    }
+
+    const selectedMethod = paymentMethods?.find(m => m.id === selectedPaymentMethod);
+    if (selectedMethod?.requiresVerification || selectedMethod?.id === 'mpesa') {
+      setShowPaymentForm(true);
+    } else {
+      // Direct subscription for methods that don't need verification
+      handleSubscribe();
     }
   };
 
-  // Enhanced pending status detection
-  const getPlanStatus = (planId) => {
-    // Check if this plan is currently active
-    const isCurrentPlan = subscription?.planId === planId && subscription?.status === 'active';
-    
-    // Check if there's a pending subscription for this plan
-    const isPendingForThisPlan = subscription?.status === 'pending' && subscription?.planId === planId;
-    
-    // Check if there's a general pending upgrade request
-    const hasPendingUpgrade = subscription?.hasPendingUpgrade || 
-                              subscription?.pendingSubscription ||
-                              subscription?.status === 'pending';
-    
-    // Check if this specific plan has a pending request
-    const pendingPlanId = subscription?.pendingSubscription?.planId || 
-                          (subscription?.status === 'pending' ? subscription?.planId : null);
-    
-    const isPendingUpgradeForThisPlan = pendingPlanId === planId;
-    
-    return {
-      isCurrentPlan,
-      isPendingForThisPlan,
-      hasPendingUpgrade,
-      isPendingUpgradeForThisPlan,
-      isPending: isPendingForThisPlan || isPendingUpgradeForThisPlan
+  const handleSubscribe = () => {
+    if (!validatePaymentForm()) {
+      return;
+    }
+
+    const finalPaymentDetails = {
+      ...paymentDetails,
+      billingCycle,
+      timestamp: new Date().toISOString()
     };
+
+    onSubscribe(selectedPlan, selectedPaymentMethod, finalPaymentDetails);
   };
+
+  const calculatePrice = (planPrice) => {
+    if (!planPrice) return 0;
+    
+    switch (billingCycle) {
+      case 'quarterly':
+        return planPrice * 3 * 0.95; // 5% discount
+      case 'yearly':
+        return planPrice * 12 * 0.85; // 15% discount
+      default:
+        return planPrice;
+    }
+  };
+
+  const selectedPlanData = subscriptionPlans?.[selectedPlan];
+  const selectedPaymentMethodData = paymentMethods?.find(m => m.id === selectedPaymentMethod);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[95vh] overflow-y-auto">
-        
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-8 py-6 flex items-center justify-between rounded-t-2xl">
-          <h2 className="text-2xl font-bold text-gray-900">Choose Your Plan</h2>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+          <h2 className="text-2xl font-bold text-gray-900">Upgrade Your Plan</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
           >
-            <X size={24} />
+            <X className="h-6 w-6" />
           </button>
         </div>
 
-        <div className="p-8">
-          {/* User Info Banner */}
-          {user && (
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 mb-8 border border-blue-200">
-              <div className="flex items-center gap-3">
-                <div className="bg-blue-500 rounded-full p-2">
-                  <User size={20} className="text-white" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">{user.name}</h3>
-                  <p className="text-sm text-gray-600">{user.email} • ID: IC{user.id?.slice(-6)}</p>
-                </div>
+        <div className="p-6">
+          {/* Current Subscription Status */}
+          {subscription && (
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Info className="h-5 w-5 text-blue-600" />
+                <span className="font-medium text-blue-900">Current Plan</span>
               </div>
+              <p className="text-blue-800">
+                {subscription.planName || 'Basic Plan'} - {subscription.status}
+                {subscription.hasPendingUpgrade && (
+                  <span className="ml-2 text-orange-600">
+                    (Pending upgrade to {subscription.pendingSubscription?.planName})
+                  </span>
+                )}
+              </p>
             </div>
           )}
 
-          {/* Show pending request notification if any */}
-          {(subscription?.hasPendingUpgrade || subscription?.status === 'pending') && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6">
-              <div className="flex items-center gap-3">
-                <Clock className="h-6 w-6 text-yellow-600" />
-                <div>
-                  <h3 className="font-semibold text-yellow-800">Pending Upgrade Request</h3>
-                  <p className="text-sm text-yellow-700">
-                    You have a pending {subscription?.pendingSubscription?.planName || subscription?.planName || 'premium'} subscription request. 
-                    It will be reviewed within 24-48 hours.
-                  </p>
-                  {(subscription?.pendingSubscription?.createdAt || subscription?.requestedAt) && (
-                    <p className="text-xs text-yellow-600 mt-1">
-                      Requested: {new Date(subscription.pendingSubscription?.createdAt || subscription.requestedAt).toLocaleDateString()}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Plans Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {Object.entries(subscriptionPlans).map(([planId, plan]) => {
-              const planStatus = getPlanStatus(planId);
-              
-              return (
-                <div 
-                  key={planId} 
-                  className={`relative border-2 rounded-xl p-6 transition-all ${
-                    planId === 'business' 
-                      ? 'border-purple-300 bg-gradient-to-br from-purple-50 to-purple-100' 
-                      : planId === 'pro'
-                      ? 'border-blue-300 bg-gradient-to-br from-blue-50 to-blue-100'
-                      : 'border-gray-200 bg-white'
-                  } ${planStatus.isCurrentPlan ? 'ring-2 ring-green-400' : ''} ${
-                    planStatus.isPending ? 'ring-2 ring-yellow-400' : ''
-                  }`}
-                >
-                  {/* Popular Badge */}
-                  {planId === 'business' && (
-                    <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                      <div className="bg-purple-500 text-white px-4 py-1 rounded-full text-sm font-semibold flex items-center gap-1">
-                        <Crown size={14} />
-                        Most Popular
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Status Badge */}
-                  {(planStatus.isCurrentPlan || planStatus.isPending) && (
-                    <div className="absolute -top-3 right-4">
-                      <div className={`${planStatus.isPending ? 'bg-yellow-500' : 'bg-green-500'} text-white px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-1`}>
-                        {planStatus.isPending ? (
-                          <>
-                            <Clock size={14} />
-                            Pending
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle size={14} />
-                            Current
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="text-center mb-6">
-                    <h3 className="text-xl font-bold text-gray-900 mb-2">{plan.name}</h3>
-                    <div className="mb-4">
-                      <span className="text-3xl font-bold text-gray-900">
-                        {plan.price === 0 ? 'Free' : formatCurrency(plan.price)}
-                      </span>
-                      {plan.price > 0 && <span className="text-gray-600">/month</span>}
-                    </div>
-                  </div>
-
-                  {/* Key Features */}
-                  <div className="space-y-3 mb-6">
-                    <div className="flex items-center gap-2 text-sm">
-                      <CheckCircle size={16} className="text-green-500" />
-                      <span>{plan?.maxLoads === -1 ? 'Unlimited loads' : `${plan?.maxLoads || 0} loads/month`}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <CheckCircle size={16} className={plan?.features?.prioritySupport ? 'text-green-500' : 'text-gray-300'} />
-                      <span className={plan?.features?.prioritySupport ? '' : 'text-gray-400'}>Priority Support</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <CheckCircle size={16} className={plan?.features?.advancedAnalytics ? 'text-green-500' : 'text-gray-300'} />
-                      <span className={plan?.features?.advancedAnalytics ? '' : 'text-gray-400'}>Advanced Analytics</span>
-                    </div>
-                  </div>
-
-                  {/* Action Button */}
-                  {!planStatus.isCurrentPlan && !planStatus.isPending && planId !== 'basic' && (
+          {!showPaymentForm ? (
+            <>
+              {/* Billing Cycle Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold mb-3">Billing Cycle</h3>
+                <div className="flex gap-3">
+                  {[
+                    { id: 'monthly', label: 'Monthly', discount: null },
+                    { id: 'quarterly', label: 'Quarterly', discount: '5% off' },
+                    { id: 'yearly', label: 'Yearly', discount: '15% off' }
+                  ].map(cycle => (
                     <button
-                      onClick={() => handleSubmit(planId)}
-                      disabled={isSubmitting || loading || planStatus.hasPendingUpgrade}
-                      className={`w-full py-3 px-4 rounded-lg font-semibold transition-all ${
-                        planStatus.hasPendingUpgrade
-                          ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                          : planId === 'business'
-                          ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg'
-                      } disabled:opacity-50 disabled:cursor-not-allowed`}
-                    >
-                      {isSubmitting ? (
-                        <div className="flex items-center justify-center gap-2">
-                          <Loader2 size={16} className="animate-spin" />
-                          Processing...
-                        </div>
-                      ) : planStatus.hasPendingUpgrade ? (
-                        'Request Pending'
-                      ) : (
-                        `Choose ${plan.name}`
-                      )}
-                    </button>
-                  )}
-
-                  {planStatus.isCurrentPlan && !planStatus.isPending && (
-                    <div className="w-full py-3 px-4 bg-green-100 text-green-800 rounded-lg font-semibold text-center">
-                      Current Plan
-                    </div>
-                  )}
-
-                  {planStatus.isPending && (
-                    <div className="w-full py-3 px-4 bg-yellow-100 text-yellow-800 rounded-lg font-semibold text-center flex items-center justify-center gap-2">
-                      <Clock size={16} />
-                      Pending Approval
-                    </div>
-                  )}
-
-                  {planId === 'basic' && !planStatus.isCurrentPlan && !planStatus.isPending && (
-                    <button
-                      onClick={() => handleSubmit(planId)}
-                      disabled={planStatus.hasPendingUpgrade}
-                      className={`w-full py-3 px-4 rounded-lg font-semibold transition-colors ${
-                        planStatus.hasPendingUpgrade
-                          ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                          : 'bg-gray-500 hover:bg-gray-600 text-white'
+                      key={cycle.id}
+                      onClick={() => setBillingCycle(cycle.id)}
+                      className={`px-4 py-2 rounded-lg border-2 transition-colors ${
+                        billingCycle === cycle.id
+                          ? 'border-blue-600 bg-blue-50 text-blue-700'
+                          : 'border-gray-300 hover:border-gray-400'
                       }`}
                     >
-                      {planStatus.hasPendingUpgrade ? 'Request Pending' : 'Switch to Basic'}
+                      {cycle.label}
+                      {cycle.discount && (
+                        <span className="block text-sm text-green-600 font-medium">
+                          {cycle.discount}
+                        </span>
+                      )}
                     </button>
-                  )}
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Only show payment section if no pending requests */}
-          {!subscription?.hasPendingUpgrade && subscription?.status !== 'pending' && (
-            <div className="border-t border-gray-200 pt-8">
-              <h3 className="text-xl font-bold text-gray-900 mb-6">Payment Method</h3>
-              
-              {/* Payment Method Selection */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                {paymentMethods.map((method) => (
-                  <button
-                    key={method.id}
-                    onClick={() => setSelectedPaymentMethod(method.id)}
-                    className={`p-4 rounded-xl border-2 transition-all ${
-                      selectedPaymentMethod === method.id
-                        ? `border-${method.color}-500 bg-${method.color}-50`
-                        : 'border-gray-200 bg-white hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${
-                        selectedPaymentMethod === method.id
-                          ? `bg-${method.color}-100`
-                          : 'bg-gray-100'
-                      }`}>
-                        <method.icon size={20} className={
-                          selectedPaymentMethod === method.id
-                            ? `text-${method.color}-600`
-                            : 'text-gray-600'
-                        } />
-                      </div>
-                      <div className="text-left">
-                        <div className="font-semibold text-gray-900">{method.name}</div>
-                        <div className="text-sm text-gray-600">{method.description}</div>
-                      </div>
-                    </div>
-                  </button>
-                ))}
               </div>
 
-              {/* Payment Details Form */}
-              <div className="bg-gray-50 rounded-xl p-6">
-                {selectedPaymentMethod === 'mpesa' && (
-                  <div className="space-y-6">
-                    <div className="bg-green-100 border border-green-200 rounded-lg p-4">
-                      <h4 className="font-semibold text-green-800 mb-3 flex items-center gap-2">
-                        <Smartphone size={18} />
-                        M-Pesa Payment Instructions
-                      </h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div>
-                          <span className="font-semibold text-green-700">Business Number:</span>
-                          <div className="flex items-center gap-2 mt-1">
-                            <code className="bg-white px-2 py-1 rounded border">174379</code>
-                            <button onClick={() => copyToClipboard('174379')} className="text-green-600 hover:text-green-700">
-                              <Copy size={14} />
-                            </button>
+              {/* Plan Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold mb-3">Select Plan</h3>
+                {validationErrors.plan && (
+                  <p className="text-red-600 text-sm mb-2">{validationErrors.plan}</p>
+                )}
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {Object.entries(subscriptionPlans || {}).map(([planId, plan]) => {
+                    if (planId === 'basic') return null;
+                    
+                    const calculatedPrice = calculatePrice(plan.price);
+                    
+                    return (
+                      <div
+                        key={planId}
+                        onClick={() => handlePlanSelect(planId)}
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                          selectedPlan === planId
+                            ? 'border-blue-600 bg-blue-50'
+                            : 'border-gray-300 hover:border-gray-400'
+                        } ${plan.recommended ? 'ring-2 ring-purple-200' : ''}`}
+                      >
+                        {plan.recommended && (
+                          <div className="bg-purple-600 text-white text-xs px-2 py-1 rounded-full inline-block mb-2">
+                            Recommended
+                          </div>
+                        )}
+                        <h4 className="font-bold text-lg mb-2">{plan.name}</h4>
+                        <div className="text-2xl font-bold mb-2">
+                          {formatCurrency ? formatCurrency(calculatedPrice) : `KES ${calculatedPrice}`}
+                          <span className="text-sm text-gray-600 font-normal">
+                            /{billingCycle === 'yearly' ? 'year' : billingCycle === 'quarterly' ? 'quarter' : 'month'}
+                          </span>
+                        </div>
+                        {calculatedPrice !== plan.price && (
+                          <div className="text-sm text-gray-500 mb-2">
+                            Regular: {formatCurrency ? formatCurrency(plan.price) : `KES ${plan.price}`}/month
+                          </div>
+                        )}
+                        <ul className="text-sm space-y-1">
+                          {plan.features?.map((feature, index) => (
+                            <li key={index} className="flex items-center gap-2">
+                              <CheckCircle2 className="h-4 w-4 text-green-600" />
+                              <span>{feature}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Payment Method Selection */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold mb-3">Payment Method</h3>
+                {validationErrors.paymentMethod && (
+                  <p className="text-red-600 text-sm mb-2">{validationErrors.paymentMethod}</p>
+                )}
+                <div className="grid gap-3">
+                  {paymentMethods?.map(method => (
+                    <div
+                      key={method.id}
+                      onClick={() => handlePaymentMethodSelect(method.id)}
+                      className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                        selectedPaymentMethod === method.id
+                          ? 'border-blue-600 bg-blue-50'
+                          : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <CreditCard className="h-6 w-6" />
+                          <div>
+                            <h4 className="font-medium">{method.name}</h4>
+                            <p className="text-sm text-gray-600">{method.description}</p>
                           </div>
                         </div>
-                        <div>
-                          <span className="font-semibold text-green-700">Account Number:</span>
-                          <div className="flex items-center gap-2 mt-1">
-                            <code className="bg-white px-2 py-1 rounded border">IC{user?.id?.slice(-6) || 'XXXXXX'}</code>
-                            <button onClick={() => copyToClipboard(`IC${user?.id?.slice(-6) || 'XXXXXX'}`)} className="text-green-600 hover:text-green-700">
-                              <Copy size={14} />
-                            </button>
-                          </div>
+                        <div className="text-right">
+                          {method.processingFee > 0 && (
+                            <p className="text-sm text-gray-600">
+                              Fee: {formatCurrency ? formatCurrency(method.processingFee) : `KES ${method.processingFee}`}
+                            </p>
+                          )}
+                          {method.availableNow ? (
+                            <span className="text-green-600 text-sm">Available</span>
+                          ) : (
+                            <span className="text-red-600 text-sm">Unavailable</span>
+                          )}
                         </div>
                       </div>
-                      <div className="mt-3 text-green-700 text-sm">
-                        1. Go to M-Pesa → Pay Bill<br/>
-                        2. Enter Business Number: <strong>174379</strong><br/>
-                        3. Enter Account Number: <strong>IC{user?.id?.slice(-6) || 'XXXXXX'}</strong><br/>
-                        4. Enter amount and complete payment
-                      </div>
+                      
+                      {method.instructions && (
+                        <p className="text-sm text-gray-700 mt-2 pl-9">{method.instructions}</p>
+                      )}
+                      
+                      {method.processingTimeMinutes > 0 && (
+                        <div className="flex items-center gap-1 mt-2 pl-9 text-sm text-gray-600">
+                          <Clock className="h-4 w-4" />
+                          Processing time: {Math.ceil(method.processingTimeMinutes / 60)} hours
+                        </div>
+                      )}
                     </div>
+                  ))}
+                </div>
+              </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Phone Number
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <Phone size={18} className="text-gray-400" />
-                          <input
-                            type="tel"
-                            value={phoneNumber}
-                            onChange={(e) => setPhoneNumber(e.target.value)}
-                            placeholder="+254 XXX XXX XXX"
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          M-Pesa Transaction Code *
-                        </label>
-                        <input
-                          type="text"
-                          value={paymentCode}
-                          onChange={(e) => setPaymentCode(e.target.value.toUpperCase())}
-                          placeholder="QH12345678"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          required
-                        />
-                        <p className="text-xs text-gray-500 mt-1">Enter the confirmation code from your M-Pesa SMS</p>
-                      </div>
-                    </div>
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={onClose}
+                  className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleProceedToPayment}
+                  disabled={!selectedPlan || !selectedPaymentMethod || loading}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                >
+                  {selectedPaymentMethodData?.requiresVerification || selectedPaymentMethodData?.id === 'mpesa'
+                    ? 'Proceed to Payment'
+                    : 'Subscribe Now'
+                  }
+                </button>
+              </div>
+            </>
+          ) : (
+            /* Payment Form */
+            <div>
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                <h3 className="font-semibold mb-2">Order Summary</h3>
+                <div className="flex justify-between">
+                  <span>{selectedPlanData?.name} ({billingCycle})</span>
+                  <span>{formatCurrency ? formatCurrency(calculatePrice(selectedPlanData?.price)) : `KES ${calculatePrice(selectedPlanData?.price)}`}</span>
+                </div>
+                {selectedPaymentMethodData?.processingFee > 0 && (
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Processing Fee</span>
+                    <span>{formatCurrency ? formatCurrency(selectedPaymentMethodData.processingFee) : `KES ${selectedPaymentMethodData.processingFee}`}</span>
                   </div>
                 )}
+                <hr className="my-2" />
+                <div className="flex justify-between font-semibold">
+                  <span>Total</span>
+                  <span>{formatCurrency ? formatCurrency(calculatePrice(selectedPlanData?.price) + (selectedPaymentMethodData?.processingFee || 0)) : `KES ${calculatePrice(selectedPlanData?.price) + (selectedPaymentMethodData?.processingFee || 0)}`}</span>
+                </div>
+              </div>
 
-                {selectedPaymentMethod === 'bank_transfer' && (
-                  <div className="bg-blue-100 border border-blue-200 rounded-lg p-4">
-                    <h4 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
-                      <Building2 size={18} />
-                      Bank Transfer Details
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-blue-700">
-                      <div>
-                        <div className="font-semibold">Bank Name:</div>
-                        <div className="flex items-center gap-2">
-                          <span>KCB Bank Kenya</span>
-                          <button onClick={() => copyToClipboard('KCB Bank Kenya')} className="text-blue-600">
-                            <Copy size={12} />
-                          </button>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="font-semibold">Account Name:</div>
-                        <div className="flex items-center gap-2">
-                          <span>Infinite Cargo Limited</span>
-                          <button onClick={() => copyToClipboard('Infinite Cargo Limited')} className="text-blue-600">
-                            <Copy size={12} />
-                          </button>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="font-semibold">Account Number:</div>
-                        <div className="flex items-center gap-2">
-                          <code className="bg-white px-1 rounded">1234567890</code>
-                          <button onClick={() => copyToClipboard('1234567890')} className="text-blue-600">
-                            <Copy size={12} />
-                          </button>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="font-semibold">Reference:</div>
-                        <div className="flex items-center gap-2">
-                          <code className="bg-white px-1 rounded">IC-{user?.id?.slice(-8) || 'XXXXXXXX'}</code>
-                          <button onClick={() => copyToClipboard(`IC-${user?.id?.slice(-8) || 'XXXXXXXX'}`)} className="text-blue-600">
-                            <Copy size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 bg-blue-50 rounded p-3">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle size={16} className="text-blue-600 mt-0.5" />
-                        <div className="text-blue-800 text-sm">
-                          Bank transfers may take 1-3 business days to process. Contact support after completing the transfer.
-                        </div>
-                      </div>
-                    </div>
+              {selectedPaymentMethodData?.id === 'mpesa' && (
+                <div className="space-y-4">
+                  {/* M-Pesa Instructions */}
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <h4 className="font-semibold text-green-800 mb-2">M-Pesa Payment Instructions</h4>
+                    <ol className="text-sm text-green-700 space-y-1 list-decimal list-inside">
+                      <li>Go to M-Pesa menu on your phone</li>
+                      <li>Select "Lipa na M-Pesa"</li>
+                      <li>Select "Pay Bill"</li>
+                      <li>Enter Business Number: <strong>{selectedPaymentMethodData?.details?.businessNumber || '174379'}</strong></li>
+                      <li>Account Number: <strong>your phone number</strong></li>
+                      <li>Amount: <strong>{formatCurrency ? formatCurrency(calculatePrice(selectedPlanData?.price)) : `KES ${calculatePrice(selectedPlanData?.price)}`}</strong></li>
+                      <li>Enter your M-Pesa PIN</li>
+                      <li>Copy the transaction code from the confirmation SMS and enter it below</li>
+                    </ol>
                   </div>
-                )}
 
-                {selectedPaymentMethod === 'card' && (
-                  <div className="bg-purple-100 border border-purple-200 rounded-lg p-4">
-                    <h4 className="font-semibold text-purple-800 mb-3 flex items-center gap-2">
-                      <CreditCard size={18} />
-                      Credit/Debit Card Payment
-                    </h4>
-                    <div className="text-purple-700 text-sm space-y-2">
-                      <p>For card payments, please contact our support team:</p>
-                      <div className="bg-white rounded p-3 border border-purple-200">
-                        <div className="flex items-center gap-2">
-                          <Phone size={16} />
-                          <span className="font-semibold">+254723 139 610</span>
-                          <button onClick={() => copyToClipboard('+254723 139 610')} className="text-purple-600">
-                            <Copy size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      <p className="text-xs">Provide your account ID: IC{user?.id?.slice(-6) || 'XXXXXX'}</p>
-                    </div>
+                  {/* M-Pesa Transaction Code Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      M-Pesa Transaction Code *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g., QA12B34567"
+                      value={paymentDetails.paymentCode || ''}
+                      onChange={(e) => handlePaymentDetailsChange('paymentCode', e.target.value.toUpperCase())}
+                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-blue-600 ${
+                        validationErrors.paymentCode ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      maxLength={12}
+                    />
+                    {validationErrors.paymentCode && (
+                      <p className="text-red-600 text-sm mt-1">{validationErrors.paymentCode}</p>
+                    )}
                   </div>
-                )}
+
+                  {/* Phone Number Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Phone Number Used for Payment *
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="254712345678"
+                      value={paymentDetails.phoneNumber || ''}
+                      onChange={(e) => handlePaymentDetailsChange('phoneNumber', e.target.value)}
+                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-blue-600 ${
+                        validationErrors.phoneNumber ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                    />
+                    {validationErrors.phoneNumber && (
+                      <p className="text-red-600 text-sm mt-1">{validationErrors.phoneNumber}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-6">
+                <button
+                  onClick={() => setShowPaymentForm(false)}
+                  className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleSubscribe}
+                  disabled={loading}
+                  className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    'Complete Subscription'
+                  )}
+                </button>
               </div>
             </div>
           )}
-
-          {/* Security & Guarantee Info */}
-          <div className="mt-8 bg-green-50 border border-green-200 rounded-xl p-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <Shield size={16} className="text-green-600" />
-                <span className="text-green-800">Secure payment processing</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle size={16} className="text-green-600" />
-                <span className="text-green-800">30-day money-back guarantee</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <AlertCircle size={16} className="text-green-600" />
-                <span className="text-green-800">Cancel anytime</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
