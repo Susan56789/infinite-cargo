@@ -131,14 +131,50 @@ router.get('/status', auth, async (req, res) => {
     // Get usage data
     const usage = await getUsageData(req.user.id, db, subscription);
 
+    // Check if subscription is expired
+    const isExpired = subscription.expiresAt && new Date() > new Date(subscription.expiresAt);
+    
+    // Calculate remaining days for active subscriptions
+    let remainingDays = 0;
+    if (subscription.expiresAt && !isExpired) {
+      const now = new Date();
+      const expiryDate = new Date(subscription.expiresAt);
+      remainingDays = Math.max(0, Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24)));
+    }
+
+    // Determine if user can upgrade (only basic plan users or expired subscriptions can upgrade)
+    const canUpgrade = subscription.planId === 'basic' || isExpired;
+    const hasActivePremiumPlan = subscription.planId !== 'basic' && !isExpired;
+
     res.json({
       status: 'success',
       data: {
         ...subscription,
-        hasActiveSubscription: subscription.status === 'active',
+        hasActiveSubscription: subscription.status === 'active' && !isExpired,
         hasPendingUpgrade: !!pendingSubscription,
         pendingSubscription: pendingSubscription,
-        usage: usage
+        isExpired: isExpired,
+        remainingDays: remainingDays,
+        canUpgrade: canUpgrade,
+        hasActivePremiumPlan: hasActivePremiumPlan,
+        usage: usage,
+        // Additional billing cycle information
+        ...(subscription.billingCycle && subscription.billingCycle !== 'monthly' && {
+          billingInfo: {
+            cycle: subscription.billingCycle,
+            originalPrice: subscription.billingCycle === 'quarterly' 
+              ? Math.round(subscription.price / (3 * 0.95)) 
+              : subscription.billingCycle === 'yearly' 
+              ? Math.round(subscription.price / (12 * 0.85))
+              : subscription.price,
+            discount: subscription.billingCycle === 'quarterly' 
+              ? '5% savings' 
+              : subscription.billingCycle === 'yearly' 
+              ? '15% savings' 
+              : null,
+            nextBillingDate: subscription.expiresAt
+          }
+        })
       }
     });
 
@@ -460,6 +496,30 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     const paymentMethodsCollection = db.collection('payment_methods');
     const subscriptionsCollection = db.collection('subscriptions');
 
+    // Check current subscription status
+    const currentSubscription = await subscriptionsCollection.findOne({
+      userId: new mongoose.Types.ObjectId(req.user.id),
+      status: 'active'
+    }, { sort: { createdAt: -1 } });
+
+    // Check if user has active premium plan
+    if (currentSubscription && currentSubscription.planId !== 'basic') {
+      const isExpired = currentSubscription.expiresAt && new Date() > new Date(currentSubscription.expiresAt);
+      
+      if (!isExpired) {
+        return res.status(409).json({
+          status: 'error',
+          message: `You already have an active ${currentSubscription.planName} subscription. You cannot subscribe to another plan until your current subscription expires.`,
+          currentSubscription: {
+            planName: currentSubscription.planName,
+            status: currentSubscription.status,
+            expiresAt: currentSubscription.expiresAt,
+            remainingDays: Math.max(0, Math.ceil((new Date(currentSubscription.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)))
+          }
+        });
+      }
+    }
+
     // Get plan from database
     const selectedPlan = await plansCollection.findOne({ planId: planId, isActive: true });
     if (!selectedPlan) {
@@ -488,7 +548,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
 
     console.log('Payment method found:', paymentMethodObj.displayName);
 
-    // Check for existing pending subscription
+    // Check for existing pending subscription (only for non-basic plans)
     const existingPending = await subscriptionsCollection.findOne({
       userId: new mongoose.Types.ObjectId(req.user.id),
       status: 'pending',
@@ -508,17 +568,35 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       });
     }
 
-    // Calculate pricing
+    // Calculate pricing and duration based on billing cycle
     let finalPrice = selectedPlan.price;
     let duration = selectedPlan.duration || 30;
+    let discountApplied = 0;
 
-    if (billingCycle === 'quarterly') {
-      finalPrice = selectedPlan.price * 3 * 0.95;
-      duration = 90;
-    } else if (billingCycle === 'yearly') {
-      finalPrice = selectedPlan.price * 12 * 0.85;
-      duration = 365;
+    switch (billingCycle) {
+      case 'quarterly':
+        finalPrice = Math.round(selectedPlan.price * 3 * 0.95); // 5% discount
+        duration = 90; // 3 months
+        discountApplied = 5;
+        break;
+      case 'yearly':
+        finalPrice = Math.round(selectedPlan.price * 12 * 0.85); // 15% discount
+        duration = 365; // 12 months
+        discountApplied = 15;
+        break;
+      default:
+        finalPrice = selectedPlan.price;
+        duration = 30; // 1 month
+        discountApplied = 0;
     }
+
+    console.log('Pricing calculated:', {
+      originalPrice: selectedPlan.price,
+      finalPrice,
+      duration,
+      billingCycle,
+      discountApplied: `${discountApplied}%`
+    });
 
     // Enhanced M-Pesa validation
     if (paymentMethodObj.methodId === 'mpesa') {
@@ -572,15 +650,22 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     const processingFee = paymentMethodObj.processingFee || 0;
     const totalAmount = finalPrice + processingFee;
 
+    // Calculate expiry date based on duration
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + duration);
+
     // Create subscription request with enhanced error handling
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(req.user.id),
       planId: selectedPlan.planId,
       planName: selectedPlan.name,
       price: finalPrice,
+      originalMonthlyPrice: selectedPlan.price, // Store original monthly price for reference
       currency: selectedPlan.currency,
       billingCycle,
       duration,
+      discountApplied,
+      expiresAt: expiresAt, // Set expiry based on billing cycle
       features: selectedPlan.features,
       status: 'pending',
       paymentMethod: paymentMethodObj.methodId,
@@ -588,8 +673,16 @@ router.post('/subscribe', auth, subscriptionLimiter, [
         ...paymentDetails,
         processingFee,
         totalAmount,
+        originalAmount: selectedPlan.price,
+        finalAmount: finalPrice,
+        discountApplied: `${discountApplied}%`,
         paymentMethodName: paymentMethodObj.displayName,
         businessNumber: paymentMethodObj.details?.businessNumber,
+        billingInfo: {
+          cycle: billingCycle,
+          durationDays: duration,
+          monthsIncluded: billingCycle === 'monthly' ? 1 : billingCycle === 'quarterly' ? 3 : 12
+        },
         userInfo: {
           userId: req.user.id,
           userName: req.user.name,
@@ -616,29 +709,33 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     // Create notifications
     const notificationsCollection = db.collection('notifications');
     
-    // User notification
+    // User notification with billing cycle info
     await notificationsCollection.insertOne({
       userId: new mongoose.Types.ObjectId(req.user.id),
       userType: 'cargo_owner',
       type: 'subscription_requested',
       title: 'Subscription Request Submitted',
-      message: `Your ${selectedPlan.name} subscription request has been submitted and is pending approval.`,
-      data: { subscriptionId: result.insertedId },
+      message: `Your ${selectedPlan.name} subscription request (${billingCycle} billing, ${duration} days) has been submitted and is pending approval.`,
+      data: { subscriptionId: result.insertedId, billingCycle, duration },
       isRead: false,
       createdAt: new Date()
     });
 
-    // Admin notification
+    // Admin notification with detailed billing info
     await notificationsCollection.insertOne({
       type: 'new_subscription_request',
       title: 'New Subscription Request',
-      message: `${req.user.name} has requested a ${selectedPlan.name} subscription via ${paymentMethodObj.displayName}.`,
+      message: `${req.user.name} has requested a ${selectedPlan.name} subscription (${billingCycle} billing - ${duration} days) via ${paymentMethodObj.displayName}. Amount: KES ${finalPrice}${discountApplied > 0 ? ` (${discountApplied}% discount applied)` : ''}.`,
       data: {
         subscriptionId: result.insertedId,
         userId: req.user.id,
         userName: req.user.name,
         planName: selectedPlan.name,
         price: finalPrice,
+        originalPrice: selectedPlan.price,
+        billingCycle,
+        duration,
+        discountApplied,
         paymentMethod: paymentMethodObj.displayName,
         mpesaCode: paymentDetails?.mpesaCode || paymentDetails?.paymentCode || null
       },
@@ -656,11 +753,16 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       data: {
         subscriptionId: result.insertedId,
         planName: selectedPlan.name,
-        price: finalPrice,
+        billingCycle,
+        duration,
+        originalMonthlyPrice: selectedPlan.price,
+        finalPrice: finalPrice,
+        discountApplied: discountApplied > 0 ? `${discountApplied}%` : null,
         processingFee,
         totalAmount,
         status: 'pending',
-        paymentMethod: paymentMethodObj.displayName
+        paymentMethod: paymentMethodObj.displayName,
+        expiresAt: expiresAt
       }
     });
 
