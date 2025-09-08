@@ -1082,8 +1082,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   }
 };
 
-  // Updated handleSubscribe function to work with database payment methods
-  const handleSubscribe = async (planId, paymentMethodId, paymentDetails = null) => {
+ const handleSubscribe = async (planId, paymentMethodId, paymentDetails = null) => {
   const selectedPlan = subscriptionPlans?.[planId];
   const selectedPaymentMethod = paymentMethods.find(method => method.id === paymentMethodId);
 
@@ -1117,7 +1116,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    let finalPaymentDetails = {
+    // FIXED: Create properly structured payment details
+    let requestPaymentDetails = {
       timestamp: new Date().toISOString()
     };
 
@@ -1138,10 +1138,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           return;
         }
 
-        finalPaymentDetails = {
-          ...finalPaymentDetails,
-          mpesaCode: paymentDetails.paymentCode.trim().toUpperCase(),
-          userPhone: paymentDetails.phoneNumber.trim(),
+        // FIXED: Use correct field names that match backend validation
+        requestPaymentDetails = {
+          ...requestPaymentDetails,
+          mpesaCode: paymentDetails.paymentCode.trim().toUpperCase(), // Backend expects 'mpesaCode'
+          phoneNumber: paymentDetails.phoneNumber.trim(), // Backend expects 'phoneNumber'
           transactionDate: new Date().toISOString(),
           paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
         };
@@ -1183,10 +1184,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           return;
         }
 
-        finalPaymentDetails = {
-          ...finalPaymentDetails,
-          mpesaCode: mpesaCode.trim().toUpperCase(),
-          userPhone: userPhone.trim(),
+        // FIXED: Use correct field names
+        requestPaymentDetails = {
+          ...requestPaymentDetails,
+          mpesaCode: mpesaCode.trim().toUpperCase(), // Backend expects 'mpesaCode'
+          phoneNumber: userPhone.trim(), // Backend expects 'phoneNumber'
           transactionDate: new Date().toISOString(),
           paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
         };
@@ -1199,8 +1201,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       }
 
       // Add payment method specific details
-      finalPaymentDetails = {
-        ...finalPaymentDetails,
+      requestPaymentDetails = {
+        ...requestPaymentDetails,
         paymentMethodDetails: paymentDetails || {},
         paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
       };
@@ -1217,12 +1219,18 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
+    // FIXED: Properly structured request payload
     const requestPayload = {
       planId: planId,
       paymentMethod: paymentMethodId,
-      paymentDetails: finalPaymentDetails,
+      paymentDetails: requestPaymentDetails, // This should NOT be nested
       billingCycle: 'monthly'
     };
+
+    console.log('=== SUBSCRIPTION REQUEST DEBUG ===');
+    console.log('Request payload:', JSON.stringify(requestPayload, null, 2));
+    console.log('Selected plan:', selectedPlan);
+    console.log('Selected payment method:', selectedPaymentMethod);
 
     const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
       method: 'POST',
@@ -1234,9 +1242,13 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       body: JSON.stringify(requestPayload)
     });
 
+    console.log('Response status:', response.status);
+    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
     let data;
     try {
       const responseText = await response.text();
+      console.log('Raw response:', responseText);
       
       if (responseText.trim()) {
         data = JSON.parse(responseText);
@@ -1248,6 +1260,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       setError(`Server returned invalid response. Status: ${response.status}`);
       return;
     }
+
+    console.log('Parsed response data:', data);
 
     if (response.ok) {
       // Update subscription state optimistically
@@ -1302,6 +1316,14 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         } else {
           errorMessage = 'Invalid subscription request. Please check all fields and try again.';
         }
+        
+        // ADDED: More detailed error logging for 400 errors
+        console.error('400 Error Details:', {
+          validationErrors: data.errors,
+          message: data.message,
+          receivedPayload: requestPayload
+        });
+        
       } else if (response.status === 401) {
         errorMessage = 'Authentication failed. Please refresh the page and log in again.';
         setTimeout(() => handleLogout(), 2000);

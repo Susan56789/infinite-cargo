@@ -384,18 +384,57 @@ const isPaymentMethodAvailable = (paymentMethod) => {
 // @desc    Create a new subscription request 
 // @access  Private (Cargo owners only)
 router.post('/subscribe', auth, subscriptionLimiter, [
-  body('planId').notEmpty().withMessage('Plan ID is required'),
-  body('paymentMethod').notEmpty().withMessage('Payment method is required'),
-  body('paymentDetails').optional().isObject().withMessage('Payment details must be an object'),
-  body('billingCycle').optional().isIn(['monthly', 'quarterly', 'yearly']).withMessage('Invalid billing cycle')
+  body('planId')
+    .notEmpty()
+    .withMessage('Plan ID is required')
+    .isString()
+    .withMessage('Plan ID must be a string'),
+    
+  body('paymentMethod')
+    .notEmpty()
+    .withMessage('Payment method is required')
+    .isString()
+    .withMessage('Payment method must be a string'),
+    
+  body('paymentDetails')
+    .optional()
+    .isObject()
+    .withMessage('Payment details must be an object'),
+    
+  body('paymentDetails.mpesaCode')
+    .if(body('paymentMethod').equals('mpesa'))
+    .notEmpty()
+    .withMessage('M-Pesa transaction code is required')
+    .matches(/^[A-Z0-9]{8,12}$/i)
+    .withMessage('Invalid M-Pesa transaction code format'),
+    
+  body('paymentDetails.phoneNumber')
+    .if(body('paymentMethod').equals('mpesa'))
+    .notEmpty()
+    .withMessage('Phone number is required for M-Pesa payments')
+    .matches(/^(\+?254|0)?[17][0-9]{8}$/)
+    .withMessage('Invalid phone number format'),
+    
+  body('billingCycle')
+    .optional()
+    .isIn(['monthly', 'quarterly', 'yearly'])
+    .withMessage('Invalid billing cycle')
 ], async (req, res) => {
   try {
+    // Enhanced validation result handling
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.error('Validation errors:', errors.array());
+      console.error('Request body received:', req.body);
+      
       return res.status(400).json({
         status: 'error',
         message: 'Validation failed',
-        errors: errors.array()
+        errors: errors.array().map(err => ({
+          field: err.path || err.param,
+          message: err.msg,
+          value: err.value
+        }))
       });
     }
 
@@ -424,11 +463,14 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     // Get plan from database
     const selectedPlan = await plansCollection.findOne({ planId: planId, isActive: true });
     if (!selectedPlan) {
+      console.error('Plan not found:', planId);
       return res.status(400).json({
         status: 'error',
         message: 'Invalid or unavailable subscription plan'
       });
     }
+
+    console.log('Selected plan found:', selectedPlan.name);
 
     // Get payment method from database
     const paymentMethodObj = await paymentMethodsCollection.findOne({ 
@@ -437,11 +479,14 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     });
     
     if (!paymentMethodObj || !isPaymentMethodAvailable(paymentMethodObj)) {
+      console.error('Payment method not found or unavailable:', paymentMethod);
       return res.status(400).json({
         status: 'error',
         message: 'Invalid or unavailable payment method'
       });
     }
+
+    console.log('Payment method found:', paymentMethodObj.displayName);
 
     // Check for existing pending subscription
     const existingPending = await subscriptionsCollection.findOne({
@@ -451,6 +496,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     });
 
     if (existingPending) {
+      console.error('Existing pending subscription found for user:', req.user.id);
       return res.status(409).json({
         status: 'error',
         message: 'You already have a pending subscription request.',
@@ -474,37 +520,59 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       duration = 365;
     }
 
-    // Validate M-Pesa payment details
+    // Enhanced M-Pesa validation
     if (paymentMethodObj.methodId === 'mpesa') {
-      if (!paymentDetails?.paymentCode || !paymentDetails?.phoneNumber) {
+      console.log('Processing M-Pesa payment...');
+      
+      if (!paymentDetails) {
         return res.status(400).json({
           status: 'error',
-          message: 'M-Pesa code and phone number are required'
+          message: 'Payment details are required for M-Pesa payments'
         });
       }
-      
-      if (!/^[A-Z0-9]{8,12}$/i.test(paymentDetails.paymentCode)) {
+
+      // Check for mpesaCode 
+      const mpesaCode = paymentDetails.mpesaCode || paymentDetails.paymentCode;
+      if (!mpesaCode) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'M-Pesa transaction code is required'
+        });
+      }
+
+      if (!/^[A-Z0-9]{8,12}$/i.test(mpesaCode.trim())) {
         return res.status(400).json({
           status: 'error',
           message: 'Invalid M-Pesa transaction code format'
         });
       }
 
+      // Check for phoneNumber
+      const phoneNumber = paymentDetails.phoneNumber || paymentDetails.userPhone;
+      if (!phoneNumber) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Phone number is required for M-Pesa payments'
+        });
+      }
+
       // Validate phone number
-      const phone = paymentDetails.phoneNumber.replace(/\s/g, '');
+      const phone = phoneNumber.replace(/\s/g, '');
       if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Invalid phone number format'
+          message: 'Invalid phone number format. Use format: 254712345678 or 0712345678'
         });
       }
+
+      console.log('M-Pesa validation passed:', { mpesaCode, phoneNumber });
     }
 
     // Calculate fees
     const processingFee = paymentMethodObj.processingFee || 0;
     const totalAmount = finalPrice + processingFee;
 
-    // Create subscription request
+    // Create subscription request with enhanced error handling
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(req.user.id),
       planId: selectedPlan.planId,
@@ -534,7 +602,16 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       updatedAt: new Date()
     };
 
+    console.log('Creating subscription with data:', JSON.stringify(subscriptionData, null, 2));
+
     const result = await subscriptionsCollection.insertOne(subscriptionData);
+    
+    if (!result.insertedId) {
+      console.error('Failed to create subscription - no insertedId');
+      throw new Error('Failed to create subscription record');
+    }
+
+    console.log('Subscription created successfully with ID:', result.insertedId);
 
     // Create notifications
     const notificationsCollection = db.collection('notifications');
@@ -563,13 +640,15 @@ router.post('/subscribe', auth, subscriptionLimiter, [
         planName: selectedPlan.name,
         price: finalPrice,
         paymentMethod: paymentMethodObj.displayName,
-        mpesaCode: paymentDetails?.paymentCode || null
+        mpesaCode: paymentDetails?.mpesaCode || paymentDetails?.paymentCode || null
       },
       userType: 'admin',
       isRead: false,
       priority: 'high',
       createdAt: new Date()
     });
+
+    console.log('Notifications created successfully');
 
     res.status(201).json({
       status: 'success',
@@ -586,10 +665,20 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     });
 
   } catch (error) {
-    console.error('Subscribe error:', error);
+    console.error('=== SUBSCRIPTION ERROR ===');
+    console.error('Error details:', error);
+    console.error('Request body:', req.body);
+    console.error('User:', req.user);
+    
     res.status(500).json({
       status: 'error',
-      message: 'Server error creating subscription request'
+      message: 'Server error creating subscription request',
+      ...(process.env.NODE_ENV === 'development' && { 
+        debug: {
+          error: error.message,
+          stack: error.stack
+        }
+      })
     });
   }
 });
