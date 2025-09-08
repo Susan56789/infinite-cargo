@@ -142,11 +142,6 @@ const SubscriptionTab = ({
     );
   }
 
-  // Debug information - remove in production
-  console.log('Debug - Subscription Plans:', subscriptionPlans);
-  console.log('Debug - Payment Methods:', paymentMethods);
-  console.log('Debug - Available Plans:', availablePlans);
-  console.log('Debug - Available Payment Methods:', availablePaymentMethods);
 
   return (
     <div className="space-y-8">

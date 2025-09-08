@@ -333,11 +333,10 @@ const CargoOwnerDashboard = () => {
       
       if (paymentMethodsResponse.ok) {
         const paymentMethodsData = await paymentMethodsResponse.json();
-        console.log('Raw payment methods response:', paymentMethodsData); // Debug log
         
         if (paymentMethodsData.status === 'success' && paymentMethodsData.data?.paymentMethods) {
           setPaymentMethods(paymentMethodsData.data.paymentMethods);
-          console.log('Set payment methods:', paymentMethodsData.data.paymentMethods); // Debug log
+          
         } else {
           console.warn('Invalid payment methods data structure:', paymentMethodsData);
           setPaymentMethods([]);

@@ -268,9 +268,6 @@ const SubscriptionModal = ({
   const selectedPlanData = processedPlans[selectedPlan];
   const selectedPaymentMethodData = processedPaymentMethods?.find(m => m.id === selectedPaymentMethod);
 
-  // Debug logs - remove in production
-  console.log('Modal Debug - Processed Plans:', processedPlans);
-  console.log('Modal Debug - Processed Payment Methods:', processedPaymentMethods);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

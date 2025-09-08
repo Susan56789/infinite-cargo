@@ -180,7 +180,7 @@ const getUsageData = async (userId, db, subscription) => {
 router.get('/plans', auth, async (req, res) => {
   try {
     const db = mongoose.connection.db;
-    const plansCollection = db.collection('subscriptionplans');
+    const plansCollection = db.collection('subscription_plans');
     
     const plans = await plansCollection.find({ 
       isActive: true 
@@ -269,7 +269,7 @@ router.get('/plans', auth, async (req, res) => {
 router.get('/payment-methods', auth, async (req, res) => {
   try {
     const db = mongoose.connection.db;
-    const paymentMethodsCollection = db.collection('paymentmethods');
+    const paymentMethodsCollection = db.collection('payment_methods');
     
     const paymentMethods = await paymentMethodsCollection.find({ 
       enabled: true 
@@ -417,8 +417,8 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     }
 
     const db = mongoose.connection.db;
-    const plansCollection = db.collection('subscriptionplans');
-    const paymentMethodsCollection = db.collection('paymentmethods');
+    const plansCollection = db.collection('subscription_plans');
+    const paymentMethodsCollection = db.collection('payment_methods');
     const subscriptionsCollection = db.collection('subscriptions');
 
     // Get plan from database
