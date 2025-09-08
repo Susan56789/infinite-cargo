@@ -636,12 +636,12 @@ const SubscriptionsTable = ({
                             <div className="text-sm text-gray-500">
                               {subscription.billingCycle || 'monthly'} • {subscription.duration || 30} days
                             </div>
-                            {subscription.features && (
-                              <div className="text-xs text-gray-400 mt-1">
-                                {subscription.features.slice(0, 2).join(', ')}
-                                {subscription.features.length > 2 && '...'}
-                              </div>
-                            )}
+                            {subscription.features && Array.isArray(subscription.features) && (
+  <div className="text-xs text-gray-400 mt-1">
+    {subscription.features.slice(0, 2).join(', ')}
+    {subscription.features.length > 2 && '...'}
+  </div>
+)}
                           </div>
                         </td>
 
