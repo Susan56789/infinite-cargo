@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, CreditCard, Clock, CheckCircle2, Info } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, CreditCard, Clock, CheckCircle2, Info, Smartphone } from 'lucide-react';
 
 const SubscriptionModal = ({ 
   showSubscriptionModal, 
@@ -18,6 +18,118 @@ const SubscriptionModal = ({
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [validationErrors, setValidationErrors] = useState({});
 
+  // Process subscription plans from database format
+  const processedPlans = useMemo(() => {
+    if (!subscriptionPlans) return {};
+    
+    // Handle both object format (from API) and array format
+    let plansData = {};
+    
+    if (Array.isArray(subscriptionPlans)) {
+      // Convert array to object
+      subscriptionPlans.forEach(plan => {
+        if (plan.planId && plan.planId !== 'basic') {
+          plansData[plan.planId] = {
+            id: plan.planId,
+            name: plan.name,
+            price: plan.price,
+            currency: plan.currency || 'KES',
+            interval: plan.billingCycle || 'monthly',
+            maxLoads: plan.features?.maxLoads || -1,
+            features: generateFeaturesList(plan.features || {}),
+            recommended: plan.isPopular || false,
+            description: plan.description || ''
+          };
+        }
+      });
+    } else if (typeof subscriptionPlans === 'object') {
+      // Already in object format, just process
+      Object.entries(subscriptionPlans).forEach(([planId, plan]) => {
+        if (planId !== 'basic') {
+          plansData[planId] = {
+            ...plan,
+            id: planId,
+            features: Array.isArray(plan.features) ? plan.features : generateFeaturesList(plan.features || {})
+          };
+        }
+      });
+    }
+    
+    return plansData;
+  }, [subscriptionPlans]);
+
+  // Helper function to generate features list from features object
+  const generateFeaturesList = (featuresObj) => {
+    const features = [];
+    
+    if (featuresObj.maxLoads === -1) {
+      features.push('Unlimited load postings');
+    } else if (featuresObj.maxLoads > 0) {
+      features.push(`Post up to ${featuresObj.maxLoads} loads per month`);
+    }
+    
+    if (featuresObj.advancedAnalytics) {
+      features.push('Advanced analytics & reporting');
+    } else {
+      features.push('Basic analytics');
+    }
+    
+    if (featuresObj.prioritySupport) {
+      features.push('Priority support');
+    } else {
+      features.push('Standard support');
+    }
+    
+    if (featuresObj.bulkOperations) {
+      features.push('Bulk operations');
+    }
+    
+    if (featuresObj.apiAccess) {
+      features.push('API access');
+    }
+    
+    if (featuresObj.dedicatedManager) {
+      features.push('Dedicated account manager');
+    }
+    
+    return features;
+  };
+
+  // Process payment methods from database format
+  const processedPaymentMethods = useMemo(() => {
+    if (!paymentMethods) return [];
+    
+    let methodsArray = [];
+    
+    if (Array.isArray(paymentMethods)) {
+      methodsArray = paymentMethods;
+    } else if (paymentMethods.paymentMethods && Array.isArray(paymentMethods.paymentMethods)) {
+      methodsArray = paymentMethods.paymentMethods;
+    } else if (typeof paymentMethods === 'object') {
+      methodsArray = Object.values(paymentMethods);
+    }
+    
+    return methodsArray
+      .filter(method => method && method.enabled !== false)
+      .map(method => ({
+        id: method.id || method.methodId,
+        name: method.name || method.displayName,
+        description: method.description,
+        instructions: method.instructions,
+        minimumAmount: method.minimumAmount,
+        maximumAmount: method.maximumAmount,
+        processingFee: method.processingFee || 0,
+        processingFeeType: method.processingFeeType,
+        currency: method.currency || 'KES',
+        processingTimeMinutes: method.processingTimeMinutes,
+        requiresVerification: method.requiresVerification,
+        details: method.details,
+        availableNow: method.availableNow !== false && method.enabled !== false,
+        availableHours: method.availableHours,
+        availableDays: method.availableDays
+      }));
+  }, [paymentMethods]);
+
   // Reset form when modal opens/closes
   useEffect(() => {
     if (showSubscriptionModal) {
@@ -32,10 +144,10 @@ const SubscriptionModal = ({
 
   // Auto-select M-Pesa if it's the only payment method
   useEffect(() => {
-    if (paymentMethods && paymentMethods.length === 1) {
-      setSelectedPaymentMethod(paymentMethods[0].id);
+    if (processedPaymentMethods && processedPaymentMethods.length === 1) {
+      setSelectedPaymentMethod(processedPaymentMethods[0].id);
     }
-  }, [paymentMethods]);
+  }, [processedPaymentMethods]);
 
   if (!showSubscriptionModal) return null;
 
@@ -94,7 +206,7 @@ const SubscriptionModal = ({
       errors.paymentMethod = 'Please select a payment method';
     }
 
-    const selectedMethod = paymentMethods?.find(m => m.id === selectedPaymentMethod);
+    const selectedMethod = processedPaymentMethods?.find(m => m.id === selectedPaymentMethod);
     
     if (selectedMethod?.id === 'mpesa') {
       const codeError = validateMPesaCode(paymentDetails.paymentCode);
@@ -117,7 +229,7 @@ const SubscriptionModal = ({
       return;
     }
 
-    const selectedMethod = paymentMethods?.find(m => m.id === selectedPaymentMethod);
+    const selectedMethod = processedPaymentMethods?.find(m => m.id === selectedPaymentMethod);
     if (selectedMethod?.requiresVerification || selectedMethod?.id === 'mpesa') {
       setShowPaymentForm(true);
     } else {
@@ -153,8 +265,12 @@ const SubscriptionModal = ({
     }
   };
 
-  const selectedPlanData = subscriptionPlans?.[selectedPlan];
-  const selectedPaymentMethodData = paymentMethods?.find(m => m.id === selectedPaymentMethod);
+  const selectedPlanData = processedPlans[selectedPlan];
+  const selectedPaymentMethodData = processedPaymentMethods?.find(m => m.id === selectedPaymentMethod);
+
+  // Debug logs - remove in production
+  console.log('Modal Debug - Processed Plans:', processedPlans);
+  console.log('Modal Debug - Processed Payment Methods:', processedPaymentMethods);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -225,51 +341,56 @@ const SubscriptionModal = ({
                 {validationErrors.plan && (
                   <p className="text-red-600 text-sm mb-2">{validationErrors.plan}</p>
                 )}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {Object.entries(subscriptionPlans || {}).map(([planId, plan]) => {
-                    if (planId === 'basic') return null;
-                    
-                    const calculatedPrice = calculatePrice(plan.price);
-                    
-                    return (
-                      <div
-                        key={planId}
-                        onClick={() => handlePlanSelect(planId)}
-                        className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                          selectedPlan === planId
-                            ? 'border-blue-600 bg-blue-50'
-                            : 'border-gray-300 hover:border-gray-400'
-                        } ${plan.recommended ? 'ring-2 ring-purple-200' : ''}`}
-                      >
-                        {plan.recommended && (
-                          <div className="bg-purple-600 text-white text-xs px-2 py-1 rounded-full inline-block mb-2">
-                            Recommended
+                
+                {Object.keys(processedPlans).length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-gray-600">No subscription plans available at the moment</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {Object.entries(processedPlans).map(([planId, plan]) => {
+                      const calculatedPrice = calculatePrice(plan.price);
+                      
+                      return (
+                        <div
+                          key={planId}
+                          onClick={() => handlePlanSelect(planId)}
+                          className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                            selectedPlan === planId
+                              ? 'border-blue-600 bg-blue-50'
+                              : 'border-gray-300 hover:border-gray-400'
+                          } ${plan.recommended ? 'ring-2 ring-purple-200' : ''}`}
+                        >
+                          {plan.recommended && (
+                            <div className="bg-purple-600 text-white text-xs px-2 py-1 rounded-full inline-block mb-2">
+                              Recommended
+                            </div>
+                          )}
+                          <h4 className="font-bold text-lg mb-2">{plan.name}</h4>
+                          <div className="text-2xl font-bold mb-2">
+                            {formatCurrency ? formatCurrency(calculatedPrice) : `KES ${calculatedPrice}`}
+                            <span className="text-sm text-gray-600 font-normal">
+                              /{billingCycle === 'yearly' ? 'year' : billingCycle === 'quarterly' ? 'quarter' : 'month'}
+                            </span>
                           </div>
-                        )}
-                        <h4 className="font-bold text-lg mb-2">{plan.name}</h4>
-                        <div className="text-2xl font-bold mb-2">
-                          {formatCurrency ? formatCurrency(calculatedPrice) : `KES ${calculatedPrice}`}
-                          <span className="text-sm text-gray-600 font-normal">
-                            /{billingCycle === 'yearly' ? 'year' : billingCycle === 'quarterly' ? 'quarter' : 'month'}
-                          </span>
+                          {calculatedPrice !== plan.price && (
+                            <div className="text-sm text-gray-500 mb-2">
+                              Regular: {formatCurrency ? formatCurrency(plan.price) : `KES ${plan.price}`}/month
+                            </div>
+                          )}
+                          <ul className="text-sm space-y-1">
+                            {plan.features?.map((feature, index) => (
+                              <li key={index} className="flex items-center gap-2">
+                                <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0" />
+                                <span>{feature}</span>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
-                        {calculatedPrice !== plan.price && (
-                          <div className="text-sm text-gray-500 mb-2">
-                            Regular: {formatCurrency ? formatCurrency(plan.price) : `KES ${plan.price}`}/month
-                          </div>
-                        )}
-                        <ul className="text-sm space-y-1">
-                          {plan.features?.map((feature, index) => (
-                            <li key={index} className="flex items-center gap-2">
-                              <CheckCircle2 className="h-4 w-4 text-green-600" />
-                              <span>{feature}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Payment Method Selection */}
@@ -278,52 +399,63 @@ const SubscriptionModal = ({
                 {validationErrors.paymentMethod && (
                   <p className="text-red-600 text-sm mb-2">{validationErrors.paymentMethod}</p>
                 )}
-                <div className="grid gap-3">
-                  {paymentMethods?.map(method => (
-                    <div
-                      key={method.id}
-                      onClick={() => handlePaymentMethodSelect(method.id)}
-                      className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
-                        selectedPaymentMethod === method.id
-                          ? 'border-blue-600 bg-blue-50'
-                          : 'border-gray-300 hover:border-gray-400'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <CreditCard className="h-6 w-6" />
-                          <div>
-                            <h4 className="font-medium">{method.name}</h4>
-                            <p className="text-sm text-gray-600">{method.description}</p>
+                
+                {processedPaymentMethods.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-gray-600">No payment methods available at the moment</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {processedPaymentMethods.map(method => (
+                      <div
+                        key={method.id}
+                        onClick={() => handlePaymentMethodSelect(method.id)}
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                          selectedPaymentMethod === method.id
+                            ? 'border-blue-600 bg-blue-50'
+                            : 'border-gray-300 hover:border-gray-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {method.id === 'mpesa' ? (
+                              <Smartphone className="h-6 w-6" />
+                            ) : (
+                              <CreditCard className="h-6 w-6" />
+                            )}
+                            <div>
+                              <h4 className="font-medium">{method.name}</h4>
+                              <p className="text-sm text-gray-600">{method.description}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            {method.processingFee > 0 && (
+                              <p className="text-sm text-gray-600">
+                                Fee: {formatCurrency ? formatCurrency(method.processingFee) : `KES ${method.processingFee}`}
+                              </p>
+                            )}
+                            {method.availableNow ? (
+                              <span className="text-green-600 text-sm">Available</span>
+                            ) : (
+                              <span className="text-red-600 text-sm">Unavailable</span>
+                            )}
                           </div>
                         </div>
-                        <div className="text-right">
-                          {method.processingFee > 0 && (
-                            <p className="text-sm text-gray-600">
-                              Fee: {formatCurrency ? formatCurrency(method.processingFee) : `KES ${method.processingFee}`}
-                            </p>
-                          )}
-                          {method.availableNow ? (
-                            <span className="text-green-600 text-sm">Available</span>
-                          ) : (
-                            <span className="text-red-600 text-sm">Unavailable</span>
-                          )}
-                        </div>
+                        
+                        {method.instructions && (
+                          <p className="text-sm text-gray-700 mt-2 pl-9">{method.instructions}</p>
+                        )}
+                        
+                        {method.processingTimeMinutes > 0 && (
+                          <div className="flex items-center gap-1 mt-2 pl-9 text-sm text-gray-600">
+                            <Clock className="h-4 w-4" />
+                            Processing time: {Math.ceil(method.processingTimeMinutes / 60)} hours
+                          </div>
+                        )}
                       </div>
-                      
-                      {method.instructions && (
-                        <p className="text-sm text-gray-700 mt-2 pl-9">{method.instructions}</p>
-                      )}
-                      
-                      {method.processingTimeMinutes > 0 && (
-                        <div className="flex items-center gap-1 mt-2 pl-9 text-sm text-gray-600">
-                          <Clock className="h-4 w-4" />
-                          Processing time: {Math.ceil(method.processingTimeMinutes / 60)} hours
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}

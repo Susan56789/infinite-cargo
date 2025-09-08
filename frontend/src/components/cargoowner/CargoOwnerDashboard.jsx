@@ -64,11 +64,7 @@ const CargoOwnerDashboard = () => {
   // notification hook
   const {
     notifications: liveNotifications,
-    unreadCount,
-    fetchNotifications: refreshNotifications,
-    addNotification,
     markAsRead,
-    markAllAsRead,
     deleteNotification
   } = useNotifications(user);
 
@@ -166,209 +162,209 @@ const CargoOwnerDashboard = () => {
   }, []);
 
   const fetchDashboardData = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      const authHeaders = getAuthHeaders();
-      
-     const handleResponse = async (response, fallbackData = null) => {
-  if (response.ok) {
-    const data = await response.json();
-    return data.data || data;
-  }
-
-  // For 401 errors, don't automatically logout during data fetching
-  // Only logout if it's a direct user action that fails
-  if (response.status === 401) {
-    console.warn('Authentication failed during data fetch');
-    // Instead of logout, just return fallback data
-    return fallbackData;
-  }
-
-  // Forbidden / subscription limit
-  if (response.status === 403) {
-    console.warn('Access forbidden or subscription limit reached.');
-    return fallbackData;
-  }
-
-  // For all server errors – throw
-  if (response.status >= 500) {
-    const errorText = await response.text();
-    throw new Error(`Server error: ${response.status} - ${errorText}`);
-  }
-
-  // Other non-OK
   try {
-    const errorData = await response.json();
-    throw new Error(errorData.message || 'Unknown error');
-  } catch {
-    throw new Error('Unknown error occurred');
+    setLoading(true);
+    setError('');
+    
+    const authHeaders = getAuthHeaders();
+    
+    const handleResponse = async (response, fallbackData = null) => {
+      if (response.ok) {
+        const data = await response.json();
+        return data.data || data;
+      }
+
+      // For 401 errors, don't automatically logout during data fetching
+      if (response.status === 401) {
+        console.warn('Authentication failed during data fetch');
+        return fallbackData;
+      }
+
+      // Forbidden / subscription limit
+      if (response.status === 403) {
+        console.warn('Access forbidden or subscription limit reached.');
+        return fallbackData;
+      }
+
+      // For all server errors – throw
+      if (response.status >= 500) {
+        const errorText = await response.text();
+        throw new Error(`Server error: ${response.status} - ${errorText}`);
+      }
+
+      // Other non-OK
+      try {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Unknown error');
+      } catch {
+        throw new Error('Unknown error occurred');
+      }
+    };
+
+    // Fetch subscription status first
+    let subscriptionData = null;
+    try {
+      const subscriptionResponse = await fetch(`${API_BASE_URL}/subscriptions/status`, {
+        headers: authHeaders,
+        timeout: 10000
+      });
+
+      subscriptionData = await handleResponse(subscriptionResponse, null);
+      setSubscription(subscriptionData);
+
+    } catch (error) {
+      console.warn('Could not fetch subscription status:', error.message);
+      // Hard fallback if request fails entirely
+      setSubscription({
+        planId: 'basic',
+        planName: 'Basic Plan',
+        status: 'active',
+        features: { maxLoads: 3 },
+        usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
+        billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
+        isActive: true
+      });
+    }
+
+    // Fetch loads data
+    let loadsData = [];
+    try {
+      const loadsResponse = await fetch(`${API_BASE_URL}/loads/user/my-loads?limit=50`, {
+        headers: authHeaders,
+        timeout: 10000
+      });
+      
+      if (loadsResponse.status === 403) {
+        try {
+          const fallbackResponse = await fetch(`${API_BASE_URL}/loads?postedBy=${user?.id}&limit=50`, {
+            headers: authHeaders,
+            timeout: 10000
+          });
+          const fallbackData = await handleResponse(fallbackResponse, { loads: [] });
+          loadsData = Array.isArray(fallbackData?.loads) ? fallbackData.loads : [];
+        } catch (fallbackError) {
+          console.warn('Fallback loads endpoint also failed:', fallbackError.message);
+          loadsData = [];
+        }
+      } else {
+        const data = await handleResponse(loadsResponse, { loads: [] });
+        loadsData = Array.isArray(data?.loads) ? data.loads : [];
+      }
+    } catch (error) {
+      console.warn('Could not fetch loads:', error.message);
+      loadsData = [];
+    }
+    
+    setLoads(loadsData);
+
+    // Calculate basic stats
+    const validLoads = Array.isArray(loadsData) ? loadsData : [];
+    const basicStats = {
+      totalLoads: validLoads.length,
+      activeLoads: validLoads.filter(load => 
+        load && ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'].includes(load.status)
+      ).length,
+      completedLoads: validLoads.filter(load => load && load.status === 'delivered').length,
+      inTransitLoads: validLoads.filter(load => load && load.status === 'in_transit').length,
+      averageBidsPerLoad: validLoads.length > 0 
+        ? validLoads.reduce((acc, load) => acc + (load?.bidCount || 0), 0) / validLoads.length 
+        : 0
+    };
+
+    // Try to fetch enhanced analytics
+    try {
+      const statsResponse = await fetch(`${API_BASE_URL}/loads/analytics/dashboard`, {
+        headers: authHeaders,
+        timeout: 10000
+      });
+      const statsData = await handleResponse(statsResponse, basicStats);
+      setStats(statsData || basicStats);
+    } catch (error) {
+      console.warn('Using basic stats due to analytics fetch error:', error.message);
+      setStats(basicStats);
+    }
+
+    // Fetch notifications
+    try {
+      const notificationsResponse = await fetch(`${API_BASE_URL}/notifications`, {
+        headers: authHeaders,
+        timeout: 8000
+      });
+      const notificationsData = await handleResponse(notificationsResponse, { notifications: [] });
+      const notifications = Array.isArray(notificationsData?.notifications) ? 
+                           notificationsData.notifications : [];
+      setNotifications(notifications);
+    } catch (error) {
+      console.warn('Could not fetch notifications:', error.message);
+      setNotifications([]);
+    }
+
+    // Fetch subscription plans from database - FIXED
+    try {
+      const plansResponse = await fetch(`${API_BASE_URL}/subscriptions/plans`, {
+        headers: authHeaders,
+        timeout: 8000
+      });
+      
+      if (plansResponse.ok) {
+        const plansData = await plansResponse.json();
+        
+        if (plansData.status === 'success' && plansData.data?.plans) {
+          setSubscriptionPlans(plansData.data.plans);
+        } else {
+          console.warn('Invalid plans data structure:', plansData);
+          setSubscriptionPlans({});
+        }
+      } else {
+        console.warn('Plans request failed:', plansResponse.status, plansResponse.statusText);
+        setSubscriptionPlans({});
+      }
+    } catch (error) {
+      console.warn('Could not fetch subscription plans:', error.message);
+      setSubscriptionPlans({});
+    }
+
+    // Fetch payment methods from database - FIXED
+    try {
+      const paymentMethodsResponse = await fetch(`${API_BASE_URL}/subscriptions/payment-methods`, {
+        headers: authHeaders,
+        timeout: 8000
+      });
+      
+      if (paymentMethodsResponse.ok) {
+        const paymentMethodsData = await paymentMethodsResponse.json();
+        console.log('Raw payment methods response:', paymentMethodsData); // Debug log
+        
+        if (paymentMethodsData.status === 'success' && paymentMethodsData.data?.paymentMethods) {
+          setPaymentMethods(paymentMethodsData.data.paymentMethods);
+          console.log('Set payment methods:', paymentMethodsData.data.paymentMethods); // Debug log
+        } else {
+          console.warn('Invalid payment methods data structure:', paymentMethodsData);
+          setPaymentMethods([]);
+        }
+      } else {
+        console.warn('Payment methods request failed:', paymentMethodsResponse.status, paymentMethodsResponse.statusText);
+        setPaymentMethods([]);
+      }
+    } catch (error) {
+      console.warn('Could not fetch payment methods:', error.message);
+      setPaymentMethods([]);
+    }
+
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+    if (error.message !== 'Authentication failed') {
+      setError('Failed to load dashboard data. Please try refreshing the page.');
+    }
+  } finally {
+    setLoading(false);
   }
 };
 
 
-     // Fetch subscription status first
-let subscriptionData = null;
-try {
-  const subscriptionResponse = await fetch(`${API_BASE_URL}/subscriptions/status`, {
-    headers: authHeaders,
-    timeout: 10000
-  });
-
-  // Don't pass default fallback here — we only want real data or null
-  subscriptionData = await handleResponse(subscriptionResponse, null);
-
-  setSubscription(subscriptionData);
-
-} catch (error) {
-  console.warn('Could not fetch subscription status:', error.message);
-
-  // Hard fallback if request fails entirely
-  setSubscription({
-    planId: 'basic',
-    planName: 'Basic Plan',
-    status: 'inactive',
-    features: { maxLoads: 3 },
-    usage: { loadsThisMonth: 0, maxLoads: 3, remainingLoads: 3 },
-    billing: { nextBillingDate: null, amount: 0, currency: 'KES' },
-    isActive: false
-  });
-}
-
-
-      // Fetch loads data
-      let loadsData = [];
-      try {
-        const loadsResponse = await fetch(`${API_BASE_URL}/loads/user/my-loads?limit=50`, {
-          headers: authHeaders,
-          timeout: 10000
-        });
-        
-        if (loadsResponse.status === 403) {
-          
-          try {
-            const fallbackResponse = await fetch(`${API_BASE_URL}/loads?postedBy=${user?.id}&limit=50`, {
-              headers: authHeaders,
-              timeout: 10000
-            });
-            const fallbackData = await handleResponse(fallbackResponse, { loads: [] });
-            loadsData = Array.isArray(fallbackData?.loads) ? fallbackData.loads : [];
-          } catch (fallbackError) {
-            console.warn('Fallback loads endpoint also failed:', fallbackError.message);
-            loadsData = [];
-          }
-        } else {
-          const data = await handleResponse(loadsResponse, { loads: [] });
-          loadsData = Array.isArray(data?.loads) ? data.loads : [];
-        }
-      } catch (error) {
-        console.warn('Could not fetch loads:', error.message);
-        loadsData = [];
-      }
-      
-      setLoads(loadsData);
-
-      // Calculate basic stats
-      const validLoads = Array.isArray(loadsData) ? loadsData : [];
-      const basicStats = {
-        totalLoads: validLoads.length,
-        activeLoads: validLoads.filter(load => 
-          load && ['posted', 'receiving_bids', 'driver_assigned', 'in_transit'].includes(load.status)
-        ).length,
-        completedLoads: validLoads.filter(load => load && load.status === 'delivered').length,
-        inTransitLoads: validLoads.filter(load => load && load.status === 'in_transit').length,
-        averageBidsPerLoad: validLoads.length > 0 
-          ? validLoads.reduce((acc, load) => acc + (load?.bidCount || 0), 0) / validLoads.length 
-          : 0
-      };
-
-      // Try to fetch enhanced analytics
-      try {
-        const statsResponse = await fetch(`${API_BASE_URL}/loads/analytics/dashboard`, {
-          headers: authHeaders,
-          timeout: 10000
-        });
-        const statsData = await handleResponse(statsResponse, basicStats);
-        setStats(statsData || basicStats);
-      } catch (error) {
-        console.warn('Using basic stats due to analytics fetch error:', error.message);
-        setStats(basicStats);
-      }
-
-      // Fetch notifications
-      try {
-        const notificationsResponse = await fetch(`${API_BASE_URL}/notifications`, {
-          headers: authHeaders,
-          timeout: 8000
-        });
-        const notificationsData = await handleResponse(notificationsResponse, { notifications: [] });
-        const notifications = Array.isArray(notificationsData?.notifications) ? 
-                             notificationsData.notifications : [];
-        setNotifications(notifications);
-      } catch (error) {
-        console.warn('Could not fetch notifications:', error.message);
-        setNotifications([]);
-      }
-
-      // Fetch subscription plans from database
-      try {
-        const plansResponse = await fetch(`${API_BASE_URL}/subscriptions/plans`, {
-          headers: authHeaders,
-          timeout: 8000
-        });
-        const plansData = await handleResponse(plansResponse, { plans: {} });
-        setSubscriptionPlans(plansData?.plans || {});
-      } catch (error) {
-        console.warn('Could not fetch subscription plans:', error.message);
-        // Fallback to empty object - components should handle gracefully
-        setSubscriptionPlans({});
-      }
-
-      // Fetch payment methods from database
-      try {
-        const paymentMethodsResponse = await fetch(`${API_BASE_URL}/subscriptions/payment-methods`, {
-          headers: authHeaders,
-          timeout: 8000
-        });
-        const paymentMethodsData = await handleResponse(paymentMethodsResponse, { paymentMethods: [] });
-        const methods = Array.isArray(paymentMethodsData?.paymentMethods) ? 
-                       paymentMethodsData.paymentMethods : [];
-        setPaymentMethods(methods);
-      } catch (error) {
-        console.warn('Could not fetch payment methods:', error.message);
-        // Fallback to empty array - components should handle gracefully
-        setPaymentMethods([]);
-      }
-
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      if (error.message !== 'Authentication failed') {
-        setError('Failed to load dashboard data. Please try refreshing the page.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Add notification handlers
-  const handleNotificationAction = async (notificationId, action) => {
-    switch (action) {
-      case 'mark_read':
-        await markAsRead(notificationId);
-        break;
-      case 'delete':
-        await deleteNotification(notificationId);
-        break;
-      default:
-        break;
-    }
-  };
-
 // Function to trigger notifications when loads are created/updated
 const triggerLoadNotifications = async (loadId, action, additionalData = {}) => {
   try {
-    const authHeaders = getAuthHeaders();
     
     switch (action) {
       case 'created':

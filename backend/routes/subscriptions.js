@@ -20,47 +20,6 @@ const subscriptionLimiter = rateLimit({
     message: 'Too many subscription requests, please try again later.'
   }
 });
-
-// Helper function to check if payment method is available now
-const isPaymentMethodAvailable = (paymentMethod) => {
-  // Check time availability
-  if (paymentMethod.availableHours) {
-    const now = new Date();
-    const currentTime = now.toLocaleTimeString('en-US', {
-      timeZone: paymentMethod.availableHours.timezone || 'Africa/Nairobi',
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-
-    const current = parseInt(currentTime.replace(':', ''));
-    const start = parseInt(paymentMethod.availableHours.start.replace(':', ''));
-    const end = parseInt(paymentMethod.availableHours.end.replace(':', ''));
-
-    // Handle overnight availability
-    if (start > end) {
-      if (!(current >= start || current <= end)) {
-        return false;
-      }
-    } else if (!(current >= start && current <= end)) {
-      return false;
-    }
-  }
-
-  // Check day availability
-  if (paymentMethod.availableDays && paymentMethod.availableDays.length > 0) {
-    const today = new Date().getDay();
-    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const currentDayName = dayNames[today];
-    
-    if (!paymentMethod.availableDays.includes(currentDayName)) {
-      return false;
-    }
-  }
-
-  return paymentMethod.enabled;
-};
-
 // Helper function to ensure basic subscription exists
 const ensureBasicSubscription = async (userId, db) => {
   try {
@@ -227,44 +186,81 @@ router.get('/plans', auth, async (req, res) => {
       isActive: true 
     }).sort({ displayOrder: 1 }).toArray();
 
+    // Process plans to ensure consistent structure
     const plansData = {};
     
     plans.forEach(plan => {
       plansData[plan.planId] = {
         id: plan.planId,
         name: plan.name,
-        price: plan.price,
-        currency: plan.currency,
-        interval: plan.billingCycle,
-        maxLoads: plan.features.maxLoads,
-        features: [
-          plan.features.maxLoads === -1 
-            ? 'Unlimited load postings'
-            : `Post up to ${plan.features.maxLoads} loads per month`,
-          plan.features.advancedAnalytics ? 'Advanced analytics & reporting' : 'Basic analytics',
-          plan.features.prioritySupport ? 'Priority support' : 'Standard support',
-          plan.features.bulkOperations ? 'Bulk operations' : 'Individual operations',
-          ...(plan.features.apiAccess ? ['API access'] : []),
-          ...(plan.features.dedicatedManager ? ['Dedicated account manager'] : [])
-        ].filter(Boolean),
-        recommended: plan.isPopular,
-        description: plan.description
+        price: plan.price || 0,
+        currency: plan.currency || 'KES',
+        interval: plan.billingCycle || 'monthly',
+        maxLoads: plan.features?.maxLoads || -1,
+        features: generateFeaturesList(plan.features || {}),
+        recommended: plan.isPopular || false,
+        description: plan.description || '',
+        displayOrder: plan.displayOrder || 999,
+        duration: plan.duration || 30,
+        billingCycle: plan.billingCycle || 'monthly'
       };
     });
 
+    // Helper function to generate features list
+    function generateFeaturesList(featuresObj) {
+      const features = [];
+      
+      if (featuresObj.maxLoads === -1) {
+        features.push('Unlimited load postings');
+      } else if (featuresObj.maxLoads && featuresObj.maxLoads > 0) {
+        features.push(`Post up to ${featuresObj.maxLoads} loads per month`);
+      }
+      
+      if (featuresObj.advancedAnalytics) {
+        features.push('Advanced analytics & reporting');
+      } else {
+        features.push('Basic analytics');
+      }
+      
+      if (featuresObj.prioritySupport) {
+        features.push('Priority support');
+      } else {
+        features.push('Standard support');
+      }
+      
+      if (featuresObj.bulkOperations) {
+        features.push('Bulk operations');
+      }
+      
+      if (featuresObj.apiAccess) {
+        features.push('API access');
+      }
+      
+      if (featuresObj.dedicatedManager) {
+        features.push('Dedicated account manager');
+      }
+      
+      return features.length > 0 ? features : ['Basic features included'];
+    }
+
     res.json({
       status: 'success',
-      data: { plans: plansData }
+      data: { 
+        plans: plansData,
+        totalPlans: plans.length 
+      }
     });
 
   } catch (error) {
     console.error('Get subscription plans error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching subscription plans'
+      message: 'Server error fetching subscription plans',
+      data: { plans: {} }
     });
   }
 });
+
 
 
 // @route   GET /api/subscriptions/payment-methods
@@ -281,35 +277,108 @@ router.get('/payment-methods', auth, async (req, res) => {
 
     const methodsData = paymentMethods.map(method => ({
       id: method.methodId,
+      methodId: method.methodId, // Keep both for compatibility
       name: method.displayName,
-      description: method.description,
-      instructions: method.instructions,
-      minimumAmount: method.minimumAmount,
-      maximumAmount: method.maximumAmount,
-      processingFee: method.processingFee,
-      processingFeeType: method.processingFeeType,
-      currency: method.currency,
-      processingTimeMinutes: method.processingTimeMinutes,
-      requiresVerification: method.requiresVerification,
-      details: method.details,
+      displayName: method.displayName, // Keep both for compatibility
+      description: method.description || 'Payment method',
+      instructions: method.instructions || '',
+      minimumAmount: method.minimumAmount || 1,
+      maximumAmount: method.maximumAmount || 999999999,
+      processingFee: method.processingFee || 0,
+      processingFeeType: method.processingFeeType || 'fixed',
+      currency: method.currency || 'KES',
+      processingTimeMinutes: method.processingTimeMinutes || 0,
+      requiresVerification: method.requiresVerification || false,
+      details: method.details || {},
       availableNow: isPaymentMethodAvailable(method),
-      availableHours: method.availableHours,
-      availableDays: method.availableDays
+      availableHours: method.availableHours || { start: '00:00', end: '23:59', timezone: 'Africa/Nairobi' },
+      availableDays: method.availableDays || [],
+      enabled: method.enabled,
+      displayOrder: method.displayOrder || 999
     }));
+
+    // Sort by display order and filter available methods
+    const sortedMethods = methodsData
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .filter(method => method.enabled && method.availableNow);
 
     res.json({
       status: 'success',
-      data: { paymentMethods: methodsData }
+      data: { 
+        paymentMethods: sortedMethods,
+        totalMethods: methodsData.length,
+        availableMethods: sortedMethods.length
+      }
     });
 
   } catch (error) {
     console.error('Get payment methods error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error fetching payment methods'
+      message: 'Server error fetching payment methods',
+      data: { paymentMethods: [] }
     });
   }
 });
+
+// Enhanced helper function to check if payment method is available now
+const isPaymentMethodAvailable = (paymentMethod) => {
+  try {
+    // Base check - must be enabled
+    if (!paymentMethod.enabled) {
+      return false;
+    }
+
+    // Check time availability
+    if (paymentMethod.availableHours) {
+      const now = new Date();
+      const timezone = paymentMethod.availableHours.timezone || 'Africa/Nairobi';
+      
+      let currentTime;
+      try {
+        currentTime = now.toLocaleTimeString('en-US', {
+          timeZone: timezone,
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } catch (timezoneError) {
+        console.warn('Timezone error, using local time:', timezoneError);
+        currentTime = now.toTimeString().slice(0, 5);
+      }
+
+      const current = parseInt(currentTime.replace(':', ''));
+      const start = parseInt(paymentMethod.availableHours.start.replace(':', ''));
+      const end = parseInt(paymentMethod.availableHours.end.replace(':', ''));
+
+      // Handle overnight availability
+      if (start > end) {
+        if (!(current >= start || current <= end)) {
+          return false;
+        }
+      } else if (!(current >= start && current <= end)) {
+        return false;
+      }
+    }
+
+    // Check day availability
+    if (paymentMethod.availableDays && paymentMethod.availableDays.length > 0) {
+      const today = new Date().getDay();
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const currentDayName = dayNames[today];
+      
+      if (!paymentMethod.availableDays.includes(currentDayName)) {
+        return false;
+      }
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error checking payment method availability:', error);
+    // Default to available if there's an error checking
+    return paymentMethod.enabled || false;
+  }
+};
 
 // @route   POST /api/subscriptions/subscribe
 // @desc    Create a new subscription request 
