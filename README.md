@@ -49,7 +49,7 @@ Infinite Cargo is Kenya's leading platform connecting cargo owners with reliable
 1. Clone the repository
 
 ```bash
-git clone <repository-url>
+git clone <(https://github.com/Susan56789/infinite-cargo)>
 cd infinite-cargo
 ```
 
