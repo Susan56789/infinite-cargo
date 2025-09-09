@@ -1,6 +1,4 @@
 // scripts/generate-sitemap.js
-// Run with: node scripts/generate-sitemap.js
-
 const fs = require('fs');
 const path = require('path');
 

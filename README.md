@@ -1,72 +1,55 @@
 # Infinite Cargo
 
-A modern web application connecting cargo owners and drivers for efficient freight transport across Kenya.
-
-## About
-
-Infinite Cargo is a comprehensive web platform that revolutionizes Kenya's transport industry by connecting cargo owners with verified truck drivers. Built with modern web technologies, our platform streamlines freight booking, driver management, and secure payment processing.
+Infinite Cargo is Kenya's leading platform connecting cargo owners with reliable drivers for efficient transport solutions across the country.
 
 ## Features
 
 ### For Cargo Owners
 
-- Post cargo loads with pickup and delivery details
-- Browse and connect with verified drivers
-- Real-time shipment tracking
-- Secure payment processing
-- Driver rating and feedback system
+- **Post Loads**: Create cargo listings with pickup and delivery details
+- **Find Drivers**: Browse and connect with verified drivers
+- **Real-time Tracking**: Monitor your shipments in real-time
+- **Secure Payments**: Safe and transparent payment processing
+- **Bid Management**: Review and accept driver bids
 
-### For Drivers  
+### For Drivers
 
-- Search and browse available loads
-- Submit competitive bids for transport jobs
-- Manage vehicle fleet and documentation
-- Track earnings and payment history
-- Build reputation through customer ratings
+- **Load Search**: Find available cargo loads across Kenya
+- **Profile Management**: Maintain driver profile and vehicle information
+- **Earnings Tracking**: Monitor your income and payment history
+- **Bid Submission**: Place competitive bids on cargo loads
+- **Job Management**: Track assigned jobs and delivery status
 
-### Platform Features
+## Tech Stack
 
-- Responsive web design for all devices
-- Real-time notifications and updates
-- Admin dashboard for platform management
-- SEO optimized for search engines
-- Secure user authentication and authorization
+### Frontend
 
-## Technology Stack
+- **React.js** - Modern JavaScript library for building user interfaces
+- **React Router** - Client-side routing
+- **React Helmet** - SEO optimization
+- **CSS3** - Modern styling and responsive design
 
-**Frontend**
+### Backend
 
-- React.js - User interface library
-- React Router - Client-side routing
-- React Helmet - SEO and meta management
-- CSS3 - Responsive styling
+- **Node.js** - Server-side JavaScript runtime
+- **Express.js** - Web application framework
+- **MongoDB** - NoSQL database
+- **Mongoose** - MongoDB object modeling
 
-**Backend**
+## Getting Started
 
-- Express.js - Web application framework
-- Node.js - JavaScript runtime environment
-- MongoDB - NoSQL database
-- Mongoose - MongoDB object modeling
+### Prerequisites
 
-**Additional Tools**
+- Node.js (v14 or higher)
+- npm or yarn package manager
+- MongoDB database
 
-- JWT - Authentication tokens
-- Helmet.js - Security middleware
-- CORS - Cross-origin resource sharing
-- Compression - Response optimization
-
-## Prerequisites
-
-- Node.js (v18.0.0 or higher)
-- npm (v8.0.0 or higher)
-- MongoDB (v6.0 or higher)
-
-## Installation
+### Installation
 
 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/infinite-cargo.git
+git clone <repository-url>
 cd infinite-cargo
 ```
 
@@ -76,163 +59,98 @@ cd infinite-cargo
 npm install
 ```
 
-3. Create environment file
+3. Set up environment variables
+Create a `.env` file in the root directory and add necessary configuration variables.
+
+4. Start the development server
 
 ```bash
-cp .env.example .env
-```
-
-4. Configure environment variables in `.env`:
-
-```env
-MONGODB_URI=mongodb://localhost:27017/infinite-cargo
-JWT_SECRET=your-jwt-secret-key
-PORT=5000
-NODE_ENV=development
-```
-
-5. Start MongoDB service
-
-```bash
-# Linux/Mac
-sudo systemctl start mongod
-
-# Or using Docker
-docker run -d -p 27017:27017 mongo:latest
-```
-
-6. Start the application
-
-```bash
-# Development mode
-npm run dev
-
-# Production mode  
-npm run build
 npm start
 ```
 
-The application will be available at `http://localhost:3000`
+The application will run on `http://localhost:3000`
+
+### Building for Production
+
+```bash
+npm run build
+```
 
 ## Project Structure
 
 ```
-infinite-cargo/
-├── src/
-│   ├── components/
-│   │   ├── admin/          # Admin components
-│   │   ├── cargoowner/     # Cargo owner components  
-│   │   ├── common/         # Shared components
-│   │   └── driver/         # Driver components
-│   ├── pages/              # Page components
-│   └── App.js              # Main application
-├── routes/                 # API routes
-├── models/                 # MongoDB models
-├── middleware/             # Express middleware
-├── scripts/                # Utility scripts
-├── public/                 # Static files
-└── server.js               # Server entry point
+src/
+├── components/
+│   ├── common/          # Shared components
+│   ├── driver/          # Driver-specific components
+│   ├── cargoowner/      # Cargo owner components
+│   └── admin/           # Administrative components
+├── pages/               # Main page components
+├── routes/              # Route configurations
+└── styles/              # CSS and styling files
 ```
 
-## API Routes
+## Key Pages
 
-### Authentication
+- **Home** - Landing page with platform overview
+- **Services** - Detailed service offerings
+- **How It Works** - Step-by-step platform guide
+- **Pricing** - Transparent pricing information
+- **Contact** - Get in touch with support
+- **FAQ** - Frequently asked questions
 
-- `POST /api/auth/register` - User registration
-- `POST /api/auth/login` - User login
-- `POST /api/auth/logout` - User logout
+## SEO Optimization
 
-### Loads
+The application includes comprehensive SEO features:
 
-- `GET /api/loads` - Get available loads
-- `POST /api/loads` - Create new load
-- `GET /api/loads/:id` - Get load details
-- `PUT /api/loads/:id` - Update load
+- Dynamic meta tags for each page
+- Canonical URLs
+- Structured data markup
+- Optimized loading with lazy loading
+- Responsive design for mobile optimization
 
-### Drivers
+## Security Features
 
-- `GET /api/drivers` - Get drivers
-- `GET /api/drivers/:id` - Get driver profile
-- `PUT /api/drivers/:id` - Update profile
+- Helmet.js for security headers
+- CORS protection
+- Input validation and sanitization
+- Secure authentication system
+- Protected routes and authorization
 
-### Bids
+## Styling
 
-- `POST /api/bids` - Submit bid
-- `GET /api/bids/driver/:id` - Driver bids
-- `GET /api/bids/load/:id` - Load bids
+The application uses **Tailwind CSS** for styling:
 
-## Development
+- Utility-first approach for rapid UI development
+- Responsive design with mobile-first breakpoints
+- Custom component classes for consistency
+- Dark mode support (if implemented)
+- Optimized CSS bundle with PurgeCSS
 
-### Available Scripts
+## Performance
 
-```bash
-npm run dev          # Start development server
-npm run build        # Build for production
-npm start            # Start production server
-npm test             # Run tests
-npm run generate-sitemap  # Generate SEO sitemap
-```
-
-### Usage
-
-**For Cargo Owners:**
-
-1. Register and create account
-2. Post load details with pickup/delivery locations
-3. Review and accept driver bids
-4. Track shipment progress
-5. Complete payment and rate driver
-
-**For Drivers:**
-
-1. Register with vehicle details
-2. Browse available loads
-3. Submit competitive bids
-4. Accept jobs and update delivery status
-5. Receive payments and build reputation
-
-## Deployment
-
-### Production Setup
-
-1. Set environment variables:
-
-```env
-NODE_ENV=production
-MONGODB_URI=your-production-mongodb-uri
-JWT_SECRET=your-secure-jwt-secret
-```
-
-2. Build and start:
-
-```bash
-npm run build
-npm start
-```
-
-3. Use process manager (PM2):
-
-```bash
-npm install -g pm2
-pm2 start server.js --name "infinite-cargo"
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/new-feature`)  
-3. Commit changes (`git commit -m 'Add new feature'`)
-4. Push to branch (`git push origin feature/new-feature`)
-5. Create Pull Request
-
-## License
-
-MIT License - see LICENSE file for details.
+- Code splitting with lazy loading
+- Image optimization
+- Compression middleware
+- Efficient bundle management
+- Progressive loading strategies
 
 ## Support
 
-For support, contact: <support@infinitecargo.co.ke>
+For support and inquiries:
 
-## Website
+- Website: <https://infinitecargo.co.ke>
+- Email: Contact through website form
+- Phone: Available on website
 
-Visit: <https://infinitecargo.co.ke>
+## Contributing
+
+Please follow the established coding standards and submit pull requests for review.
+
+## License
+
+This project is proprietary software. All rights reserved.
+
+---
+
+**Infinite Cargo** - Connecting Kenya's Transport Network
