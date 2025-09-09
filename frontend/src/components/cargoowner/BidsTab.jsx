@@ -165,13 +165,13 @@ const BidsTab = ({
     }
   };
 
-  // Enhanced bid rejection handler with better error handling
+  
   const handleRejectBid = async (bid) => {
     const reason = window.prompt(
       `Please provide a reason for rejecting ${bid.driverInfo?.name}'s bid (optional):\n\nThis will help improve our platform and provide feedback to the driver.`
     );
     
-    if (reason !== null) { // null means user cancelled
+    if (reason !== null) { 
       try {
         // Show loading state
         const rejectButton = document.querySelector(`[data-bid-id="${bid._id}"] .reject-btn`);

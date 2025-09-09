@@ -357,7 +357,7 @@ router.get('/payment-methods', auth, async (req, res) => {
   }
 });
 
-// Enhanced helper function to check if payment method is available now
+// helper function to check if payment method is available now
 const isPaymentMethodAvailable = (paymentMethod) => {
   try {
     // Base check - must be enabled
@@ -457,7 +457,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     .withMessage('Invalid billing cycle')
 ], async (req, res) => {
   try {
-    // Enhanced validation result handling
+    //  validation result handling
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       console.error('Validation errors:', errors.array());
@@ -598,7 +598,7 @@ router.post('/subscribe', auth, subscriptionLimiter, [
       discountApplied: `${discountApplied}%`
     });
 
-    // Enhanced M-Pesa validation
+    // M-Pesa validation
     if (paymentMethodObj.methodId === 'mpesa') {
       console.log('Processing M-Pesa payment...');
       
@@ -654,13 +654,13 @@ router.post('/subscribe', auth, subscriptionLimiter, [
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + duration);
 
-    // Create subscription request with enhanced error handling
+    // Create subscription request 
     const subscriptionData = {
       userId: new mongoose.Types.ObjectId(req.user.id),
       planId: selectedPlan.planId,
       planName: selectedPlan.name,
       price: finalPrice,
-      originalMonthlyPrice: selectedPlan.price, // Store original monthly price for reference
+      originalMonthlyPrice: selectedPlan.price, 
       currency: selectedPlan.currency,
       billingCycle,
       duration,
@@ -1265,7 +1265,7 @@ router.get('/check-limits', auth, async (req, res) => {
 });
 
 // @route   GET /api/subscriptions/my-subscription
-// @desc    Get current user's subscription with enhanced details 
+// @desc    Get current user's subscription 
 // @access  Private (Cargo owners only)
 router.get('/my-subscription', auth, async (req, res) => {
   try {

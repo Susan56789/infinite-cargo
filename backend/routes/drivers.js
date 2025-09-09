@@ -1277,7 +1277,7 @@ router.get('/active-jobs', auth, async (req, res) => {
       };
     });
 
-    // Enhanced sorting logic
+  
     formattedJobs.sort((a, b) => {
       // Critical/overdue jobs first
       if (a.priority === 'critical' && b.priority !== 'critical') return -1;
@@ -1811,7 +1811,7 @@ router.get('/profile', auth, driverLimiter, async (req, res) => {
     const completedJobsWithEarnings = totalEarnings.length > 0 ? 
       totalEarnings[0].earningsCount : 0;
 
-    // Enhanced driver profile with statistics
+    // driver profile with statistics
     const enhancedProfile = {
       ...driver,
       statistics: {

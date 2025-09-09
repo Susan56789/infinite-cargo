@@ -730,7 +730,7 @@ router.post('/', auth, [
       });
     }
 
-    // Enhanced user authentication and authorization check
+    // user authentication and authorization check
     if (!req.user || !req.user.id) {
       console.error('No user found in request object');
       return res.status(401).json({
@@ -2547,7 +2547,7 @@ router.get('/:id/status-history',  auth, async (req, res) => {
       return map;
     }, {});
 
-    // Enhance status history with user details
+    //  status history with user details
     const enhancedHistory = (load.statusHistory || []).map(entry => ({
       status: entry.status,
       reason: entry.reason,

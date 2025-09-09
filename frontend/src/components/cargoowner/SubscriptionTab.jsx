@@ -22,13 +22,13 @@ const SubscriptionTab = ({
   const [paymentDetails, setPaymentDetails] = useState({});
   const [validationErrors, setValidationErrors] = useState({});
 
-  // Helper function to generate features list - FIXED VERSION
+  // Helper function to generate features list 
   const generateFeaturesList = (featuresObj) => {
     if (!featuresObj) return ['Basic features included'];
     
     const features = [];
     
-    // Fixed: Check for maxLoads (with 's')
+   
     if (featuresObj.maxLoads === -1) {
       features.push('Unlimited load postings');
     } else if (featuresObj.maxLoads && featuresObj.maxLoads > 0) {

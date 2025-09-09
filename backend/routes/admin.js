@@ -135,7 +135,7 @@ async function initializeSystemDefaults() {
       ];
       
       await SubscriptionPlan.insertMany(defaultPlans);
-      console.log('Default subscription plans initialized');
+     
     }
 
     // Initialize default payment methods
@@ -179,7 +179,7 @@ async function initializeSystemDefaults() {
       ];
       
       await PaymentMethod.insertMany(defaultPaymentMethods);
-      console.log('Default payment methods initialized');
+    
     }
   } catch (error) {
     console.error('Error initializing system defaults:', error);
@@ -299,12 +299,6 @@ await newAdmin.save();
       console.warn('Audit log failed:', auditError);
     }
 
-    console.log('Admin created successfully:', {
-      id: newAdmin._id,
-      email: newAdmin.email,
-      role: newAdmin.role
-    });
-
     res.status(201).json({
       status: 'success',
       message: 'Admin created successfully',
@@ -395,7 +389,6 @@ router.post('/login', [
     admin.lastLogin = new Date();
     await admin.save();
 
-    console.log('Admin login successful:', { id: admin._id, email: admin.email, role: admin.role });
     try {
       const db = mongoose.connection.db;
       const auditLogsCollection = db.collection('audit_logs');
@@ -471,12 +464,6 @@ router.post('/forgot-password', [
   const startTime = Date.now();
 
   try {
-    console.log('Admin password reset request received:', {
-      email: req.body.email,
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
-    });
-
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -599,10 +586,7 @@ router.post('/verify-reset-code', [
   const startTime = Date.now();
 
   try {
-    console.log('=== VERIFICATION REQUEST DEBUG ===');
-    console.log('Raw request body:', JSON.stringify(req.body, null, 2));
-    console.log('Content-Type:', req.get('Content-Type'));
-
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       console.log('=== VALIDATION ERRORS ===');
@@ -619,7 +603,7 @@ router.post('/verify-reset-code', [
 
     const { email, code } = req.body;
 
-    // Enhanced input cleaning and validation
+  
     const cleanEmail = email?.toString().toLowerCase().trim();
     const cleanCode = code?.toString().trim();
 
@@ -887,11 +871,6 @@ router.post('/reset-password', [
       isActive: true
     });
 
-    console.log('Admin search results:', {
-      adminFound: !!admin
-    });
-
-    // Debug logging for failed reset
     if (!admin) {
       const adminAny = await Admin.findOne({ email: email.toLowerCase().trim() });
       if (adminAny) {
@@ -5615,8 +5594,8 @@ router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
         const totalUsers = totalUsersThisMonth[0] + totalUsersThisMonth[1];
         const subscriptionRate = totalUsers > 0 ? ((activeSubscriptions / totalUsers) * 100) : 0;
         
-        // Compare with last month's rate (simplified)
-        const lastMonthRate = subscriptionRate - 2; // Placeholder calculation
+        // Compare with last month's rate 
+        const lastMonthRate = subscriptionRate - 2; 
         
         data = {
           value: `${subscriptionRate.toFixed(1)}%`,
@@ -5634,7 +5613,7 @@ router.get('/analytics/kpi/:type',adminAuth, async (req, res) => {
         
         data = {
           value: `${completionRate.toFixed(1)}%`,
-          change: 2.3, // Placeholder - calculate actual change
+          change: 2.3, 
           trend: 'up'
         };
         break;

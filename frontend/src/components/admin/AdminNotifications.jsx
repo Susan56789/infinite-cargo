@@ -215,7 +215,7 @@ const [broadcastForm, setBroadcastForm] = useState({
     }
   };
 
-  // Send broadcast notification with enhanced error handling
+  // Send broadcast notification 
   const sendBroadcastNotification = async (e) => {
   e.preventDefault();
   

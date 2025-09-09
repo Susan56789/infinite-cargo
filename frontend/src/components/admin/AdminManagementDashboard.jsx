@@ -52,7 +52,6 @@ const safeGet = (obj, path, defaultValue = '') => {
   return path.split('.').reduce((acc, key) => acc?.[key], obj) || defaultValue;
 };
 
-// AdminTableRow Component - Moved outside and fixed
 const AdminTableRow = ({ admin, index, onEdit, onSuspend, onDelete }) => {
   const adminId = admin._id || admin.id;
   
@@ -299,7 +298,7 @@ const AdminManagementDashboard = ({ apiCall, showError, showSuccess }) => {
 
   // Admin management functions
   const handleEditAdmin = async (adminData) => {
-  // Enhanced ID validation
+  //  ID validation
   const adminId = selectedAdmin?._id || selectedAdmin?.id;
   
   if (!adminId) {

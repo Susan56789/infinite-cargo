@@ -912,13 +912,13 @@ router.post('/:id/accept', auth, async (req, res) => {
       const load = bid.load;
       load.assignedDriver = bid.driver._id;
       load.assignedDate = new Date();
-      load.assignedAt = new Date(); // Make sure this field exists for consistency
+      load.assignedAt = new Date(); 
       load.status = 'driver_assigned';
-      load.acceptedBid = bid._id; //  Only assign the bid ID
+      load.acceptedBid = bid._id; 
       
       await load.save({ session });
 
-      // CREATE ACTIVE JOB/BOOKING RECORD - Enhanced version
+      // CREATE ACTIVE JOB/BOOKING RECORD 
       const db = mongoose.connection.db;
       const bookingsCollection = db.collection('bookings');
       
@@ -1024,7 +1024,7 @@ router.post('/:id/accept', auth, async (req, res) => {
           contactPerson: load.contactPerson?.name
         },
         
-        // Enhanced fields for your active jobs endpoint
+      
         estimatedDistance,
         estimatedDuration,
         instructions: load.specialInstructions,
@@ -1336,7 +1336,7 @@ router.post('/:id/reject', auth, [
     console.log('Final rejection authorization result:', isAuthorized);
 
     if (!isAuthorized) {
-      // Enhanced error response with debug info in development
+      
       return res.status(403).json({
         status: 'error',
         message: 'You are not authorized to reject this bid. You must be the owner of the load.',
@@ -1349,7 +1349,7 @@ router.post('/:id/reject', auth, [
             (bid.cargoOwner._id ? bid.cargoOwner._id.toString() : bid.cargoOwner.toString()) : 
             'null',
           loadPostedBy: bid.load.postedBy ? bid.load.postedBy.toString() : 'null',
-          // Add suggestions for debugging
+          
           suggestions: [
             'Verify that you are logged in as the correct user',
             'Check that this load belongs to your account',

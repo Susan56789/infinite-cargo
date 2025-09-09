@@ -36,13 +36,13 @@ const DriverJobDetails = () => {
   const [submittingReport, setSubmittingReport] = useState(false);
 
   useEffect(() => {
-    // Enhanced authentication check with proper initialization
+    
     const checkAuthAndInit = async () => {
       try {
-        // Ensure auth manager is initialized
+        
         if (!authManager.isInitialized) {
           authManager.initialize();
-          // Wait a bit for initialization to complete
+       
           await new Promise(resolve => setTimeout(resolve, 100));
         }
 
@@ -473,7 +473,7 @@ const DriverJobDetails = () => {
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Update Job Status</h2>
         
-        {/* Enhanced Notes Input */}
+        {/*  Notes Input */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Driver Notes <span className="text-blue-600">(Will be shared with cargo owner)</span>
@@ -528,7 +528,7 @@ const DriverJobDetails = () => {
     );
   };
 
-  // Enhanced Issue Report Modal Component
+  
   const IssueReportModal = () => {
     if (!showReportForm) return null;
 
@@ -742,7 +742,7 @@ const DriverJobDetails = () => {
     </div>
   );
 
-  // Enhanced Timeline with Notes Display
+  
   const JobTimeline = ({ timeline }) => {
     if (!timeline || timeline.length === 0) return null;
 

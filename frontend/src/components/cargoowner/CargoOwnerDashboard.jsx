@@ -271,7 +271,7 @@ const CargoOwnerDashboard = () => {
         : 0
     };
 
-    // Try to fetch enhanced analytics
+    
     try {
       const statsResponse = await fetch(`${API_BASE_URL}/loads/analytics/dashboard`, {
         headers: authHeaders,
@@ -299,7 +299,7 @@ const CargoOwnerDashboard = () => {
       setNotifications([]);
     }
 
-    // Fetch subscription plans from database - FIXED
+    
     try {
       const plansResponse = await fetch(`${API_BASE_URL}/subscriptions/plans`, {
         headers: authHeaders,
@@ -324,7 +324,7 @@ const CargoOwnerDashboard = () => {
       setSubscriptionPlans({});
     }
 
-    // Fetch payment methods from database - FIXED
+    
     try {
       const paymentMethodsResponse = await fetch(`${API_BASE_URL}/subscriptions/payment-methods`, {
         headers: authHeaders,
@@ -468,11 +468,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       }
     }
 
-    // Enhanced cargo owner name determination
+   
     const getCargoOwnerName = () => {
-      // Try multiple sources in order of preference
+    
       const sources = [
-        currentLoadForm.cargoOwnerName, // From form if already set
+        currentLoadForm.cargoOwnerName, 
         user?.cargoOwnerProfile?.companyName,
         user?.companyName,
         user?.profile?.companyName,
@@ -494,16 +494,16 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
 
     const cargoOwnerName = getCargoOwnerName();
     
-    // Enhanced contact person information
+    
     const contactPerson = {
       name: currentLoadForm.contactPerson?.name || user?.name || cargoOwnerName,
       phone: currentLoadForm.contactPerson?.phone || user?.phone || '',
       email: currentLoadForm.contactPerson?.email || user?.email || ''
     };
 
-    // Prepare the complete payload
+    
     const payload = {
-      // Basic load information
+      
       title: currentLoadForm.title.trim(),
       description: currentLoadForm.description.trim(),
       pickupLocation: currentLoadForm.pickupLocation.trim(),
@@ -522,20 +522,20 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       pickupDate: pickupDate.toISOString(),
       deliveryDate: deliveryDate.toISOString(),
       
-      // Special requirements
+      
       specialInstructions: currentLoadForm.specialInstructions?.trim() || '',
       isUrgent: Boolean(currentLoadForm.isUrgent),
       
-      // Owner and contact information
+     
       cargoOwnerName: cargoOwnerName,
       postedByName: cargoOwnerName,
       contactPerson: contactPerson,
       
-      // Payment terms
+      
       paymentTerms: currentLoadForm.paymentTerms || 'on_delivery',
       insuranceRequired: Boolean(currentLoadForm.insuranceRequired),
       
-      // System metadata
+      
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -557,7 +557,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
     });
 
 
-    // Handle authentication errors
+    
     if (response.status === 401) {
       console.error('Authentication failed - 401 response');
       handleLogout();
@@ -565,7 +565,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    // Parse response
+ 
     let data;
     try {
       const responseText = await response.text();
@@ -586,24 +586,24 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       const actionText = editingLoad ? 'updated' : 'created';
       setSuccess(`Load ${actionText} successfully!`);
       
-      // Trigger notification
+      
       await triggerLoadNotifications(data.data?._id, editingLoad ? 'updated' : 'created', {
         loadTitle: currentLoadForm.title
       });
       
-      // Close modal and reset form
+     
       setShowLoadForm(false);
       setEditingLoad(null);
       resetForm();
       
-      // Refresh dashboard data
+    
       await fetchDashboardData();
       
-      // Trigger auth state change event
+      
       window.dispatchEvent(new Event('authStateChanged'));
       
     } else {
-      // Handle specific error cases with enhanced debugging
+     
       let errorMessage = 'An unexpected error occurred';
       
       
@@ -618,12 +618,11 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       } else if (response.status === 403) {
         errorMessage = 'Access denied. You may not have permission to perform this action.';
       } else if (response.status === 404) {
-        // Enhanced 404 handling
+        
         if (data.message && data.message.includes('User not found')) {
           errorMessage = 'User authentication issue. Please log out and log back in.';
           console.error('User not found in database. Auth token may be stale.');
-          // Optionally force logout
-          // handleLogout();
+          
         } else {
           errorMessage = editingLoad ? 'Load not found. It may have been deleted.' : 'Service not found.';
         }

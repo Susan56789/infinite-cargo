@@ -108,7 +108,7 @@ const createBasicSubscription = async (userId, db) => {
   }
 };
 
-// Enhanced validation middleware
+//  validation middleware
 const registrationValidation = [
   body('name')
     .trim()
@@ -171,7 +171,7 @@ const sanitizeForLog = (data) => {
 };
 
 // @route   POST /api/users/register
-// @desc    Register a new user with enhanced validation and auto Basic subscription for cargo owners
+// @desc    Register a new user with validation and auto Basic subscription for cargo owners
 // @access  Public
 router.post('/register',  authLimiter, registrationValidation, async (req, res) => {
   const startTime = Date.now();
@@ -261,7 +261,7 @@ router.post('/register',  authLimiter, registrationValidation, async (req, res) 
       });
     }
 
-    // Hash password with enhanced security
+    // Hash password 
     const saltRounds = process.env.NODE_ENV === 'production' ? 14 : 12;
     const salt = await bcrypt.genSalt(saltRounds);
     const hashedPassword = await bcrypt.hash(password, salt);
@@ -433,7 +433,7 @@ router.post('/register',  authLimiter, registrationValidation, async (req, res) 
       processingTime: `${Date.now() - startTime}ms`
     });
 
-    // Create JWT payload with enhanced security
+    // Create JWT payload 
     const payload = {
       user: {
         id: createdUser._id,
@@ -613,7 +613,7 @@ router.post('/register',  authLimiter, registrationValidation, async (req, res) 
   }
 });
 
-// Enhanced login endpoint with better security
+//  login endpoint
 router.post('/login',  authLimiter, [
   body('email')
     .trim()
@@ -826,7 +826,7 @@ router.post('/login',  authLimiter, [
   }
 });
 
-// Enhanced current user endpoint with subscription check
+//  current user endpoint with subscription check
 router.get('/me',  auth, async (req, res) => {
   try {
     const mongoose = require('mongoose');
@@ -921,12 +921,7 @@ router.post('/verify-reset-code', corsHandler, [
   const startTime = Date.now();
   
   try {
-    console.log('Reset code verification request received:', {
-      email: req.body.email,
-      code: req.body.code, // Log the actual code for debugging
-      ip: req.ip,
-      userAgent: req.get('User-Agent')
-    });
+    
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -944,12 +939,12 @@ router.post('/verify-reset-code', corsHandler, [
     const mongoose = require('mongoose');
     const db = mongoose.connection.db;
 
-    //  Use correct field name and add debugging
+   
     const [driverUser, cargoOwnerUser] = await Promise.all([
       db.collection('drivers').findOne({
         email: email.toLowerCase().trim(),
         passwordResetCode: code.toString(),
-        passwordResetCodeExpires: { $gt: new Date() } //Use correct field name
+        passwordResetCodeExpires: { $gt: new Date() } 
       }),
       db.collection('cargo-owners').findOne({
         email: email.toLowerCase().trim(),
@@ -966,7 +961,7 @@ router.post('/verify-reset-code', corsHandler, [
       currentTime: new Date()
     });
 
-    // Also check if user exists but code is expired/invalid for better debugging
+    
     const [driverUserAny, cargoOwnerUserAny] = await Promise.all([
       db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
       db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })
@@ -1453,7 +1448,7 @@ router.post('/reset-password', corsHandler, [
       cargoOwnerFound: !!cargoOwnerUser
     });
 
-    // Debug: Check if user exists but token/conditions don't match
+   
     const [driverUserAny, cargoOwnerUserAny] = await Promise.all([
       db.collection('drivers').findOne({ email: email.toLowerCase().trim() }),
       db.collection('cargo-owners').findOne({ email: email.toLowerCase().trim() })

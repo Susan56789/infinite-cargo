@@ -80,7 +80,7 @@ const DriverDashboard = () => {
     return false;
   }, []);
 
-  // Enhanced method to open search loads with authentication
+  
   const openSearchLoads = useCallback(() => {
     const token = authManager.getToken();
     const userData = getUser();
@@ -996,7 +996,7 @@ const DriverDashboard = () => {
     }
 
     if (!response.ok) {
-      // Enhanced error handling for validation errors
+      
       console.error('API Error Response:', responseData);
       
       if (response.status === 400) {
@@ -1289,7 +1289,7 @@ const DriverDashboard = () => {
               loading={loadingStates.bookings}
             />
 
-            {/* Available Loads - Enhanced with better auth integration */}
+            {/* Available Loads*/}
             <AvailableLoadsSection 
               availableLoads={dashboardData.availableLoads}
               onBidPlace={placeBid}

@@ -10,11 +10,11 @@ const DashboardHeader = ({
   onLogout,
   getAuthHeaders
 }) => {
-  // Enhanced function to get user display name
+  
   const getUserDisplayName = () => {
     if (!user) return 'Guest User';
     
-    // Try multiple sources for the display name
+    
     const sources = [
       user.name,
       user.fullName,

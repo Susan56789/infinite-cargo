@@ -164,7 +164,7 @@ const StatusUpdateModal = ({
     </div>
   );
 
-  // Use portal to render modal at document root
+  
   const modalContainer = document.getElementById('modal-root');
   if (!modalContainer) {
     const container = document.createElement('div');
