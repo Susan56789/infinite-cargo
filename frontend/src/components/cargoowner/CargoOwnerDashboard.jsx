@@ -1082,7 +1082,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
   }
 };
 
- const handleSubscribe = async (planId, paymentMethodId, paymentDetails = null) => {
+const handleSubscribe = async (planId, paymentMethodId, paymentDetails = null, billingCycle = 'monthly') => {
   const selectedPlan = subscriptionPlans?.[planId];
   const selectedPaymentMethod = paymentMethods.find(method => method.id === paymentMethodId);
 
@@ -1116,83 +1116,40 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-    // FIXED: Create properly structured payment details
+    // Create properly structured payment details
     let requestPaymentDetails = {
       timestamp: new Date().toISOString()
     };
 
     // Handle M-Pesa payment method specifically
     if (selectedPaymentMethod.id === 'mpesa') {
-      // If payment details were passed from modal, use them
-      if (paymentDetails && paymentDetails.paymentCode && paymentDetails.phoneNumber) {
-        // Validate the M-Pesa code format
-        if (!/^[A-Z0-9]{8,12}$/i.test(paymentDetails.paymentCode)) {
-          setError('Invalid M-Pesa transaction code format. Please check and try again.');
-          return;
-        }
-
-        // Validate phone number format
-        const phone = paymentDetails.phoneNumber.replace(/\s/g, '');
-        if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
-          setError('Invalid phone number format. Please use format: 254712345678 or 0712345678');
-          return;
-        }
-
-        // FIXED: Use correct field names that match backend validation
-        requestPaymentDetails = {
-          ...requestPaymentDetails,
-          mpesaCode: paymentDetails.paymentCode.trim().toUpperCase(), // Backend expects 'mpesaCode'
-          phoneNumber: paymentDetails.phoneNumber.trim(), // Backend expects 'phoneNumber'
-          transactionDate: new Date().toISOString(),
-          paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
-        };
-      } else {
-        // Fallback to prompt (original behavior)
-        const instructions = selectedPaymentMethod.instructions || 
-          `Steps to pay via M-Pesa:\n` +
-          `1. Go to M-Pesa menu\n` +
-          `2. Select "Lipa na M-Pesa"\n` +
-          `3. Select "Pay Bill"\n` +
-          `4. Enter Business Number: 174379\n` +
-          `5. Account Number: ${user?.email || user?.phone || user?.id}\n` +
-          `6. Amount: ${selectedPlan.price}\n` +
-          `7. Enter your M-Pesa PIN\n` +
-          `8. Copy the transaction code from the confirmation SMS`;
-
-        const mpesaCode = window.prompt(
-          `To complete your ${selectedPlan.name} subscription (${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}), please enter your M-Pesa transaction code:\n\n` +
-          `${instructions}\n\n` +
-          `Enter M-Pesa Transaction Code (e.g. QA12B34567):`
-        );
-
-        if (!mpesaCode) {
-          setLoading(false);
-          return;
-        }
-
-        if (!/^[A-Z0-9]{8,12}$/i.test(mpesaCode.trim())) {
-          setError('Invalid M-Pesa transaction code format. Please check and try again.');
-          setLoading(false);
-          return;
-        }
-
-        const userPhone = user?.phone || window.prompt('Please enter your phone number (e.g. 254712345678):');
-        
-        if (!userPhone) {
-          setError('Phone number is required for M-Pesa payments');
-          setLoading(false);
-          return;
-        }
-
-        // FIXED: Use correct field names
-        requestPaymentDetails = {
-          ...requestPaymentDetails,
-          mpesaCode: mpesaCode.trim().toUpperCase(), // Backend expects 'mpesaCode'
-          phoneNumber: userPhone.trim(), // Backend expects 'phoneNumber'
-          transactionDate: new Date().toISOString(),
-          paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
-        };
+      // Payment details must be provided from UI - no prompt fallback
+      if (!paymentDetails || !paymentDetails.mpesaCode || !paymentDetails.phoneNumber) {
+        setError('M-Pesa transaction code and phone number are required. Please fill in all payment details.');
+        return;
       }
+
+      // Validate the M-Pesa code format
+      if (!/^[A-Z0-9]{8,12}$/i.test(paymentDetails.mpesaCode)) {
+        setError('Invalid M-Pesa transaction code format. Please check and try again.');
+        return;
+      }
+
+      // Validate phone number format
+      const phone = paymentDetails.phoneNumber.replace(/\s/g, '');
+      if (!/^(\+?254|0)?[17][0-9]{8}$/.test(phone)) {
+        setError('Invalid phone number format. Please use format: 254712345678 or 0712345678');
+        return;
+      }
+
+      // Use correct field names that match backend validation
+      requestPaymentDetails = {
+        ...requestPaymentDetails,
+        mpesaCode: paymentDetails.mpesaCode.trim().toUpperCase(),
+        phoneNumber: paymentDetails.phoneNumber.trim(),
+        transactionDate: new Date().toISOString(),
+        paymentReference: `SUB-${planId.toUpperCase()}-${Date.now()}`
+      };
     } else {
       // Handle other payment methods based on their requirements
       if (selectedPaymentMethod.requiresVerification && !paymentDetails) {
@@ -1208,25 +1165,39 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       };
     }
 
+    // Calculate plan price based on billing cycle
+    const calculatePrice = (basePrice) => {
+      switch (billingCycle) {
+        case 'quarterly':
+          return Math.round(basePrice * 3 * 0.95); // 5% discount
+        case 'yearly':
+          return Math.round(basePrice * 12 * 0.85); // 15% discount
+        default:
+          return basePrice;
+      }
+    };
+
+    const planPrice = calculatePrice(selectedPlan.price);
+
     // Validate payment amount against method limits
-    if (selectedPaymentMethod.minimumAmount && selectedPlan.price < selectedPaymentMethod.minimumAmount) {
+    if (selectedPaymentMethod.minimumAmount && planPrice < selectedPaymentMethod.minimumAmount) {
       setError(`Payment amount is below minimum limit of ${formatCurrency(selectedPaymentMethod.minimumAmount)} for ${selectedPaymentMethod.name}.`);
       return;
     }
 
-    if (selectedPaymentMethod.maximumAmount && selectedPlan.price > selectedPaymentMethod.maximumAmount) {
+    if (selectedPaymentMethod.maximumAmount && planPrice > selectedPaymentMethod.maximumAmount) {
       setError(`Payment amount exceeds maximum limit of ${formatCurrency(selectedPaymentMethod.maximumAmount)} for ${selectedPaymentMethod.name}.`);
       return;
     }
 
-    // FIXED: Properly structured request payload
+    // Properly structured request payload
     const requestPayload = {
       planId: planId,
       paymentMethod: paymentMethodId,
-      paymentDetails: requestPaymentDetails, 
-      billingCycle: 'monthly'
+      paymentDetails: requestPaymentDetails,
+      billingCycle: billingCycle,
+      amount: planPrice
     };
-
 
     const response = await fetch(`${API_BASE_URL}/subscriptions/subscribe`, {
       method: 'POST',
@@ -1237,7 +1208,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       },
       body: JSON.stringify(requestPayload)
     });
-
 
     let data;
     try {
@@ -1254,7 +1224,6 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
       return;
     }
 
-
     if (response.ok) {
       // Update subscription state optimistically
       setSubscription({
@@ -1262,10 +1231,13 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         planName: selectedPlan.name,
         status: 'pending',
         paymentMethod: paymentMethodId,
+        billingCycle: billingCycle,
+        price: planPrice,
         requestedAt: new Date().toISOString(),
         hasPendingUpgrade: true,
         pendingSubscription: {
           planName: selectedPlan.name,
+          billingCycle: billingCycle,
           createdAt: new Date().toISOString()
         }
       });
@@ -1277,7 +1249,8 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
         window.showToast(
           `Subscription request submitted!\n\n` +
           `Plan: ${selectedPlan.name}\n` +
-          `Amount: ${formatCurrency ? formatCurrency(selectedPlan.price) : `KES ${selectedPlan.price}`}\n` +
+          `Billing: ${billingCycle}\n` +
+          `Amount: ${formatCurrency ? formatCurrency(planPrice) : `KES ${planPrice}`}\n` +
           `Payment: ${selectedPaymentMethod.name}\n` +
           `Processing Fee: ${formatCurrency(selectedPaymentMethod.processingFee || 0)}\n\n` +
           `You'll be notified within ${selectedPaymentMethod.processingTimeMinutes ? Math.ceil(selectedPaymentMethod.processingTimeMinutes / 60) : 24}-48 hours once approved.`,
@@ -1309,7 +1282,7 @@ const handleCreateLoad = async (e, formDataWithOwner = null) => {
           errorMessage = 'Invalid subscription request. Please check all fields and try again.';
         }
         
-        // ADDED: More detailed error logging for 400 errors
+        // More detailed error logging for 400 errors
         console.error('400 Error Details:', {
           validationErrors: data.errors,
           message: data.message,
